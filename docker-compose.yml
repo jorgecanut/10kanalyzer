@@ -1,0 +1,18 @@
+services:
+  dashboard:
+    build: .
+    image: edgar-dashboard
+    ports:
+      - "8000:8000"
+    volumes:
+      # Generated charts/CSVs persist on the host so you can also grab them
+      # straight from ./financial_graphs after a run.
+      - ./financial_graphs:/app/financial_graphs
+      # Cache raw SEC downloads so repeat runs are fast.
+      - edgar_cache:/root/.edgar_cache
+      - edgar_data:/root/.edgar
+    restart: unless-stopped
+
+volumes:
+  edgar_cache:
+  edgar_data:

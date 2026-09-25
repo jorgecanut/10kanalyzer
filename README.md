@@ -55,6 +55,57 @@ python edgar_dashboard.py --ticker AAPL
 python edgar_dashboard.py --ticker MSFT
 ```
 
+## Web UI (minimal)
+
+A small local web front-end wraps the pipeline: type a ticker, watch the run,
+then view or download the charts. Runs are queued and executed one at a time
+(SEC is rate-limited); results persist in `financial_graphs/`, so they are
+available later from the **Recent** tab. No accounts, no database.
+
+```bash
+pip install -r requirements.txt
+python app.py            # http://localhost:8000
+```
+
+Routes:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/` | The UI (Run / Recent tabs) |
+| `POST` | `/api/run` | `{"ticker":"NFLX","filings":10}` → queues a run |
+| `GET` | `/api/status/<ticker>` | queued / running / done / error + log tail |
+| `GET` | `/api/recent` | Tickers with results, newest first |
+| `GET` | `/api/files/<ticker>` | Chart list for a ticker |
+| `GET` | `/files/<ticker>/<name>` | View a chart inline |
+| `GET` | `/download/<ticker>` | Whole folder as a `.zip` |
+| `GET` | `/download/<ticker>/<name>` | One file |
+| `GET` | `/healthz` | Health probe |
+
+## Docker
+
+```bash
+docker compose up --build      # then open http://localhost:8000
+```
+
+or without Compose:
+
+```bash
+docker build -t edgar-dashboard .
+docker run --rm -p 8000:8000 \
+  -v "$PWD/financial_graphs:/app/financial_graphs" \
+  -v edgar_cache:/root/.edgar_cache edgar-dashboard
+```
+
+Notes:
+
+- `./financial_graphs` is bind-mounted, so results are also on the host after a
+  run. The container runs as root, so those files may be root-owned; delete them
+  with `sudo` or adjust the mount if that bothers you.
+- `edgar_cache` / `edgar_data` are named volumes that persist edgartools' raw
+  SEC downloads, making repeat runs much faster.
+- The server binds `0.0.0.0:8000` inside the container; only publish the port
+  to your own machine (it has no authentication).
+
 ## Metrics extracted per fiscal year
 
 | Metric | XBRL concept(s) | Statement |

@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>10-K Dashboard</title>
+<style>
+  :root { --line:#e2e5ea; --muted:#6b7280; --accent:#2f6fed; --bg:#f7f8fa; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background:var(--bg); color:#111827; }
+  header { background:#fff; border-bottom:1px solid var(--line); padding:14px 20px; }
+  header h1 { margin:0; font-size:18px; }
+  header p { margin:2px 0 0; color:var(--muted); font-size:13px; }
+  main { max-width:1100px; margin:0 auto; padding:20px; }
+  .tabs { display:flex; gap:6px; margin-bottom:16px; }
+  .tabs button { border:1px solid var(--line); background:#fff; padding:8px 16px; border-radius:8px;
+                 cursor:pointer; font-size:14px; color:#374151; }
+  .tabs button.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:18px; margin-bottom:16px; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  input[type=text] { flex:1; min-width:160px; padding:10px 12px; border:1px solid var(--line);
+                     border-radius:8px; font-size:15px; text-transform:uppercase; }
+  select, button.primary { padding:10px 12px; border:1px solid var(--line); border-radius:8px;
+                           font-size:14px; background:#fff; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; cursor:pointer; }
+  button.primary:disabled { opacity:.55; cursor:default; }
+  .status { margin-top:12px; font-size:14px; }
+  .badge { display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:600; }
+  .queued { background:#fef3c7; color:#92400e; }
+  .running { background:#dbeafe; color:#1e40af; }
+  .done { background:#dcfce7; color:#166534; }
+  .error { background:#fee2e2; color:#991b1b; }
+  .idle { background:#e5e7eb; color:#374151; }
+  pre.log { background:#0b1020; color:#d6e2ff; padding:12px; border-radius:8px; font-size:12px;
+            max-height:280px; overflow:auto; white-space:pre-wrap; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:14px; }
+  figure { margin:0; background:#fff; border:1px solid var(--line); border-radius:10px; padding:10px; }
+  figure img { width:100%; border-radius:6px; display:block; }
+  figcaption { display:flex; justify-content:space-between; font-size:12px; color:var(--muted);
+               margin-top:8px; }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  ul.recent { list-style:none; margin:0; padding:0; }
+  ul.recent li { display:flex; justify-content:space-between; align-items:center; padding:10px 4px;
+                 border-bottom:1px solid var(--line); }
+  ul.recent li:last-child { border-bottom:0; }
+  ul.recent .t { font-weight:600; cursor:pointer; }
+  .muted { color:var(--muted); font-size:13px; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SEC EDGAR 10-K Dashboard</h1>
+  <p>Enter a ticker, run the pipeline, then view or download the charts.</p>
+</header>
+
+<main>
+  <div class="tabs">
+    <button id="tab-run" class="active" onclick="showTab('run')">Run</button>
+    <button id="tab-recent" onclick="showTab('recent')">Recent</button>
+  </div>
+
+  <!-- Run tab -->
+  <section id="pane-run">
+    <div class="card">
+      <div class="row">
+        <input id="ticker" type="text" placeholder="Ticker, e.g. NFLX" maxlength="10"
+               onkeydown="if(event.key==='Enter')runTicker()">
+        <select id="filings" title="Number of 10-K filings">
+          <option value="10" selected>10 filings</option>
+          <option value="5">5 filings</option>
+          <option value="3">3 filings</option>
+        </select>
+        <button id="run-btn" class="primary" onclick="runTicker()">Run</button>
+      </div>
+      <div id="status" class="status muted">Idle.</div>
+      <div id="logWrap" class="hidden" style="margin-top:12px">
+        <details><summary class="muted">Run log</summary><pre id="log" class="log"></pre></details>
+      </div>
+    </div>
+    <div id="results-run"></div>
+  </section>
+
+  <!-- Recent tab -->
+  <section id="pane-recent" class="hidden">
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <strong>Recent runs</strong>
+        <a href="#" onclick="loadRecent();return false">refresh</a>
+      </div>
+      <ul id="recent" class="recent"><li class="muted">Loading…</li></ul>
+    </div>
+    <div id="results-recent"></div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+let timer = null;
+
+function showTab(name) {
+  const isRun = name === 'run';
+  $('#pane-run').classList.toggle('hidden', !isRun);
+  $('#pane-recent').classList.toggle('hidden', isRun);
+  $('#tab-run').classList.toggle('active', isRun);
+  $('#tab-recent').classList.toggle('active', !isRun);
+  if (!isRun) loadRecent();
+}
+
+function setStatus(text, cls) {
+  $('#status').innerHTML = `<span class="badge ${cls}">${text}</span>`;
+}
+
+async function runTicker() {
+  const ticker = $('#ticker').value.trim().toUpperCase();
+  if (!ticker) return;
+  $('#run-btn').disabled = true;
+  $('#results-run').innerHTML = '';
+  setStatus('queued', 'queued');
+  try {
+    const res = await fetch('/api/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker, filings: Number($('#filings').value) }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || data.message || 'Request failed');
+    poll(ticker);
+  } catch (err) {
+    setStatus('error', 'error');
+    $('#run-btn').disabled = false;
+    alert(err.message);
+  }
+}
+
+function poll(ticker) {
+  clearTimeout(timer);
+  timer = setTimeout(async () => {
+    try {
+      const job = await (await fetch(`/api/status/${ticker}`)).json();
+      setStatus(job.status, job.status);
+      if (job.log) { $('#logWrap').classList.remove('hidden'); $('#log').textContent = job.log; }
+      if (job.status === 'done') {
+        $('#run-btn').disabled = false;
+        loadResults(ticker, '#results-run');
+      } else if (job.status === 'error') {
+        $('#run-btn').disabled = false;
+        $('#logWrap').classList.remove('hidden');
+      } else {
+        poll(ticker);
+      }
+    } catch (err) {
+      setStatus('error', 'error');
+      $('#run-btn').disabled = false;
+    }
+  }, 2000);
+}
+
+async function loadResults(ticker, target) {
+  const res = await fetch(`/api/files/${ticker}`);
+  if (!res.ok) return;
+  renderResults(await res.json(), target);
+}
+
+function renderResults(data, target) {
+  const grid = data.charts.map(name => `
+    <figure>
+      <a href="/files/${data.ticker}/${name}" target="_blank">
+        <img src="/files/${data.ticker}/${name}" alt="${name}" loading="lazy"></a>
+      <figcaption><span>${name.replace(/^\d+_/, '').replace('.png','').replaceAll('_',' ')}</span>
+        <a href="/download/${data.ticker}/${name}">download</a></figcaption>
+    </figure>`).join('');
+  $(target).innerHTML = `
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <strong>${data.ticker} — ${data.charts.length} charts</strong>
+        <span><a href="/download/${data.ticker}">Download all (.zip)</a></span>
+      </div>
+    </div>
+    <div class="grid">${grid}</div>`;
+}
+
+async function loadRecent() {
+  const res = await fetch('/api/recent');
+  const { items } = await res.json();
+  const list = $('#recent');
+  if (!items.length) { list.innerHTML = '<li class="muted">No runs yet.</li>'; return; }
+  list.innerHTML = items.map(it => `
+    <li>
+      <span class="t" onclick="openRecent('${it.ticker}')">${it.ticker}</span>
+      <span class="muted">${it.charts.length} charts · ${new Date(it.modified).toLocaleString()}
+        · <a href="/download/${it.ticker}">zip</a></span>
+    </li>`).join('');
+}
+
+function openRecent(ticker) {
+  $('#ticker').value = ticker;
+  loadResults(ticker, '#results-recent');
+  $('#results-recent').scrollIntoView({ behavior: 'smooth' });
+}
+
+// If a run is already in progress when the page loads, resume watching it.
+(async () => {
+  const { items } = await (await fetch('/api/recent')).json();
+  for (const it of items) {
+    const job = await (await fetch(`/api/status/${it.ticker}`)).json();
+    if (job.status === 'queued' || job.status === 'running') {
+      $('#ticker').value = it.ticker;
+      $('#run-btn').disabled = true;
+      poll(it.ticker);
+      break;
+    }
+  }
+})();
+</script>
+</body>
+</html>
