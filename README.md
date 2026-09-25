@@ -85,6 +85,11 @@ Routes:
 
 A single service that publishes one HTTP port:
 
+> **Windows users:** see **[WINDOWS.md](WINDOWS.md)** for a from-scratch guide
+> (Docker Desktop + WSL2) — no Python or Git required. After Docker is installed,
+> double-click `run-windows.cmd` and it creates `.env`, builds, starts, and opens
+> the browser.
+
 ```bash
 docker compose up -d --build     # http://localhost:${HTTP_PORT:-8000}
 ```
