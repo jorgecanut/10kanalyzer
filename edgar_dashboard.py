@@ -34,9 +34,9 @@ from edgar import Company, set_identity
 # Configuration
 # --------------------------------------------------------------------------- #
 
-# The SEC requires a descriptive User-Agent. Replace the placeholder with your
-# own name / email before running this in production.
-set_identity("Data Analyst analyst@example.com")
+# The SEC requires a descriptive User-Agent identifying who is making requests.
+# Override it in production via the EDGAR_IDENTITY env var (see docker-compose).
+set_identity(os.environ.get("EDGAR_IDENTITY", "Data Analyst analyst@example.com"))
 
 TICKER = "NFLX"
 NUM_FILINGS = 10

@@ -11,6 +11,7 @@ Run locally:   python app.py            (http://localhost:8000)
 from __future__ import annotations
 
 import io
+import os
 import re
 import subprocess
 import sys
@@ -246,4 +247,4 @@ def download_file(ticker: str, name: str):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8009, threaded=True)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "8000")), threaded=True)

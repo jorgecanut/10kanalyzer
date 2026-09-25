@@ -83,28 +83,61 @@ Routes:
 
 ## Docker
 
-```bash
-docker compose up --build      # then open http://localhost:8000
-```
-
-or without Compose:
+A single service that publishes one HTTP port:
 
 ```bash
-docker build -t edgar-dashboard .
-docker run --rm -p 8000:8000 \
-  -v "$PWD/financial_graphs:/app/financial_graphs" \
-  -v edgar_cache:/root/.edgar_cache edgar-dashboard
+docker compose up -d --build     # http://localhost:${HTTP_PORT:-8000}
 ```
 
-Notes:
+### Dockge
 
-- `./financial_graphs` is bind-mounted, so results are also on the host after a
-  run. The container runs as root, so those files may be root-owned; delete them
-  with `sudo` or adjust the mount if that bothers you.
+1. Put this project (or at least `docker-compose.yml` + `.env`) in a stack
+   directory Dockge manages.
+2. `cp .env.example .env` and edit it:
+   - `EDGAR_IDENTITY` — your name/email (the SEC requires a real contact).
+   - `HTTP_PORT` — the host port to publish (default 8000); or just edit the
+     `ports:` line in the compose file directly.
+3. Deploy in Dockge. If the compose file is not next to the Dockerfile, point
+   the build at the repo:
+
+   ```yaml
+   services:
+     dashboard:
+       build:
+         context: /path/to/10kanal-yzer
+         dockerfile: Dockerfile
+   ```
+
+Then attach your own nginx (below). No certificate or reverse-proxy containers
+are bundled on purpose — you handle that side.
+
+### Your own nginx
+
+`nginx/dashboard.conf` is a ready server block. Copy it, set `server_name`, make
+`proxy_pass` match your published port, and reload:
+
+```bash
+sudo cp nginx/dashboard.conf /etc/nginx/conf.d/dashboard.conf
+sudo nano /etc/nginx/conf.d/dashboard.conf     # server_name + proxy_pass port
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d dash.example.com       # optional TLS
+```
+
+Want a login? Create a password file and uncomment the `auth_basic` lines:
+
+```bash
+sudo htpasswd -c /etc/nginx/.htpasswd you
+```
+
+### Notes
+
+- `./financial_graphs` is bind-mounted so results also land on the host; the
+  container runs as root, so those files may be root-owned.
 - `edgar_cache` / `edgar_data` are named volumes that persist edgartools' raw
   SEC downloads, making repeat runs much faster.
-- The server binds `0.0.0.0:8000` inside the container; only publish the port
-  to your own machine (it has no authentication).
+- The app listens on `0.0.0.0:8000` inside the container (override with `PORT`).
+  It has **no authentication** — keep it behind nginx or a private network.
+- Runs are serialized (one at a time); ~1–3 minutes per ticker the first time.
 
 ## Metrics extracted per fiscal year
 

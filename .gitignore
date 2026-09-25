@@ -2,3 +2,5 @@
 __pycache__/
 *.pyc
 financial_graphs/*/run.log
+.env
+nginx/htpasswd

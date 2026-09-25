@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -24,7 +25,7 @@ import pandas as pd
 
 from edgar import Company, set_identity
 
-set_identity("Data Analyst analyst@example.com")
+set_identity(os.environ.get("EDGAR_IDENTITY", "Data Analyst analyst@example.com"))
 
 HEADERS = {"User-Agent": "Data Analyst analyst@example.com", "Accept-Encoding": "identity"}
 
