@@ -36,13 +36,25 @@ DURATION_TAGS = {
         "SalesRevenueNet",
         "SalesRevenueGoodsNet",
     ],
-    "NetIncomeLoss": ["NetIncomeLoss"],
+    "NetIncomeLoss": [
+        "NetIncomeLoss",
+        "NetIncomeLossAvailableToCommonStockholdersBasic",
+        "ProfitLoss",
+    ],
     "OperatingIncomeLoss": ["OperatingIncomeLoss"],
 }
 INSTANT_TAGS = {
     "AssetsCurrent": ["AssetsCurrent"],
     "LiabilitiesCurrent": ["LiabilitiesCurrent"],
-    "StockholdersEquity": ["StockholdersEquity"],
+    "StockholdersEquity": [
+        "StockholdersEquity",
+        "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+    ],
+    "LongTermDebt": [
+        "LongTermDebt",
+        "LongTermDebtNoncurrent",
+        "LongTermDebtAndCapitalLeaseObligations",
+    ],
 }
 
 DEFAULT_TICKERS = ["CAPNR", "TTMI", "FNKO", "AQST"]

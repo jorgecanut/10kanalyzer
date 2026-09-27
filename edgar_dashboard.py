@@ -69,7 +69,18 @@ METRIC_CONCEPTS: dict[str, tuple[list[str], str]] = {
         ],
         "duration",
     ),
-    "NetIncomeLoss": (["NetIncomeLoss"], "duration"),
+    "NetIncomeLoss": (
+        [
+            "NetIncomeLoss",
+            # Used by companies with non-controlling interests / preferred
+            # stock that stop tagging plain NetIncomeLoss (e.g. Estee Lauder
+            # from FY2021 on).
+            "NetIncomeLossAvailableToCommonStockholdersBasic",
+            # Last resort: total net income including non-controlling interests.
+            "ProfitLoss",
+        ],
+        "duration",
+    ),
     "GrossProfit": (["GrossProfit"], "duration"),
     "CostOfRevenue": (
         [
@@ -99,8 +110,25 @@ METRIC_CONCEPTS: dict[str, tuple[list[str], str]] = {
     ),
     "AssetsCurrent": (["AssetsCurrent"], "instant"),
     "LiabilitiesCurrent": (["LiabilitiesCurrent"], "instant"),
-    "LongTermDebt": (["LongTermDebt", "LongTermDebtNoncurrent"], "instant"),
-    "StockholdersEquity": (["StockholdersEquity"], "instant"),
+    "LongTermDebt": (
+        [
+            "LongTermDebt",
+            "LongTermDebtNoncurrent",
+            # Common balance-sheet line for companies that fold leases in,
+            # and the tag Estee Lauder actually uses (no LongTermDebt tag).
+            "LongTermDebtAndCapitalLeaseObligations",
+        ],
+        "instant",
+    ),
+    "StockholdersEquity": (
+        [
+            "StockholdersEquity",
+            # Many filers only tag the total-equity variant (e.g. Estee
+            # Lauder from FY2023 on, once it has non-controlling interests).
+            "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+        ],
+        "instant",
+    ),
 }
 
 # Chart-friendly display labels.
@@ -168,8 +196,14 @@ def extract_metric(
                 continue
 
         # Closest period end to the filing's report date is the current year.
-        sub = sub.assign(_dist=(sub["period_end"] - target).abs())
-        sub = sub.sort_values(["_dist", "period_end"])
+        sub["_dist"] = (sub["period_end"] - target).abs()
+        # A filing often carries the same fact twice: a rounded copy
+        # (decimals=-5) and a precise one (decimals=-3). Prefer the precise one.
+        if "decimals" in sub.columns:
+            sub["_decimals"] = pd.to_numeric(sub["decimals"], errors="coerce").fillna(-99)
+        else:
+            sub["_decimals"] = -99
+        sub = sub.sort_values(["_dist", "_decimals"], ascending=[True, False])
 
         value = pd.to_numeric(sub.iloc[0]["numeric_value"], errors="coerce")
         if pd.notna(value):

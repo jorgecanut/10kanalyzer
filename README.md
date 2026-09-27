@@ -150,15 +150,15 @@ sudo htpasswd -c /etc/nginx/.htpasswd you
 | --- | --- | --- |
 | Revenue | `Revenues`, `RevenueFromContractWithCustomerExcludingAssessedTax`, `SalesRevenueNet`, `SalesRevenueGoodsNet` | Income |
 | Cost of Revenue | `CostOfRevenue`, `CostOfGoodsAndServicesSold`, `CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization`, `CostOfGoodsSold`, `CostOfServices` | Income |
-| Net Income | `NetIncomeLoss` | Income |
+| Net Income | `NetIncomeLoss`, `NetIncomeLossAvailableToCommonStockholdersBasic`, `ProfitLoss` | Income |
 | Gross Profit | `GrossProfit` (fallback: `Revenues - CostOfRevenue`) | Income |
 | Operating Income | `OperatingIncomeLoss` | Income |
 | Operating Cash Flow | `NetCashProvidedByUsedInOperatingActivities`, `...ContinuingOperations` | Cash Flow |
 | CapEx | `PaymentsToAcquirePropertyPlantAndEquipment`, `PaymentsToAcquireProductiveAssets` | Cash Flow |
 | Current Assets | `AssetsCurrent` | Balance Sheet |
 | Current Liabilities | `LiabilitiesCurrent` | Balance Sheet |
-| Long-Term Debt | `LongTermDebt`, `LongTermDebtNoncurrent` | Balance Sheet |
-| Stockholders' Equity | `StockholdersEquity` | Balance Sheet |
+| Long-Term Debt | `LongTermDebt`, `LongTermDebtNoncurrent`, `LongTermDebtAndCapitalLeaseObligations` | Balance Sheet |
+| Stockholders' Equity | `StockholdersEquity`, `StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest` | Balance Sheet |
 
 Derived in-script: **Gross Margin**, **Operating Margin**,
 **Free Cash Flow** (`OperatingCashFlow - CapEx`), **Current Ratio**
@@ -190,6 +190,13 @@ Derived in-script: **Gross Margin**, **Operating Margin**,
   biotech filers like Aquestive often have no cost of revenue at all, so some
   gross-margin points are legitimately absent. The CSV flags derived rows via
   `gross_profit_derived`.
+- Each metric tries several XBRL concepts in priority order, because filers
+  change tags over time. A company can stop tagging `NetIncomeLoss` from a given
+  year (Estée Lauder moved to `NetIncomeLossAvailableToCommonStockholdersBasic`),
+  tag only the total-equity variant once it has non-controlling interests, or
+  use `LongTermDebtAndCapitalLeaseObligations` instead of `LongTermDebt`.
+- When a filing contains the same fact twice (a rounded copy and a precise one),
+  the value with the greatest decimal precision is used.
 - Unparseable or missing filings are skipped with a warning rather than
   aborting the run, so one bad document cannot sink a whole dashboard.
 - This workflow targets US domestic **10-K** filers (US-GAAP, XBRL). Foreign
