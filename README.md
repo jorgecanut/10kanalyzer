@@ -50,6 +50,8 @@ financial_graphs/
 │   ├── 09_debt_overview.png
 │   ├── 10_cash_flow.png
 │   ├── 11_segments.png
+│   ├── 12_cash_flow_trend.png
+│   ├── 13_cagr.png
 │   ├── financial_data.csv   # per-year ratio inputs/outputs
 │   ├── statements.csv       # every dimension-free primary-statement line
 │   ├── facts.csv            # every fact for each period, dimensions included

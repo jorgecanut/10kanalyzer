@@ -690,6 +690,10 @@ def _statement_snapshot(statements: pd.DataFrame, statement: str, filename: str,
         rows = rows.iloc[::-1].reset_index(drop=True)  # top-down reading order
         colors = ["#4c72b0" if v >= 0 else "#c44e52" for v in rows["value_m"]]
         ax.barh(range(len(rows)), rows["value_m"], color=colors)
+        for i, v in enumerate(rows["value_m"].to_numpy()):
+            ax.annotate(_fmt_mm(v), (v, i), textcoords="offset points",
+                        xytext=(4 if v >= 0 else -4, 0), ha="left" if v >= 0 else "right",
+                        va="center", fontsize=6)
         ax.set_yticks(range(len(rows)))
         ax.set_yticklabels([_snapshot_label(r) for _, r in rows.iterrows()], fontsize=8)
         ax.axvline(0, color="black", linewidth=0.8)
@@ -744,6 +748,26 @@ def _colors(count: int):
     return sns.color_palette("husl", max(count, 1))
 
 
+def _fmt_mm(value: float) -> str:
+    """Abbreviate a USD-millions value to two decimals with a unit suffix."""
+    magnitude = abs(value)
+    if magnitude >= 1_000_000:
+        return f"{value / 1_000_000:.2f}".replace(".", ",") + "T"
+    if magnitude >= 1000:
+        return f"{value / 1000:.2f}".replace(".", ",") + "B"
+    return f"{value:.2f}".replace(".", ",") + "MM"
+
+
+def _annotate_column(ax, x: float, top: float, value: float, threshold: float) -> None:
+    """Label a vertical bar/segment when it is large enough to read."""
+    if abs(value) < threshold:
+        return
+    offset = 2 if value >= 0 else -2
+    va = "bottom" if value >= 0 else "top"
+    ax.annotate(_fmt_mm(value), (x, top), textcoords="offset points", xytext=(0, offset),
+                ha="center", va=va, fontsize=6, rotation=90, color="#111827")
+
+
 def chart_income_statement(df: pd.DataFrame, statements: pd.DataFrame | None = None) -> str:
     statements = STATEMENTS if statements is None else statements
     return _statement_snapshot(statements, "income", "07_income_statement.png", "Income Statement")
@@ -769,15 +793,22 @@ def chart_balance_sheet(df: pd.DataFrame, statements: pd.DataFrame | None = None
         (ax_le, liab_equity, le_labels, "Liabilities & Equity"),
     ):
         if matrix.empty:
-            ax.text(0.5, 0.5, "No balance-sheet data", ha="center", va="center", color="#6b7280")
+            ax.text(0.5, 0.5, "No balance-sheet data", ha="center", va="center",
+                    color="#6b7280", transform=ax.transAxes)
+            ax.set_yticks([])
         else:
-            palette = _colors(len(matrix.columns))
+            matrix_y = matrix.reindex(years).fillna(0.0)
+            totals = matrix_y.sum(axis=1)
+            palette = _colors(len(matrix_y.columns))
             bottom = np.zeros(len(years))
-            for color, concept in zip(palette, matrix.columns):
-                values = matrix[concept].reindex(years).fillna(0.0).to_numpy()
+            for color, concept in zip(palette, matrix_y.columns):
+                values = matrix_y[concept].to_numpy()
                 ax.bar(positions, values, bottom=bottom, width=0.75,
                        color=color, label=labels.get(concept, concept))
                 bottom += values
+            for i, total in enumerate(totals.to_numpy()):
+                ax.annotate(_fmt_mm(total), (positions[i], total), textcoords="offset points",
+                            xytext=(0, 3), ha="center", va="bottom", fontsize=8, fontweight="bold")
         ax.set_title(title, fontsize=13, fontweight="bold", pad=10)
         ax.set_xlabel("Fiscal Year", fontsize=11)
         ax.set_xticks(positions)
@@ -811,17 +842,19 @@ def chart_debt(df: pd.DataFrame, statements: pd.DataFrame | None = None) -> str:
     positions = _x_positions(df)
 
     if debt.empty:
-        ax.text(0.5, 0.5, "No debt lines found", ha="center", va="center")
+        ax.text(0.5, 0.5, "No debt lines found", ha="center", va="center",
+                color="#6b7280", transform=ax.transAxes)
         total = pd.Series(dtype=float)
     else:
-        palette = _colors(len(debt.columns))
+        debt_y = debt.reindex(years).fillna(0.0)
+        palette = _colors(len(debt_y.columns))
         bottom = np.zeros(len(years))
-        for color, concept in zip(palette, debt.columns):
-            values = debt[concept].reindex(years).fillna(0.0).to_numpy()
+        for color, concept in zip(palette, debt_y.columns):
+            values = debt_y[concept].to_numpy()
             ax.bar(positions, values, bottom=bottom, width=0.7,
                    color=color, label=debt_labels.get(concept, concept))
             bottom += values
-        total = debt.reindex(years).sum(axis=1)
+        total = debt_y.sum(axis=1)
 
     cash = cash_rows.reindex(years).sum(axis=1).fillna(0.0) if not cash_rows.empty else pd.Series(0.0, index=years)
 
@@ -831,9 +864,18 @@ def chart_debt(df: pd.DataFrame, statements: pd.DataFrame | None = None) -> str:
                 linewidth=2, label="Total debt")
         ax.plot(positions, net.to_numpy(), color="#d62728", marker="s",
                 linewidth=2, linestyle="--", label="Net debt (debt − cash)")
+        for i, v in enumerate(total.to_numpy()):
+            ax.annotate(_fmt_mm(v), (positions[i], v), textcoords="offset points",
+                        xytext=(0, 6), ha="center", va="bottom", fontsize=6, color="#111827")
+        for i, v in enumerate(net.to_numpy()):
+            ax.annotate(_fmt_mm(v), (positions[i], v), textcoords="offset points",
+                        xytext=(0, -12), ha="center", va="top", fontsize=6, color="#d62728")
     if cash.abs().sum() > 0:
         ax.plot(positions, cash.to_numpy(), color="#2ca02c", marker="^",
                 linewidth=2, label="Cash & equivalents")
+        for i, v in enumerate(cash.to_numpy()):
+            ax.annotate(_fmt_mm(v), (positions[i], v), textcoords="offset points",
+                        xytext=(0, 6), ha="center", va="bottom", fontsize=6, color="#2ca02c")
 
     ax.axhline(0, color="black", linewidth=0.8)
     ax.set_title(f"{TICKER} - Debt Overview",
@@ -930,8 +972,14 @@ def chart_cash_flow_trend(df: pd.DataFrame, statements: pd.DataFrame | None = No
     width = 0.82 / count
     for i, (label, standard, color) in enumerate(series):
         values = _standard_series(statements, "cashflow", standard, years).to_numpy()
-        ax.bar(positions + (i - (count - 1) / 2) * width, values, width=width,
-               label=label, color=color)
+        xs = positions + (i - (count - 1) / 2) * width
+        ax.bar(xs, values, width=width, label=label, color=color)
+        for x, v in zip(xs, values):
+            if v == 0:
+                continue
+            ax.annotate(_fmt_mm(v), (x, v), textcoords="offset points",
+                        xytext=(0, 2 if v >= 0 else -2), ha="center",
+                        va="bottom" if v >= 0 else "top", fontsize=5, rotation=90)
     ax.axhline(0, color="black", linewidth=0.8)
     ax.set_title(f"{TICKER} - Cash Flow Trend",
                  fontsize=15, fontweight="bold", pad=16)
@@ -940,6 +988,60 @@ def chart_cash_flow_trend(df: pd.DataFrame, statements: pd.DataFrame | None = No
               loc="upper center", bbox_to_anchor=(0.5, -0.12))
     _style_axes(ax, df)
     return _save(fig, "12_cash_flow_trend.png")
+
+
+def chart_cagr(df: pd.DataFrame, statements: pd.DataFrame | None = None) -> str:
+    """Compound annual growth rate of the key metrics over the reported window."""
+    metrics = [
+        ("Revenue", "Revenues"),
+        ("Net income", "NetIncomeLoss"),
+        ("Gross profit", "GrossProfit"),
+        ("Operating income", "OperatingIncomeLoss"),
+        ("Operating cash flow", "OperatingCashFlow"),
+        ("Free cash flow", "FreeCashFlow"),
+        ("Current assets", "AssetsCurrent"),
+        ("Current liabilities", "LiabilitiesCurrent"),
+        ("Long-term debt", "LongTermDebt"),
+        ("Equity", "StockholdersEquity"),
+    ]
+    results = []
+    for label, column in metrics:
+        if column not in df.columns:
+            continue
+        series = df[["fiscal_year", column]].dropna().sort_values("fiscal_year")
+        if len(series) < 2:
+            continue
+        first, last = series.iloc[0], series.iloc[-1]
+        span = int(last["fiscal_year"] - first["fiscal_year"])
+        if span < 1 or first[column] <= 0 or last[column] <= 0:
+            continue  # CAGR undefined across zero/negative values
+        results.append((label, (last[column] / first[column]) ** (1 / span) - 1,
+                        int(first["fiscal_year"]), int(last["fiscal_year"])))
+
+    fig, ax = plt.subplots(figsize=(11, 7))
+    if not results:
+        ax.text(0.5, 0.5, "Not enough positive data for CAGR", ha="center", va="center",
+                color="#6b7280", transform=ax.transAxes)
+        ax.set_yticks([])
+    else:
+        results.sort(key=lambda item: item[1])
+        values = [r[1] * 100 for r in results]
+        labels = [f"{r[0]}  ({r[2]}–{r[3]})" for r in results]
+        colors = ["#2ca02c" if v >= 0 else "#c44e52" for v in values]
+        ax.barh(range(len(values)), values, color=colors)
+        for i, v in enumerate(values):
+            ax.annotate(f"{v:.2f}".replace(".", ",") + "%", (v, i), textcoords="offset points",
+                        xytext=(4 if v >= 0 else -4, 0), ha="left" if v >= 0 else "right",
+                        va="center", fontsize=8)
+        ax.set_yticks(range(len(labels)))
+        ax.set_yticklabels(labels, fontsize=9)
+        ax.axvline(0, color="black", linewidth=0.8)
+        ax.grid(axis="x", alpha=0.3)
+        ax.set_axisbelow(True)
+    ax.set_xlabel("CAGR (%)", fontsize=11)
+    ax.set_title(f"{TICKER} - Compound Annual Growth Rate\nFirst to last reported fiscal year",
+                 fontsize=15, fontweight="bold", pad=16)
+    return _save(fig, "13_cagr.png")
 
 
 CHARTS = (
@@ -955,6 +1057,7 @@ CHARTS = (
     chart_cash_flow,
     chart_segments,
     chart_cash_flow_trend,
+    chart_cagr,
 )
 
 

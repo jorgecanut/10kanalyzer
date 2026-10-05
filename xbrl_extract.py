@@ -67,6 +67,32 @@ def _clean(value, default=None):
     return value
 
 
+def _root_of(concept: str, parent_map: dict[str, str | None]) -> str:
+    """Walk parent links to the top-level concept of a statement line."""
+    seen: set[str] = set()
+    while concept in parent_map and parent_map[concept] and concept not in seen:
+        seen.add(concept)
+        concept = parent_map[concept]
+    return concept
+
+
+def _classify_section(rows: list[dict]) -> None:
+    """Assign Assets / Liabilities&Equity from the parent chain.
+
+    Robust to filings (e.g. Trupanion) whose presentation has no top-level
+    abstract headers, where header-based sectioning leaves everything unset.
+    """
+    parent_map = {r["concept"]: r["parent_concept"] for r in rows}
+    for r in rows:
+        root = _root_of(r["concept"], parent_map)
+        if root == "us-gaap_Assets":
+            r["section"] = "ASSETS"
+        elif root in ("us-gaap_LiabilitiesAndStockholdersEquity",
+                      "us-gaap_StockholdersEquity",
+                      "us-gaap_Liabilities"):
+            r["section"] = "LIABILITIES AND EQUITY"
+
+
 def extract_statements(xbrl, period_of_report: str) -> list[dict]:
     """Every dimension-free line of the five primary statements, long-form."""
     rows: list[dict] = []
@@ -82,6 +108,7 @@ def extract_statements(xbrl, period_of_report: str) -> list[dict]:
         if column is None:
             continue
 
+        line_rows: list[dict] = []
         section = None
         for _, row in data.iterrows():
             concept = str(row.get("concept") or "")
@@ -99,7 +126,7 @@ def extract_statements(xbrl, period_of_report: str) -> list[dict]:
                 continue
             standard = row.get("standard_concept")
             parent = row.get("parent_concept")
-            rows.append({
+            line_rows.append({
                 "statement": key,
                 "section": section,
                 "concept": concept,
@@ -112,6 +139,9 @@ def extract_statements(xbrl, period_of_report: str) -> list[dict]:
                 "weight": _clean(row.get("weight")),
                 "period_of_report": period_of_report,
             })
+        if key == "balance":
+            _classify_section(line_rows)
+        rows.extend(line_rows)
     return rows
 
 
