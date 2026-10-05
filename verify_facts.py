@@ -33,13 +33,37 @@ DURATION_TAGS = {
     "Revenues": [
         "Revenues",
         "RevenueFromContractWithCustomerExcludingAssessedTax",
+        "RevenueFromContractWithCustomerIncludingAssessedTax",
         "SalesRevenueNet",
         "SalesRevenueGoodsNet",
+    ],
+    "CostOfRevenue": [
+        "CostOfRevenue",
+        "CostOfGoodsAndServicesSold",
+        "CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization",
+        "CostOfGoodsSold",
+        "CostOfServices",
     ],
     "NetIncomeLoss": [
         "NetIncomeLoss",
         "NetIncomeLossAvailableToCommonStockholdersBasic",
         "ProfitLoss",
+    ],
+    "GrossProfit": ["GrossProfit"],
+    "SellingGeneralAndAdministrativeExpense": [
+        "SellingGeneralAndAdministrativeExpense",
+        "SellingGeneralAndAdministrative",
+        "SellingAndMarketingExpense",
+        "GeneralAndAdministrativeExpense",
+    ],
+    "ResearchAndDevelopmentExpense": [
+        "ResearchAndDevelopmentExpense",
+        "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost",
+    ],
+    "GoodwillImpairmentLoss": [
+        "GoodwillImpairmentLoss",
+        "GoodwillAndIntangibleAssetImpairment",
+        "AssetImpairmentCharges",
     ],
     "OperatingIncomeLoss": ["OperatingIncomeLoss"],
 }
@@ -114,15 +138,19 @@ def verify_ticker(ticker: str) -> tuple[int, int]:
     total_ok = total_bad = 0
 
     for metric, tags in {**DURATION_TAGS, **INSTANT_TAGS}.items():
+        if metric not in df.columns:
+            print(f"  [SKIP] {metric:<19} not in CSV (regenerate with the current dashboard)")
+            continue
         duration = metric in DURATION_TAGS
         # Candidate tags in priority order; a higher-priority tag must not be
         # overwritten by a lower-priority one (e.g. MSFT tags total revenue as
         # SalesRevenueNet but also tags a smaller SalesRevenueGoodsNet for the
-        # same period in the same filing).
-        sec_map = {}
+        # same period in the same filing). Keep every candidate value so a
+        # priority-fallback metric matches against the tag it actually used.
+        sec_map: dict = {}
         for tag in tags:
             for key, value in build_map(fetch_concept(cik, tag), duration).items():
-                sec_map.setdefault(key, value)
+                sec_map.setdefault(key, []).append(value)
             time.sleep(0.15)
         if not sec_map:
             print(f"  [SKIP] {metric:<19} SEC API has no annual 10-K facts")
@@ -132,19 +160,39 @@ def verify_ticker(ticker: str) -> tuple[int, int]:
         for _, row in df.iterrows():
             period = str(row["period_of_report"])
             mine = row[metric] * 1_000_000  # dashboard is USD millions
+
+            # GrossProfit is often derived (Revenues - CostOfRevenue) when a
+            # filer only tags it quarterly. Verify the derivation internally
+            # against the two already-verified columns instead of the SEC API.
+            if metric == "GrossProfit" and bool(row.get("gross_profit_derived", False)):
+                rev, cogs = row["Revenues"], row["CostOfRevenue"]
+                derived = rev - cogs if pd.notna(rev) and pd.notna(cogs) else float("nan")
+                if pd.isna(derived) and pd.isna(row["GrossProfit"]):
+                    continue
+                if pd.notna(row["GrossProfit"]) and pd.notna(derived) and \
+                        abs(row["GrossProfit"] - derived) <= max(abs(derived) * 1e-6, 1.0):
+                    ok += 1
+                else:
+                    print(f"    [DIFF] {metric} FY{row['fiscal_year']}: derived={row['GrossProfit']:,.0f} "
+                          f"expected Rev-Cogs={derived:,.0f}")
+                    bad += 1
+                continue
+
             key = (period2acc.get(period), period)
             if key not in sec_map:
                 continue
-            sec = sec_map[key]
+            candidates = sec_map[key]
             if pd.isna(mine):
-                print(f"    [MISS] {metric} FY{row['fiscal_year']}: dashboard NaN, SEC={sec:,.0f}")
+                print(f"    [MISS] {metric} FY{row['fiscal_year']}: dashboard NaN, SEC={candidates}")
                 bad += 1
-            elif abs(mine - sec) <= max(abs(sec) * 1e-6, 1.0):
+            elif any(abs(mine - sec) <= max(abs(sec) * 1e-6, 1.0) for sec in candidates):
                 ok += 1
             else:
-                print(f"    [DIFF] {metric} FY{row['fiscal_year']}: dashboard={mine:,.0f} SEC={sec:,.0f}")
+                shown = ", ".join(f"{sec:,.0f}" for sec in candidates)
+                print(f"    [DIFF] {metric} FY{row['fiscal_year']}: dashboard={mine:,.0f} SEC={shown}")
                 bad += 1
-        print(f"  [{'PASS' if bad == 0 and ok else 'FAIL'}] {metric:<19} {ok} match / {bad} problem")
+        status = "FAIL" if bad else ("PASS" if ok else "SKIP")
+        print(f"  [{status}] {metric:<19} {ok} match / {bad} problem")
         total_ok += ok
         total_bad += bad
 

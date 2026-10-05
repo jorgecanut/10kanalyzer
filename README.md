@@ -2,7 +2,7 @@
 
 Connect to SEC EDGAR, download the last ten 10-K filings for a company,
 extract a unified set of XBRL financial facts, derive health metrics, and
-render six charts into `financial_graphs/`. The run form accepts 3, 5, 10 or
+render nine charts into `financial_graphs/`. The run form accepts 3, 5, 10 or
 20 filings.
 
 ## Setup
@@ -45,10 +45,24 @@ financial_graphs/
 │   ├── 04_free_cash_flow_trajectory.png
 │   ├── 05_current_ratio.png
 │   ├── 06_debt_to_equity_trend.png
-│   └── financial_data.csv
-├── AAPL/   # same six charts + CSV
-└── MSFT/   # same six charts + CSV
+│   ├── 07_income_statement.png
+│   ├── 08_balance_sheet.png
+│   ├── 09_debt_overview.png
+│   ├── 10_cash_flow.png
+│   ├── 11_segments.png
+│   ├── financial_data.csv   # per-year ratio inputs/outputs
+│   ├── statements.csv       # every dimension-free primary-statement line
+│   ├── facts.csv            # every fact for each period, dimensions included
+│   └── notes.csv            # key schedules: debt, segments, EPS, taxes, shares
+├── AAPL/   # same charts + CSVs
+└── MSFT/   # same charts + CSVs
 ```
+
+`statements.csv` / `facts.csv` / `notes.csv` are the data-first, XBRL-driven
+artifacts: no metric is hard-coded, so a new filer needs no code change. The
+charts are views over that data (`07`–`11` are generated from whatever the
+statement contains; `01`–`06` are ratios over a stable set of standard
+concepts).
 
 ```bash
 python edgar_dashboard.py --ticker NFLX
@@ -173,10 +187,13 @@ docker compose up -d                # start it again
 
 | Metric | XBRL concept(s) | Statement |
 | --- | --- | --- |
-| Revenue | `Revenues`, `RevenueFromContractWithCustomerExcludingAssessedTax`, `SalesRevenueNet`, `SalesRevenueGoodsNet` | Income |
+| Revenue | `Revenues`, `RevenueFromContractWithCustomerExcludingAssessedTax`, `RevenueFromContractWithCustomerIncludingAssessedTax`, `SalesRevenueNet`, `SalesRevenueGoodsNet` | Income |
 | Cost of Revenue | `CostOfRevenue`, `CostOfGoodsAndServicesSold`, `CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization`, `CostOfGoodsSold`, `CostOfServices` | Income |
 | Net Income | `NetIncomeLoss`, `NetIncomeLossAvailableToCommonStockholdersBasic`, `ProfitLoss` | Income |
 | Gross Profit | `GrossProfit` (fallback: `Revenues - CostOfRevenue`) | Income |
+| SG&A | `SellingGeneralAndAdministrativeExpense`, `SellingGeneralAndAdministrative`, `SellingAndMarketingExpense`, `GeneralAndAdministrativeExpense` | Income |
+| R&D | `ResearchAndDevelopmentExpense`, `ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost` | Income |
+| Goodwill Impairment | `GoodwillImpairmentLoss`, `GoodwillAndIntangibleAssetImpairment`, `AssetImpairmentCharges` | Income |
 | Operating Income | `OperatingIncomeLoss` | Income |
 | Operating Cash Flow | `NetCashProvidedByUsedInOperatingActivities`, `...ContinuingOperations` | Cash Flow |
 | CapEx | `PaymentsToAcquirePropertyPlantAndEquipment`, `PaymentsToAcquireProductiveAssets` | Cash Flow |
@@ -185,10 +202,24 @@ docker compose up -d                # start it again
 | Long-Term Debt | `LongTermDebt`, `LongTermDebtNoncurrent`, `LongTermDebtAndCapitalLeaseObligations` | Balance Sheet |
 | Stockholders' Equity | `StockholdersEquity`, `StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest` | Balance Sheet |
 
-Derived in-script: **Gross Margin**, **Operating Margin**,
-**Free Cash Flow** (`OperatingCashFlow - CapEx`), **Current Ratio**
-(`AssetsCurrent / LiabilitiesCurrent`), **Debt-to-Equity**
+Derived in-script: **Gross Margin**, **Operating Margin**, **Net Margin**
+(`NetIncomeLoss / Revenues`), **Free Cash Flow** (`OperatingCashFlow - CapEx`),
+**Current Ratio** (`AssetsCurrent / LiabilitiesCurrent`), **Debt-to-Equity**
 (`LongTermDebt / StockholdersEquity`). All monetary values are in USD millions.
+
+### Balance-sheet and debt extraction
+
+The income and ratio charts use the curated concepts in the table above. The
+**balance sheet** (assets / liabilities & equity) and **debt** charts do not
+hard-code lines: `extract_balance_lines()` reads the filer's own presentation
+linkbase through edgartools' standardized `balance_sheet()` statement. The
+library maps each tagged line onto a `standard_concept`, absorbing the
+filer-specific and extension tags that vary company to company, and we keep one
+row per dimension-free line. The charts stack every line the filer states
+(totals are skipped when stacking because they are another line's parent) and
+flag debt-like and cash-like lines by concept/label text. So a new company works
+without adding tags by hand; only the curated income/ratio series need
+maintenance.
 
 ## Notes on the data
 
@@ -196,6 +227,11 @@ Derived in-script: **Gross Margin**, **Operating Margin**,
 - Duration facts are restricted to periods of **≥ 300 days**. Without this, the
   quarterly facts tagged in the notes (which share a `period_end` with the
   annual figure) can be selected instead of the full-year value.
+- After a merger, a filer often tags the consolidated statements under a
+  successor/predecessor reporting basis (`us-gaap:StatementScenarioAxis`). There
+  is then no dimension-free annual fact, so the extractor falls back to a
+  scenario-only fact as the consolidated value (KHC's FY2015 successor year).
+  That axis marks a period's basis, not a line-item breakdown, so it is safe.
 - The current year is located by matching each fact's end date to the filing's
   `period_of_report`, **not** by the dataframe's `fiscal_year` column. For
   non-calendar fiscal years that column mislabels prior-year comparatives
@@ -239,5 +275,14 @@ python verify_facts.py                 # default sample
 python verify_facts.py NFLX AAPL MSFT
 ```
 
-It exits non-zero if any value differs. All checks pass exactly (170/170
-year-values) for the tested set.
+It exits non-zero if any value differs. It now covers the income-statement
+lines (revenue, cost of revenue, gross profit, SG&A, R&D, goodwill impairment,
+operating income, net income) as well as the balance lines used by the ratio
+charts. Derived gross profit is checked internally as `Revenue - CostOfRevenue`.
+Run it after generating a ticker to confirm the charts rest on verified numbers.
+All checks pass exactly (e.g. KHC 125/125, the default sample 284/284).
+
+> The fallback for successor/predecessor reporting bases (§ Notes) produces
+> values that SEC's `companyconcept` API does not expose, so those specific
+> year-values are skipped rather than compared. Everything the API does expose
+> is matched exactly.
