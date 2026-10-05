@@ -2,7 +2,8 @@
 
 Connect to SEC EDGAR, download the last ten 10-K filings for a company,
 extract a unified set of XBRL financial facts, derive health metrics, and
-render six charts into `financial_graphs/`.
+render six charts into `financial_graphs/`. The run form accepts 3, 5, 10 or
+20 filings.
 
 ## Setup
 
@@ -74,6 +75,8 @@ Routes:
 | `GET` | `/` | The UI (Run / Recent tabs) |
 | `POST` | `/api/run` | `{"ticker":"NFLX","filings":10}` → queues a run |
 | `GET` | `/api/status/<ticker>` | queued / running / done / error + log tail |
+| `GET` | `/api/identity` | Current SEC identity (name + email) |
+| `POST` | `/api/identity` | `{"identity":"Jane Doe jane@example.com"}` → save it |
 | `GET` | `/api/recent` | Tickers with results, newest first |
 | `GET` | `/api/files/<ticker>` | Chart list for a ticker |
 | `GET` | `/files/<ticker>/<name>` | View a chart inline |
@@ -143,6 +146,28 @@ sudo htpasswd -c /etc/nginx/.htpasswd you
 - The app listens on `0.0.0.0:8000` inside the container (override with `PORT`).
   It has **no authentication** — keep it behind nginx or a private network.
 - Runs are serialized (one at a time); ~1–3 minutes per ticker the first time.
+
+### Rebuilding / clean redeploy (Dockge)
+
+Dockge's **Update** button only pulls images, so it does nothing for a stack
+that uses `build:` (see Dockge discussion #267). This stack builds its image
+locally, so rebuild it from the stack's **Web Terminal** (or over SSH in the
+stack directory):
+
+```bash
+docker compose down                 # remove the container
+docker image rm edgar-dashboard     # delete the built image
+docker compose build --no-cache     # rebuild from scratch
+docker compose up -d                # start it again
+```
+
+- Code-only changes usually just need `docker compose up -d --build`.
+- `docker builder prune` clears leftover build cache if you want the space back.
+- Add `-v` to `docker compose down` to also drop the `edgar_cache` /
+  `edgar_data` volumes (SEC download cache). `./financial_graphs` on the host is
+  untouched either way.
+- If you removed `image:` from the compose file, check the generated name with
+  `docker compose images`.
 
 ## Metrics extracted per fiscal year
 

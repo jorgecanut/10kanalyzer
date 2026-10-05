@@ -2,5 +2,6 @@
 __pycache__/
 *.pyc
 financial_graphs/*/run.log
+financial_graphs/.edgar_identity
 .env
 nginx/htpasswd

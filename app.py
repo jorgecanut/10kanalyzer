@@ -35,6 +35,13 @@ BASE_DIR = Path(__file__).resolve().parent
 GRAPH_DIR = BASE_DIR / "financial_graphs"
 DASHBOARD = BASE_DIR / "edgar_dashboard.py"
 
+# The SEC identity (name + email) sent as the EDGAR User-Agent. Read from the
+# env var by default, but the UI can override it. The override is written here
+# so it survives restarts and (because ./financial_graphs is bind-mounted)
+# container rebuilds. The leading dot keeps it out of the graphs listing.
+IDENTITY_FILE = GRAPH_DIR / ".edgar_identity"
+DEFAULT_IDENTITY = "Data Analyst analyst@example.com"
+
 # Tickers: letters/digits plus the "." and "-" seen in symbols such as BRK.B.
 TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 ALLOWED_FILES = {".png", ".csv", ".log"}
@@ -60,6 +67,34 @@ def _normalise_ticker(raw: str) -> str:
     if not TICKER_RE.match(ticker):
         abort(400, "Invalid ticker (letters/digits, up to 10 chars, e.g. NFLX).")
     return ticker
+
+
+def _get_identity() -> str:
+    """Current SEC identity: UI override first, then env var, then default."""
+    try:
+        saved = IDENTITY_FILE.read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, OSError):
+        saved = ""
+    return saved or os.environ.get("EDGAR_IDENTITY", DEFAULT_IDENTITY).strip()
+
+
+def _set_identity(raw: str) -> str:
+    """Validate and persist a new SEC identity; return the stored value."""
+    # Collapse whitespace so "Name   you@x.com" and stray newlines normalise.
+    identity = " ".join((raw or "").split())
+    if not identity:
+        abort(400, "Identity cannot be empty.")
+    if len(identity) > 200:
+        abort(400, "Identity is too long (max 200 characters).")
+    # SEC wants a reachable contact; require an email-looking token.
+    if "@" not in identity:
+        abort(400, "SEC requires a contact email, e.g. Jane Doe jane@example.com.")
+    try:
+        IDENTITY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        IDENTITY_FILE.write_text(identity + "\n", encoding="utf-8")
+    except OSError as exc:
+        abort(500, f"Could not save identity: {exc}")
+    return identity
 
 
 def _ticker_dir(ticker: str) -> Path:
@@ -108,12 +143,14 @@ def _worker(ticker: str, filings: int) -> None:
         with JOBS_LOCK:
             JOBS[ticker].update(status="running", started=_now())
         try:
+            env = {**os.environ, "EDGAR_IDENTITY": _get_identity()}
             with log_path.open("w") as log:
                 proc = subprocess.Popen(
                     [sys.executable, str(DASHBOARD), "--ticker", ticker, "--filings", str(filings)],
                     cwd=str(BASE_DIR),
                     stdout=log,
                     stderr=subprocess.STDOUT,
+                    env=env,
                 )
                 with JOBS_LOCK:
                     JOBS[ticker]["pid"] = proc.pid
@@ -145,6 +182,18 @@ def index():
 @app.get("/healthz")
 def healthz():
     return jsonify(status="ok")
+
+
+@app.get("/api/identity")
+def get_identity():
+    return jsonify(identity=_get_identity())
+
+
+@app.post("/api/identity")
+def update_identity():
+    payload = request.get_json(silent=True) or {}
+    identity = _set_identity(payload.get("identity", ""))
+    return jsonify(identity=identity)
 
 
 @app.post("/api/run")

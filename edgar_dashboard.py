@@ -383,7 +383,7 @@ def chart_revenue_vs_net_income(df: pd.DataFrame) -> str:
     """Grouped bar chart: revenue vs net income over ten years."""
     fig, ax = _new_figure(
         f"{TICKER} - Revenue vs. Net Income",
-        "Last ten fiscal years (USD millions)",
+        f"Last {len(df)} fiscal years (USD millions)",
     )
     melted = df.melt(
         id_vars="fiscal_year",

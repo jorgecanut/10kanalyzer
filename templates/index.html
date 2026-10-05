@@ -12,6 +12,28 @@
   header { background:#fff; border-bottom:1px solid var(--line); padding:14px 20px; }
   header h1 { margin:0; font-size:18px; }
   header p { margin:2px 0 0; color:var(--muted); font-size:13px; }
+  .head-row { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+  .user { position:relative; }
+  .user-btn { display:flex; align-items:center; gap:10px; max-width:320px; padding:6px 10px;
+              background:#fff; border:1px solid var(--line); border-radius:999px; cursor:pointer;
+              font:inherit; color:inherit; text-align:left; }
+  .user-btn:hover { border-color:#c7ccd4; }
+  .avatar { flex:none; width:32px; height:32px; border-radius:50%; background:var(--accent); color:#fff;
+            display:flex; align-items:center; justify-content:center; font-weight:600; font-size:14px;
+            text-transform:uppercase; }
+  .user-meta { display:flex; flex-direction:column; min-width:0; }
+  .user-label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
+  .user-id { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:230px; }
+  .user-pop { position:absolute; right:0; top:calc(100% + 8px); z-index:20; width:320px;
+              background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px;
+              box-shadow:0 12px 32px rgba(17,24,39,.14); }
+  .user-pop label { display:block; font-size:12px; font-weight:600; margin-bottom:6px; }
+  .user-pop input { width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:8px;
+                    font-size:14px; text-transform:none; }
+  .user-pop .muted { margin:8px 0 12px; }
+  .user-actions { display:flex; gap:8px; }
+  .user-actions button { padding:8px 14px; border:1px solid var(--line); border-radius:8px;
+                         font-size:14px; background:#fff; cursor:pointer; }
   main { max-width:1100px; margin:0 auto; padding:20px; }
   .tabs { display:flex; gap:6px; margin-bottom:16px; }
   .tabs button { border:1px solid var(--line); background:#fff; padding:8px 16px; border-radius:8px;
@@ -52,8 +74,32 @@
 </head>
 <body>
 <header>
-  <h1>SEC EDGAR 10-K Dashboard</h1>
-  <p>Enter a ticker, run the pipeline, then view or download the charts.</p>
+  <div class="head-row">
+    <div>
+      <h1>SEC EDGAR 10-K Dashboard</h1>
+      <p>Enter a ticker, run the pipeline, then view or download the charts.</p>
+    </div>
+    <div class="user">
+      <button id="user-btn" class="user-btn" onclick="toggleUser()" title="SEC request identity">
+        <span id="user-avatar" class="avatar">?</span>
+        <span class="user-meta">
+          <span class="user-label">SEC identity</span>
+          <span id="user-id" class="user-id">loading…</span>
+        </span>
+      </button>
+      <div id="user-pop" class="user-pop hidden">
+        <label for="user-input">SEC request identity</label>
+        <input id="user-input" type="text" maxlength="200" placeholder="Jane Doe jane@example.com"
+               onkeydown="if(event.key==='Enter')saveIdentity()">
+        <p class="muted">Sent as the EDGAR User-Agent. Use a name and a reachable contact email.</p>
+        <div class="user-actions">
+          <button class="primary" onclick="saveIdentity()">Save</button>
+          <button onclick="toggleUser(false)">Cancel</button>
+        </div>
+        <div id="user-msg" class="muted"></div>
+      </div>
+    </div>
+  </div>
 </header>
 
 <main>
@@ -69,6 +115,7 @@
         <input id="ticker" type="text" placeholder="Ticker, e.g. NFLX" maxlength="10"
                onkeydown="if(event.key==='Enter')runTicker()">
         <select id="filings" title="Number of 10-K filings">
+          <option value="20">20 filings</option>
           <option value="10" selected>10 filings</option>
           <option value="5">5 filings</option>
           <option value="3">3 filings</option>
@@ -99,6 +146,55 @@
 <script>
 const $ = s => document.querySelector(s);
 let timer = null;
+let identityCache = '';
+
+function setIdentity(id) {
+  identityCache = id;
+  $('#user-id').textContent = id;
+  $('#user-avatar').textContent = (id.trim()[0] || '?');
+}
+
+async function loadIdentity() {
+  try {
+    const { identity } = await (await fetch('/api/identity')).json();
+    setIdentity(identity);
+  } catch { setIdentity('unavailable'); }
+}
+
+function toggleUser(force) {
+  const pop = $('#user-pop');
+  const open = force === undefined ? pop.classList.contains('hidden') : force;
+  pop.classList.toggle('hidden', !open);
+  if (open) {
+    $('#user-input').value = identityCache;
+    $('#user-msg').textContent = '';
+    $('#user-input').focus();
+  }
+}
+
+async function saveIdentity() {
+  const identity = $('#user-input').value.trim();
+  if (!identity) { $('#user-msg').textContent = 'Identity cannot be empty.'; return; }
+  try {
+    const res = await fetch('/api/identity', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identity }),
+    });
+    const data = await res.json();
+    if (!res.ok) { $('#user-msg').textContent = data.error || 'Could not save.'; return; }
+    setIdentity(data.identity);
+    toggleUser(false);
+  } catch {
+    $('#user-msg').textContent = 'Could not save.';
+  }
+}
+
+// Close the popover when clicking outside it.
+document.addEventListener('click', e => {
+  const user = document.querySelector('.user');
+  if (user && !user.contains(e.target)) toggleUser(false);
+});
 
 function showTab(name) {
   const isRun = name === 'run';
@@ -202,6 +298,7 @@ function openRecent(ticker) {
 }
 
 // If a run is already in progress when the page loads, resume watching it.
+loadIdentity();
 (async () => {
   const { items } = await (await fetch('/api/recent')).json();
   for (const it of items) {
