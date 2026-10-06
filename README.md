@@ -1,9 +1,8 @@
-# SEC EDGAR 10-K Financial Health Dashboard
+# SEC EDGAR 10-K Data Extractor
 
 Connect to SEC EDGAR, download the last ten 10-K filings for a company,
-extract a unified set of XBRL financial facts, derive health metrics, and
-render nine charts into `financial_graphs/`. The run form accepts 3, 5, 10 or
-20 filings.
+extract the XBRL financial data, and write it as CSV into `financial_graphs/`.
+The run form accepts 3, 5, 10 or 20 filings. No charts are generated.
 
 ## Setup
 
@@ -39,32 +38,17 @@ one another:
 ```
 financial_graphs/
 ├── NFLX/
-│   ├── 01_revenue_vs_net_income.png
-│   ├── 02_margin_trends.png
-│   ├── 03_net_income_vs_operating_cash_flow.png
-│   ├── 04_free_cash_flow_trajectory.png
-│   ├── 05_current_ratio.png
-│   ├── 06_debt_to_equity_trend.png
-│   ├── 07_income_statement.png
-│   ├── 08_balance_sheet.png
-│   ├── 09_debt_overview.png
-│   ├── 10_cash_flow.png
-│   ├── 11_segments.png
-│   ├── 12_cash_flow_trend.png
-│   ├── 13_cagr.png
 │   ├── financial_data.csv   # per-year ratio inputs/outputs
 │   ├── statements.csv       # every dimension-free primary-statement line
 │   ├── facts.csv            # every fact for each period, dimensions included
 │   └── notes.csv            # key schedules: debt, segments, EPS, taxes, shares
-├── AAPL/   # same charts + CSVs
-└── MSFT/   # same charts + CSVs
+├── AAPL/   # same CSVs
+└── MSFT/   # same CSVs
 ```
 
 `statements.csv` / `facts.csv` / `notes.csv` are the data-first, XBRL-driven
-artifacts: no metric is hard-coded, so a new filer needs no code change. The
-charts are views over that data (`07`–`11` are generated from whatever the
-statement contains; `01`–`06` are ratios over a stable set of standard
-concepts).
+artifacts: no metric is hard-coded, so a new filer needs no code change.
+`financial_data.csv` holds the derived ratio inputs/outputs.
 
 ```bash
 python edgar_dashboard.py --ticker NFLX
