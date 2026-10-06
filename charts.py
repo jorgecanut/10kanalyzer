@@ -286,7 +286,7 @@ def _label_bar(ax: plt.Axes, x: float, y: float, value: float, fmt: str = "mm") 
         ha="center",
         va=va,
         fontsize=5,
-        rotation=90,
+        rotation=0,
     )
 
 
@@ -364,13 +364,15 @@ def chart_margins(
         ax.plot(range(len(years)), series.to_numpy(), marker="o", label=label, color=_color_for(label))
         for x, v in enumerate(series.to_numpy()):
             if pd.notna(v):
+                # Net margin label below the point so it does not overlap gross.
+                below = label == "Net Margin"
                 ax.annotate(
                     _fmt_pct(v),
                     (x, v),
                     textcoords="offset points",
-                    xytext=(0, 6),
+                    xytext=(0, -6 if below else 6),
                     ha="center",
-                    va="bottom",
+                    va="top" if below else "bottom",
                     fontsize=6,
                 )
     _style_axes(ax, years)
@@ -517,7 +519,22 @@ def chart_debt(
     years: list[int],
 ) -> list[str]:
     lt_debt = _df_series(df, "LongTermDebt", years)
-    current_leases = _stmt_series(
+    # IFRS / foreign filers may not tag a plain LongTermDebt concept for all
+    # years, so fill missing years from the balance-sheet statement.
+    stmt_lt_debt = _stmt_series(
+        statements,
+        "balance",
+        ["LongTermDebt", "LongTermDebtNoncurrent", "Borrowings"],
+        years,
+        include_labels=[
+            "long-term portion of borrowings",
+            "long-term borrowings",
+            "non-current borrowings",
+            "long-term debt",
+        ],
+    )
+    lt_debt = lt_debt.combine_first(stmt_lt_debt)
+    current_debt = _stmt_series(
         statements,
         "balance",
         [
@@ -527,6 +544,11 @@ def chart_debt(
             "LongTermDebtAndCapitalLeaseObligationsCurrent",
         ],
         years,
+        include_labels=[
+            "current portion of borrowings",
+            "current maturities of debt",
+            "current portion of capital lease",
+        ],
     )
     capital_leases = _stmt_series(
         statements,
@@ -537,6 +559,7 @@ def chart_debt(
             "LongTermDebtAndCapitalLeaseObligationsNoncurrent",
         ],
         years,
+        include_labels=["finance lease liability", "capital lease"],
     )
     cash = _stmt_series(
         statements,
@@ -549,13 +572,13 @@ def chart_debt(
         ],
         years,
     )
-    total_debt = lt_debt.fillna(0) + current_leases.fillna(0) + capital_leases.fillna(0)
+    total_debt = lt_debt.fillna(0) + current_debt.fillna(0) + capital_leases.fillna(0)
     total_debt = total_debt.replace(0, np.nan)
     net_debt = total_debt - cash
 
     metrics = [
         ("Long-Term Debt", lt_debt, "reported"),
-        ("Current Portion Leases", current_leases, "reported"),
+        ("Current Portion Debt/Leases", current_debt, "reported"),
         ("Capital Leases", capital_leases, "reported"),
         ("Total Debt", total_debt, "derived"),
         ("Cash & Equivalents", cash, "reported"),

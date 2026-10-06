@@ -75,6 +75,8 @@ METRIC_CONCEPTS: dict[str, tuple[list[str], str]] = {
             "SalesRevenueNet",
             # Older filings (pre-ASC 606) often split goods/services or use this.
             "SalesRevenueGoodsNet",
+            # IFRS filers (e.g. Celestica 20-F).
+            "RevenueFromContractsWithCustomers",
         ],
         "duration",
     ),
@@ -85,6 +87,8 @@ METRIC_CONCEPTS: dict[str, tuple[list[str], str]] = {
             # stock that stop tagging plain NetIncomeLoss (e.g. Estee Lauder
             # from FY2021 on).
             "NetIncomeLossAvailableToCommonStockholdersBasic",
+            # IFRS filers.
+            "ProfitLossAttributableToOwnersOfParent",
             # Last resort: total net income including non-controlling interests.
             "ProfitLoss",
         ],
@@ -98,6 +102,8 @@ METRIC_CONCEPTS: dict[str, tuple[list[str], str]] = {
             "CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization",
             "CostOfGoodsSold",
             "CostOfServices",
+            # IFRS filers.
+            "CostOfSales",
         ],
         "duration",
     ),
@@ -108,6 +114,8 @@ METRIC_CONCEPTS: dict[str, tuple[list[str], str]] = {
             # Some filers split the two halves instead.
             "SellingAndMarketingExpense",
             "GeneralAndAdministrativeExpense",
+            # IFRS filers (e.g. Celestica).
+            "SellingGeneralAndAdminExpenses",
         ],
         "duration",
     ),
@@ -115,6 +123,8 @@ METRIC_CONCEPTS: dict[str, tuple[list[str], str]] = {
         [
             "ResearchAndDevelopmentExpense",
             "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost",
+            # IFRS filers.
+            "ResearchAndDevelopmentExpenses",
         ],
         "duration",
     ),
@@ -128,12 +138,21 @@ METRIC_CONCEPTS: dict[str, tuple[list[str], str]] = {
         ],
         "duration",
     ),
-    "OperatingIncomeLoss": (["OperatingIncomeLoss"], "duration"),
+    "OperatingIncomeLoss": (
+        [
+            "OperatingIncomeLoss",
+            # IFRS filers.
+            "ProfitLossFromOperatingActivities",
+        ],
+        "duration",
+    ),
     "OperatingCashFlow": (
         [
             "NetCashProvidedByUsedInOperatingActivities",
             # Older filings (pre-~2017) use the "continuing operations" variant.
             "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
+            # IFRS filers.
+            "CashFlowsFromUsedInOperatingActivities",
         ],
         "duration",
     ),
@@ -141,11 +160,27 @@ METRIC_CONCEPTS: dict[str, tuple[list[str], str]] = {
         [
             "PaymentsToAcquirePropertyPlantAndEquipment",
             "PaymentsToAcquireProductiveAssets",
+            # IFRS filers (e.g. Celestica).
+            "PurchaseOfPropertyPlantAndEquipmentIntangibleAssetsOtherThanGoodwillInvestmentPropertyAndOtherNoncurrentAssets",
         ],
         "duration",
     ),
-    "AssetsCurrent": (["AssetsCurrent"], "instant"),
-    "LiabilitiesCurrent": (["LiabilitiesCurrent"], "instant"),
+    "AssetsCurrent": (
+        [
+            "AssetsCurrent",
+            # IFRS filers.
+            "CurrentAssets",
+        ],
+        "instant",
+    ),
+    "LiabilitiesCurrent": (
+        [
+            "LiabilitiesCurrent",
+            # IFRS filers.
+            "CurrentLiabilities",
+        ],
+        "instant",
+    ),
     "LongTermDebt": (
         [
             "LongTermDebt",
@@ -162,6 +197,9 @@ METRIC_CONCEPTS: dict[str, tuple[list[str], str]] = {
             # Many filers only tag the total-equity variant (e.g. Estee
             # Lauder from FY2023 on, once it has non-controlling interests).
             "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+            # IFRS filers.
+            "EquityAttributableToOwnersOfParent",
+            "Equity",
         ],
         "instant",
     ),
@@ -262,7 +300,10 @@ def extract_metric(
 
 
 def build_dataset(ticker: str, n_filings: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Fetch the last ``n_filings`` 10-Ks and assemble the datasets.
+    """Fetch the last ``n_filings`` annual filings and assemble the datasets.
+
+    Supports 10-K (US domestic), 20-F and 40-F (foreign private issuers) so
+    tickers such as Celestica (CLS) get their full available history.
 
     Returns ``(ratios, statements, facts)``:
     - ``ratios`` — the wide per-year summary used by the ratio charts.
@@ -272,11 +313,30 @@ def build_dataset(ticker: str, n_filings: int) -> tuple[pd.DataFrame, pd.DataFra
     company = Company(ticker)
     print(f"[+] Company: {company.name} (CIK {company.cik})")
 
-    # ``amendments=False`` keeps out the 10-K/A duplicates; we also guard with an
-    # exact form match. A few extra filings are pulled so a filing without
-    # parseable XBRL does not leave us short of ten fiscal years.
-    filings = company.get_filings(form="10-K", amendments=False)
-    filings = [f for f in filings if f.form == "10-K"]
+    # Pull annual filings for US (10-K) and foreign (20-F / 40-F) filers, then
+    # merge, deduplicate by accession and keep the most recent ``n_filings``.
+    annual_forms = ["10-K", "20-F", "40-F"]
+    all_filings: list = []
+    seen_accessions: set[str] = set()
+    for form in annual_forms:
+        try:
+            batch = company.get_filings(form=form, amendments=False)
+            for filing in batch:
+                if filing.form != form:
+                    continue
+                accession = getattr(filing, "accession_no", None)
+                if not accession or accession in seen_accessions:
+                    continue
+                seen_accessions.add(accession)
+                all_filings.append(filing)
+        except Exception:  # noqa: BLE001 - a missing form should not abort the others
+            continue
+
+    filings = sorted(
+        all_filings,
+        key=lambda f: (str(f.period_of_report or "")),
+        reverse=True,
+    )[:n_filings]
 
     records: list[dict] = []
     statement_records: list[dict] = []
@@ -336,9 +396,8 @@ def build_dataset(ticker: str, n_filings: int) -> tuple[pd.DataFrame, pd.DataFra
 
     if not records:
         raise RuntimeError(
-            f"No parseable 10-K filings found for {ticker!r}. It may be a "
-            "foreign private issuer (e.g. files 20-F), a recent registrant, or "
-            "otherwise outside the US-GAAP 10-K universe."
+            f"No parseable annual filings found for {ticker!r}. It may be a "
+            "recent registrant or outside the US-GAAP / IFRS SEC universe."
         )
 
     df = pd.DataFrame(records).sort_values("period_of_report").reset_index(drop=True)
@@ -388,6 +447,19 @@ def clean_and_derive(df: pd.DataFrame) -> pd.DataFrame:
     derived_gross = df["Revenues"] - df["CostOfRevenue"]
     df["GrossProfit"] = df["GrossProfit"].fillna(derived_gross)
     df["gross_profit_derived"] = df["GrossProfit"].eq(derived_gross)
+
+    # Some filers (e.g. Nike) do not tag OperatingIncomeLoss. Derive it from
+    # gross profit less SG&A and R&D when those components are available.
+    sga = df["SellingGeneralAndAdministrativeExpense"].fillna(0)
+    rnd = df["ResearchAndDevelopmentExpense"].fillna(0)
+    has_op_components = (
+        df["SellingGeneralAndAdministrativeExpense"].notna()
+        | df["ResearchAndDevelopmentExpense"].notna()
+    )
+    derived_operating = df["GrossProfit"] - sga - rnd
+    df.loc[has_op_components, "OperatingIncomeLoss"] = df.loc[
+        has_op_components, "OperatingIncomeLoss"
+    ].fillna(derived_operating)
 
     # Derived health metrics (guard every denominator against zero).
     df["GrossMargin"] = _safe_div(df["GrossProfit"], df["Revenues"])
