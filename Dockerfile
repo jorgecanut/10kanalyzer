@@ -11,7 +11,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Application code.
-COPY edgar_dashboard.py xbrl_extract.py verify_facts.py app.py ./
+COPY edgar_dashboard.py xbrl_extract.py verify_facts.py app.py charts.py ./
 COPY templates ./templates
 
 RUN mkdir -p /app/financial_graphs
