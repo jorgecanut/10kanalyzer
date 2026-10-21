@@ -4,40 +4,83 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Stocky</title>
+<script>
+  // Apply the saved theme before first paint to avoid a flash.
+  try {
+    document.documentElement.dataset.theme = localStorage.getItem('stocky-theme') || 'dark';
+  } catch { document.documentElement.dataset.theme = 'dark'; }
+</script>
 <style>
   :root {
     color-scheme: dark;
     --bg:#0b1020;            /* page and terminal share this colour */
     --surface:#0f1730;
     --surface-2:#121d3a;
+    --bar:#080d1a;
     --line:#243155;
     --line-soft:#1a2546;
     --muted:#8b97b5;
     --text:#e6ecff;
     --accent:#4f8cff;
+    --on-accent:#07101f;
     --accent-soft:rgba(79,140,255,.16);
     --green:#7ee787;
+    --badge-queued-fg:#f6c96b; --badge-queued-bg:rgba(254,188,46,.16);
+    --badge-running-fg:#8db6ff; --badge-running-bg:rgba(79,140,255,.16);
+    --badge-done-fg:#7ee787;   --badge-done-bg:rgba(126,231,135,.14);
+    --badge-error-fg:#ff8f8f;  --badge-error-bg:rgba(255,107,107,.16);
+    --badge-idle-fg:#b6c0da;   --badge-idle-bg:rgba(139,151,181,.16);
+  }
+  [data-theme="light"] {
+    color-scheme: light;
+    --bg:#f5f7fb;
+    --surface:#ffffff;
+    --surface-2:#ffffff;
+    --bar:#e9eef8;
+    --line:#d5dce9;
+    --line-soft:#e5eaf3;
+    --muted:#5c6880;
+    --text:#101828;
+    --accent:#2f6fed;
+    --on-accent:#ffffff;
+    --accent-soft:rgba(47,111,237,.12);
+    --green:#0f7b3f;
+    --badge-queued-fg:#8a5300; --badge-queued-bg:rgba(245,158,11,.14);
+    --badge-running-fg:#1d4ed8; --badge-running-bg:rgba(47,111,237,.12);
+    --badge-done-fg:#0f7b3f;   --badge-done-bg:rgba(15,123,63,.10);
+    --badge-error-fg:#b42318;  --badge-error-bg:rgba(180,35,24,.10);
+    --badge-idle-fg:#475467;   --badge-idle-bg:rgba(71,84,103,.10);
   }
   * { box-sizing: border-box; }
+  html { scroll-padding-top:130px; }
   body { margin:0; font:15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
          background:var(--bg); color:var(--text); }
-  header { background:var(--bg); border-bottom:1px solid var(--line); padding:14px 20px; }
+
+  /* Header + ticker bar stay pinned to the top of the viewport. */
+  .topbar { position:sticky; top:0; z-index:30; background:var(--bg);
+            border-bottom:1px solid var(--line); }
+  header { padding:12px 20px; }
   header h1 { margin:0; font-size:18px; letter-spacing:.01em; }
   .head-row { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+  .head-actions { display:flex; align-items:center; gap:10px; }
+  .theme-btn { display:flex; align-items:center; gap:7px; padding:7px 12px; border-radius:8px;
+               border:1px solid var(--line); background:var(--surface); color:var(--muted);
+               font:inherit; font-size:13px; cursor:pointer; }
+  .theme-btn:hover { color:var(--text); border-color:var(--muted); }
   .user { position:relative; }
   .user-btn { display:flex; align-items:center; gap:10px; max-width:320px; padding:6px 10px;
               background:var(--surface); border:1px solid var(--line); border-radius:999px; cursor:pointer;
               font:inherit; color:inherit; text-align:left; }
-  .user-btn:hover { border-color:#3a4a75; }
-  .avatar { flex:none; width:32px; height:32px; border-radius:50%; background:var(--accent); color:#07101f;
+  .user-btn:hover { border-color:var(--muted); }
+  .avatar { flex:none; width:32px; height:32px; border-radius:50%; background:var(--accent); color:var(--on-accent);
             display:flex; align-items:center; justify-content:center; font-weight:700; font-size:14px;
             text-transform:uppercase; }
   .user-meta { display:flex; flex-direction:column; min-width:0; }
   .user-label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
   .user-id { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:230px; }
-  .user-pop { position:absolute; right:0; top:calc(100% + 8px); z-index:20; width:320px;
+  .user-pop { position:absolute; right:0; top:calc(100% + 8px); z-index:40; width:320px;
               background:var(--surface-2); border:1px solid var(--line); border-radius:10px; padding:14px;
-              box-shadow:0 18px 44px rgba(0,0,0,.55); }
+              box-shadow:0 18px 44px rgba(0,0,0,.35); }
   .user-pop label { display:block; font-size:12px; font-weight:600; margin-bottom:6px; }
   .user-pop input { width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:8px;
                     font-size:14px; text-transform:none; background:var(--bg); color:var(--text); }
@@ -45,34 +88,36 @@
   .user-actions { display:flex; gap:8px; }
   .user-actions button { padding:8px 14px; border:1px solid var(--line); border-radius:8px;
                          font-size:14px; background:var(--surface); color:var(--text); cursor:pointer; }
-  main { max-width:1100px; margin:0 auto; padding:20px; }
+
+  /* Ticker bar: always visible under the title bar. */
+  .toolbar { padding:10px 20px; border-top:1px solid var(--line-soft); background:var(--bg); }
+  .toolbar-inner { max-width:1100px; margin:0 auto; display:flex; gap:10px; flex-wrap:wrap;
+                   align-items:center; }
+  .toolbar .status { margin:0; font-size:14px; }
+
+  main { max-width:1100px; margin:0 auto; padding:18px 20px 40px; }
   .tabs { display:flex; gap:6px; margin-bottom:16px; }
   .tabs button { border:1px solid var(--line); background:var(--surface); padding:8px 16px; border-radius:8px;
                  cursor:pointer; font-size:14px; color:var(--muted); }
-  .tabs button.active { background:var(--accent); border-color:var(--accent); color:#07101f; font-weight:600; }
+  .tabs button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
   .card { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:18px; margin-bottom:16px; }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
   input[type=text] { flex:1; min-width:160px; padding:10px 12px; border:1px solid var(--line);
                      border-radius:8px; font-size:15px; text-transform:uppercase;
-                     background:var(--bg); color:var(--text); }
+                     background:var(--surface); color:var(--text); }
   input[type=text]::placeholder { color:var(--muted); text-transform:none; }
   input[type=text]:focus, select:focus, .user-pop input:focus { outline:none; border-color:var(--accent); }
   select, button.primary { padding:10px 12px; border:1px solid var(--line); border-radius:8px;
-                           font-size:14px; background:var(--bg); color:var(--text); }
-  button.primary { background:var(--accent); border-color:var(--accent); color:#07101f; font-weight:600;
+                           font-size:14px; background:var(--surface); color:var(--text); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600;
                    cursor:pointer; }
   button.primary:disabled { opacity:.55; cursor:default; }
-  .status { margin-top:12px; font-size:14px; }
   .badge { display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:600; }
-  .queued { background:rgba(254,188,46,.16); color:#f6c96b; }
-  .running { background:var(--accent-soft); color:#8db6ff; }
-  .done { background:rgba(126,231,135,.14); color:var(--green); }
-  .error { background:rgba(255,107,107,.16); color:#ff8f8f; }
-  .idle { background:rgba(139,151,181,.16); color:#b6c0da; }
-  pre.log { background:var(--bg); color:#cfd9f5; border:1px solid var(--line-soft);
-            padding:14px 16px; border-radius:8px;
-            font:14px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-            max-height:280px; overflow:auto; white-space:pre-wrap; }
+  .queued { background:var(--badge-queued-bg); color:var(--badge-queued-fg); }
+  .running { background:var(--badge-running-bg); color:var(--badge-running-fg); }
+  .done { background:var(--badge-done-bg); color:var(--badge-done-fg); }
+  .error { background:var(--badge-error-bg); color:var(--badge-error-fg); }
+  .idle { background:var(--badge-idle-bg); color:var(--badge-idle-fg); }
   .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:14px; }
   figure { margin:0; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:10px; }
   figure img { width:100%; border-radius:6px; display:block; background:#fff; }
@@ -90,70 +135,82 @@
 
   /* Terminal: same colour as the page background, retractable. */
   .terminal { max-width:860px; margin:6px auto 24px; background:var(--bg);
-              border:1px solid var(--line); border-radius:12px; overflow:hidden;
-              box-shadow:0 26px 60px rgba(0,0,0,.5); }
-  .term-bar { display:flex; align-items:center; gap:10px; padding:9px 14px;
-              background:#080d1a; border-bottom:1px solid var(--line-soft); }
-  .term-bar.collapsed { border-bottom:0; }
-  .dots { display:flex; gap:6px; }
-  .dots i { width:10px; height:10px; border-radius:50%; display:block; }
-  .dots i:nth-child(1) { background:#ff5f57; }
-  .dots i:nth-child(2) { background:#febc2e; }
-  .dots i:nth-child(3) { background:#28c840; }
-  .term-title { flex:1; text-align:center; font:12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+              border:1px solid var(--line); border-radius:8px; overflow:hidden;
+              box-shadow:0 20px 50px rgba(0,0,0,.28); }
+  .term-bar { display:flex; align-items:center; justify-content:space-between; gap:12px;
+              padding:9px 14px; background:var(--bar); border-bottom:1px solid var(--line-soft); }
+  .terminal.collapsed .term-bar { border-bottom:0; }
+  .term-title { font:13px ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
                 color:var(--muted); letter-spacing:.02em; }
-  .term-toggle { border:1px solid transparent; background:transparent; color:var(--muted); cursor:pointer;
+  .term-toggle { border:1px solid var(--line); background:transparent; color:var(--muted); cursor:pointer;
                  font:12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-                 padding:3px 8px; border-radius:6px; }
-  .term-toggle:hover { color:var(--text); border-color:var(--line); }
-  .term-body { max-height:360px; overflow:auto; padding:18px 20px;
-               font:15px/1.75 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-               color:#cfd9f5; opacity:1;
+                 padding:3px 9px; border-radius:5px; }
+  .term-toggle:hover { color:var(--text); border-color:var(--muted); }
+  .term-body { max-height:360px; overflow:auto; padding:16px 18px;
+               font:15px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+               color:var(--text); opacity:1;
                transition:max-height .35s ease, opacity .25s ease, padding .35s ease; }
   .terminal.collapsed .term-body { max-height:0; opacity:0; padding-top:0; padding-bottom:0; }
-  .term-line { white-space:pre-wrap; }
+  .term-log { margin:0; font:inherit; color:inherit; white-space:pre-wrap; word-break:break-word; }
   .term-dim { color:var(--muted); }
   .term-ok { color:var(--green); }
-  .term-accent { color:#8db6ff; }
-  .term-rule { color:var(--line); }
-  .term-prompt { display:flex; gap:8px; }
-  .ps1 { color:var(--green); }
-  .caret { display:inline-block; width:8px; background:#cfd9f5; animation:blink 1.05s steps(1) infinite; }
-  @keyframes blink { 50% { opacity:0; } }
   @media (max-width:600px) {
-    .term-body { font-size:14px; padding:14px 14px; }
+    .term-body { font-size:14px; padding:14px; }
     .terminal { margin:0 auto 18px; }
+    header { padding:10px 14px; }
+    .toolbar { padding:8px 14px; }
+    .user-id { max-width:130px; }
   }
 </style>
 </head>
 <body>
-<header>
-  <div class="head-row">
-    <div>
-      <h1>Stocky</h1>
-    </div>
-    <div class="user">
-      <button id="user-btn" class="user-btn" onclick="toggleUser()" title="SEC request identity">
-        <span id="user-avatar" class="avatar">?</span>
-        <span class="user-meta">
-          <span class="user-label">SEC identity</span>
-          <span id="user-id" class="user-id">loading…</span>
-        </span>
-      </button>
-      <div id="user-pop" class="user-pop hidden">
-        <label for="user-input">SEC request identity</label>
-        <input id="user-input" type="text" maxlength="200" placeholder="Jane Doe jane@example.com"
-               onkeydown="if(event.key==='Enter')saveIdentity()">
-        <p class="muted">Sent as the EDGAR User-Agent. Use a name and a reachable contact email.</p>
-        <div class="user-actions">
-          <button class="primary" onclick="saveIdentity()">Save</button>
-          <button onclick="toggleUser(false)">Cancel</button>
+<div class="topbar">
+  <header>
+    <div class="head-row">
+      <div>
+        <h1>Stocky</h1>
+      </div>
+      <div class="head-actions">
+        <button id="theme-btn" class="theme-btn" onclick="toggleTheme()" title="Switch colour theme">Light mode</button>
+        <div class="user">
+          <button id="user-btn" class="user-btn" onclick="toggleUser()" title="SEC request identity">
+            <span id="user-avatar" class="avatar">?</span>
+            <span class="user-meta">
+              <span class="user-label">SEC identity</span>
+              <span id="user-id" class="user-id">loading…</span>
+            </span>
+          </button>
+          <div id="user-pop" class="user-pop hidden">
+            <label for="user-input">SEC request identity</label>
+            <input id="user-input" type="text" maxlength="200" placeholder="Jane Doe jane@example.com"
+                   onkeydown="if(event.key==='Enter')saveIdentity()">
+            <p class="muted">Sent as the EDGAR User-Agent. Use a name and a reachable contact email.</p>
+            <div class="user-actions">
+              <button class="primary" onclick="saveIdentity()">Save</button>
+              <button onclick="toggleUser(false)">Cancel</button>
+            </div>
+            <div id="user-msg" class="muted"></div>
+          </div>
         </div>
-        <div id="user-msg" class="muted"></div>
       </div>
     </div>
+  </header>
+
+  <div class="toolbar">
+    <div class="toolbar-inner">
+      <input id="ticker" type="text" placeholder="Ticker, e.g. NFLX" maxlength="10"
+             onkeydown="if(event.key==='Enter')runTicker()">
+      <select id="filings" title="Number of 10-K filings">
+        <option value="3">3 filings</option>
+        <option value="5">5 filings</option>
+        <option value="10">10 filings</option>
+        <option value="20" selected>20 filings</option>
+      </select>
+      <button id="run-btn" class="primary" onclick="runTicker()">Run</button>
+      <span id="status" class="status"><span class="badge idle">idle</span></span>
+    </div>
   </div>
-</header>
+</div>
 
 <main>
   <div class="tabs">
@@ -165,42 +222,18 @@
   <section id="pane-run">
     <section class="terminal" id="terminal">
       <div class="term-bar" id="term-bar">
-        <span class="dots"><i></i><i></i><i></i></span>
-        <span class="term-title">stocky — edgar</span>
+        <span class="term-title">stocky@edgar:~</span>
         <button id="term-toggle" class="term-toggle" onclick="toggleTerminal()"
-                aria-controls="term-body" aria-expanded="true">hide ▾</button>
+                aria-controls="term-body" aria-expanded="true">collapse</button>
       </div>
-      <div class="term-body" id="term-body" role="log" aria-live="polite">
-        <div class="term-line term-dim">stocky 1.0 · SEC 10-K dashboard</div>
-        <div class="term-line term-dim">reads EDGAR filings, extracts XBRL, charts the ratios</div>
-        <div class="term-line term-rule">────────────────────────────────────────────</div>
-        <div class="term-line"><span class="term-ok">✓</span> ready</div>
-        <div class="term-line term-dim">enter a ticker below and press Run. charts appear here.</div>
-        <div class="term-line" id="term-lines"></div>
-        <div class="term-prompt" style="margin-top:10px">
-          <span class="ps1">stocky ~ $</span>
-          <span id="term-cmd"></span><span class="caret"></span>
-        </div>
+      <div class="term-body" id="term-body">
+        <pre id="term-log" class="term-log" role="log" aria-live="polite">stocky 1.0 · SEC 10-K dashboard
+reads EDGAR filings, extracts XBRL, charts the ratios
+────────────────────────────────────────────────────
+ready. enter a ticker above and press Run.
+the pipeline log streams into this terminal.</pre>
       </div>
     </section>
-
-    <div class="card">
-      <div class="row">
-        <input id="ticker" type="text" placeholder="Ticker, e.g. NFLX" maxlength="10"
-               onkeydown="if(event.key==='Enter')runTicker()" oninput="mirrorCommand()">
-        <select id="filings" title="Number of 10-K filings">
-          <option value="20">20 filings</option>
-          <option value="10" selected>10 filings</option>
-          <option value="5">5 filings</option>
-          <option value="3">3 filings</option>
-        </select>
-        <button id="run-btn" class="primary" onclick="runTicker()">Run</button>
-      </div>
-      <div id="status" class="status muted">Idle.</div>
-      <div id="logWrap" class="hidden" style="margin-top:12px">
-        <details><summary class="muted">Run log</summary><pre id="log" class="log"></pre></details>
-      </div>
-    </div>
     <div id="results-run"></div>
   </section>
 
@@ -222,6 +255,27 @@ const $ = s => document.querySelector(s);
 let timer = null;
 let identityCache = '';
 let termCollapsed = false;
+
+const WELCOME = `stocky 1.0 · SEC 10-K dashboard
+reads EDGAR filings, extracts XBRL, charts the ratios
+────────────────────────────────────────────────────
+ready. enter a ticker above and press Run.
+the pipeline log streams into this terminal.`;
+
+/* Theme ------------------------------------------------------------------- */
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  $('#theme-btn').textContent = theme === 'dark' ? 'Light mode' : 'Dark mode';
+}
+
+function toggleTheme() {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  try { localStorage.setItem('stocky-theme', next); } catch {}
+  applyTheme(next);
+}
+
+/* Identity ---------------------------------------------------------------- */
 
 function setIdentity(id) {
   identityCache = id;
@@ -276,24 +330,16 @@ document.addEventListener('click', e => {
 function setTerminal(collapsed) {
   termCollapsed = collapsed;
   $('#terminal').classList.toggle('collapsed', collapsed);
-  $('#term-bar').classList.toggle('collapsed', collapsed);
-  $('#term-toggle').textContent = collapsed ? 'show ▸' : 'hide ▾';
+  $('#term-toggle').textContent = collapsed ? 'expand' : 'collapse';
   $('#term-toggle').setAttribute('aria-expanded', String(!collapsed));
 }
 
 function toggleTerminal() { setTerminal(!termCollapsed); }
 
-// Lines typed into the ticker field show up at the prompt.
-function mirrorCommand() {
-  const ticker = $('#ticker').value.trim().toUpperCase();
-  $('#term-cmd').textContent = ticker ? `stocky run ${ticker}` : '';
-}
-
-function termSay(text, cls) {
-  const line = document.createElement('div');
-  line.className = 'term-line' + (cls ? ' ' + cls : '');
-  line.textContent = text;
-  $('#term-lines').appendChild(line);
+function setTermLog(text) {
+  const log = $('#term-log');
+  if (log.textContent === text) return;
+  log.textContent = text;
   const body = $('#term-body');
   body.scrollTop = body.scrollHeight;
 }
@@ -316,18 +362,20 @@ function setStatus(text, cls) {
 async function runTicker() {
   const ticker = $('#ticker').value.trim().toUpperCase();
   if (!ticker) return;
+  const filings = Number($('#filings').value);
   $('#run-btn').disabled = true;
   $('#results-run').innerHTML = '';
   setStatus('queued', 'queued');
-  // Terminal opens for the run and folds away once charts land.
+  showTab('run');
+  // The terminal is the log: open it for the run, stream into it, and fold it
+  // away once the charts land.
   setTerminal(false);
-  termSay(`$ stocky run ${ticker} --filings ${$('#filings').value}`, 'term-accent');
-  $('#term-cmd').textContent = '';
+  setTermLog(`$ stocky run ${ticker} --filings ${filings}\nstarting pipeline…`);
   try {
     const res = await fetch('/api/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ticker, filings: Number($('#filings').value) }),
+      body: JSON.stringify({ ticker, filings }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || data.message || 'Request failed');
@@ -335,8 +383,7 @@ async function runTicker() {
   } catch (err) {
     setStatus('error', 'error');
     $('#run-btn').disabled = false;
-    termSay(`error: ${err.message}`, 'term-dim');
-    alert(err.message);
+    setTermLog(`$ stocky run ${ticker} --filings ${filings}\nerror: ${err.message}`);
   }
 }
 
@@ -346,21 +393,20 @@ function poll(ticker) {
     try {
       const job = await (await fetch(`/api/status/${ticker}`)).json();
       setStatus(job.status, job.status);
-      if (job.log) { $('#logWrap').classList.remove('hidden'); $('#log').textContent = job.log; }
+      if (job.log) setTermLog(job.log);
       if (job.status === 'done') {
         $('#run-btn').disabled = false;
-        termSay(`✓ ${ticker} ready — ${job.charts.length} charts`, 'term-ok');
         loadResults(ticker, '#results-run');
       } else if (job.status === 'error') {
         $('#run-btn').disabled = false;
-        $('#logWrap').classList.remove('hidden');
-        termSay(`✗ ${ticker} failed — see run log`, 'term-dim');
+        setTerminal(false);
       } else {
         poll(ticker);
       }
     } catch (err) {
       setStatus('error', 'error');
       $('#run-btn').disabled = false;
+      setTerminal(false);
     }
   }, 2000);
 }
@@ -406,22 +452,21 @@ async function loadRecent() {
 
 function openRecent(ticker) {
   $('#ticker').value = ticker;
-  mirrorCommand();
   loadResults(ticker, '#results-recent');
   $('#results-recent').scrollIntoView({ behavior: 'smooth' });
 }
 
 // If a run is already in progress when the page loads, resume watching it.
+applyTheme(document.documentElement.dataset.theme || 'dark');
 loadIdentity();
-mirrorCommand();
 (async () => {
   const { items } = await (await fetch('/api/recent')).json();
   for (const it of items) {
     const job = await (await fetch(`/api/status/${it.ticker}`)).json();
     if (job.status === 'queued' || job.status === 'running') {
       $('#ticker').value = it.ticker;
-      mirrorCommand();
       $('#run-btn').disabled = true;
+      setTerminal(false);
       poll(it.ticker);
       break;
     }

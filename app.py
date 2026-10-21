@@ -201,7 +201,7 @@ def run():
     payload = request.get_json(silent=True) or {}
     ticker = _normalise_ticker(payload.get("ticker", ""))
     try:
-        filings = int(payload.get("filings", 10))
+        filings = int(payload.get("filings", 20))
     except (TypeError, ValueError):
         abort(400, "filings must be a number")
     if not 1 <= filings <= 20:
