@@ -11,14 +11,12 @@ services:
     environment:
       EDGAR_IDENTITY: "${EDGAR_IDENTITY:-Data Analyst analyst@example.com}"
     ports:
-      # Host port comes from .env; change HTTP_PORT there, or hardcode this to
-      # e.g. "8080:8000". The container always listens on 8000.
-      - "${HTTP_PORT:-8000}:8000"
+      - "8053:8000"
     volumes:
-      - ./financial_graphs:/app/financial_graphs
+      - /mnt/tanques/stocky/financial_graphs:/app/financial_graphs
       # Cache SEC downloads so repeat runs are fast.
-      - edgar_cache:/root/.edgar_cache
-      - edgar_data:/root/.edgar
+      - /mnt/tanques/stocky/edgar_cache:/root/.edgar_cache
+      - /mnt/tanques/stocky/edgar_data:/root/.edgar
     mem_limit: 1g
     logging:
       driver: json-file
