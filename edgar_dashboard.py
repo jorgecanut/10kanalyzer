@@ -228,11 +228,37 @@ LABELS = {
 # Data extraction
 # --------------------------------------------------------------------------- #
 
+def _concept_name(concept: str) -> str:
+    """``us-gaap:Foo`` or ``us-gaap_Foo`` -> ``Foo`` (facts vs statement rows)."""
+    for separator in (":", "_"):
+        if separator in concept:
+            return concept.split(separator, 1)[1]
+    return concept
+
+
+def _statement_values(statement_rows: list[dict]) -> dict[str, float]:
+    """Concept name -> value for the filing's own dimension-free statement lines.
+
+    Some filers never tag a consolidated total: Duke Energy, for example, tags
+    "Cost of sales" only per operating segment and the consolidated line exists
+    in the presentation tree alone. Falling back to that line keeps the metric
+    present without summing dimensioned facts, which would double count.
+    """
+    values: dict[str, float] = {}
+    for row in statement_rows:
+        value = row.get("value")
+        if value is None or pd.isna(value):
+            continue
+        values.setdefault(_concept_name(str(row.get("concept") or "")), float(value))
+    return values
+
+
 def extract_metric(
     facts: pd.DataFrame,
     candidates: Iterable[str],
     period_of_report: str,
     period_type: str,
+    statement_values: dict[str, float] | None = None,
 ) -> float:
     """Return the value for the first matching concept, else nan.
 
@@ -295,6 +321,12 @@ def extract_metric(
             value = pick(mask)
             if pd.notna(value):
                 return float(value)
+        # No fact at all for this concept: use the filer's own statement line,
+        # which also covers computed totals never tagged as a single fact.
+        if statement_values:
+            stated = statement_values.get(concept)
+            if stated is not None and pd.notna(stated):
+                return float(stated)
 
     return np.nan
 
@@ -381,9 +413,15 @@ def build_dataset(ticker: str, n_filings: int) -> tuple[pd.DataFrame, pd.DataFra
                 fiscal_year = int(period_key[:4])
 
             row: dict = {"period_of_report": period_key, "fiscal_year": fiscal_year}
+            # Statement rows are also the fallback source for metrics a filer
+            # renders but never tags as a consolidated fact.
+            statement_rows = xbrl_extract.extract_statements(xbrl, period_key)
+            statement_values = _statement_values(statement_rows)
             for metric, (concepts, period_type) in METRIC_CONCEPTS.items():
-                row[metric] = extract_metric(facts, concepts, period_of_report, period_type)
-            statement_records.extend(xbrl_extract.extract_statements(xbrl, period_key))
+                row[metric] = extract_metric(
+                    facts, concepts, period_of_report, period_type, statement_values
+                )
+            statement_records.extend(statement_rows)
             fact_records.extend(xbrl_extract.extract_facts(xbrl, period_key))
         except Exception as exc:  # noqa: BLE001 - skip unparseable filings
             ident = locals().get("accession") or getattr(filing, "accession_no", "?")
@@ -445,8 +483,13 @@ def clean_and_derive(df: pd.DataFrame) -> pd.DataFrame:
     # filings, so fall back to the standard definition Revenue - Cost of
     # Revenue, which is consistent across the whole window.
     derived_gross = df["Revenues"] - df["CostOfRevenue"]
+    missing_gross = df["GrossProfit"].isna()
     df["GrossProfit"] = df["GrossProfit"].fillna(derived_gross)
-    df["gross_profit_derived"] = df["GrossProfit"].eq(derived_gross)
+    # Only rows that were actually filled count as derived. Comparing the
+    # finished values instead would also flag filers whose tagged GrossProfit
+    # equals Revenue - CostOfRevenue (Apple, Nvidia), which is the normal case
+    # whenever cost of revenue is complete.
+    df["gross_profit_derived"] = missing_gross & df["GrossProfit"].notna()
 
     # Some filers (e.g. Nike) do not tag OperatingIncomeLoss. Derive it from
     # gross profit less SG&A and R&D when those components are available.

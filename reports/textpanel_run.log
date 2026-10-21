@@ -1,0 +1,70 @@
+
+AAPL
+  [+] overview     ok       15,948 chars
+  [+] risk_factors ok       66,970 chars
+  [+] mda          ok       18,374 chars
+  [+] legal        ok        5,428 chars
+  [+] disclosures  ok       26,741 chars
+  [+] segments     ok        2,756 chars
+
+NVDA
+  [+] overview     ok       47,896 chars
+  [+] risk_factors ok      114,505 chars
+  [+] mda          ok       34,665 chars
+  [+] legal        ok        9,980 chars
+  [+] disclosures  ok       66,182 chars
+  [+] segments     ok        7,299 chars
+
+WMT
+  [+] overview     ok       33,923 chars
+  [+] risk_factors ok       92,637 chars
+  [+] mda          ok       60,523 chars
+  [+] legal        ok        5,575 chars
+  [+] disclosures  ok       47,353 chars
+  [+] segments     ok        9,544 chars
+
+JNJ
+  [+] overview     ok       34,632 chars
+  [+] risk_factors ok       42,684 chars
+  [+] mda          ok       69,765 chars
+  [+] legal        ok       51,524 chars
+  [+] disclosures  ok      231,210 chars
+  [+] segments     ok       18,011 chars
+
+JPM
+  [+] overview     ok          232 chars
+  [+] risk_factors ok      112,952 chars
+  [+] mda          ok     1,018,795 chars
+  [+] legal        ok          127 chars
+  [+] disclosures  ok      684,496 chars
+  [+] segments     ok       33,360 chars
+
+MET
+  [+] overview     ok       86,189 chars
+  [+] risk_factors ok       74,550 chars
+  [+] mda          ok      226,793 chars
+  [+] legal        ok       16,013 chars
+  [+] disclosures  ok      652,087 chars
+  [+] segments     ok       29,838 chars
+
+XOM
+  [+] overview     ok        6,963 chars
+  [+] risk_factors ok       35,164 chars
+  [+] mda          ok      234,496 chars
+  [+] legal        ok          316 chars
+  [+] disclosures  ok      155,940 chars
+  [+] segments     ok       14,913 chars
+
+CAT
+  [+] overview     ok       38,367 chars
+  [+] risk_factors ok       51,045 chars
+  [+] mda          ok      108,057 chars
+  [+] legal        ok        3,943 chars
+  [+] disclosures  ok      220,250 chars
+  [+] segments     ok       32,053 chars
+
+DUK
+  [+] overview     ok       61,462 chars
+  [+] risk_factors ok       70,251 chars
+  [+] mda          ok      142,253 chars
+  [!] legal        error: EmptyDataError

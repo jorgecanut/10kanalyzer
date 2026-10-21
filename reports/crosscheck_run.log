@@ -1,0 +1,82 @@
+  [*] extracting AAPL (5 filings)
+
+AAPL  (50 metric-years)
+  -> 50 ok, 0 alternative-concept, 0 informational, 0 diff, 0 mine-missing, 0 theirs-missing, 0 not-applicable
+  [*] extracting NVDA (5 filings)
+
+NVDA  (50 metric-years)
+  -> 45 ok, 0 alternative-concept, 4 informational, 0 diff, 0 mine-missing, 0 theirs-missing, 1 not-applicable
+  [*] extracting WMT (5 filings)
+
+WMT  (50 metric-years)
+  [ALT   ] Revenues                   2022-01-31  mine=572,754,000,000  theirs=567,762,000,000  (RevenueFromContractWithCustomerExcludingAssessedTax)
+  [ALT   ] Revenues                   2023-01-31  mine=611,289,000,000  theirs=605,881,000,000  (RevenueFromContractWithCustomerExcludingAssessedTax)
+  [ALT   ] Revenues                   2024-01-31  mine=648,125,000,000  theirs=642,637,000,000  (RevenueFromContractWithCustomerExcludingAssessedTax)
+  [ALT   ] Revenues                   2025-01-31  mine=680,985,000,000  theirs=674,538,000,000  (RevenueFromContractWithCustomerExcludingAssessedTax)
+  [ALT   ] Revenues                   2026-01-31  mine=713,163,000,000  theirs=706,413,000,000  (RevenueFromContractWithCustomerExcludingAssessedTax)
+  [THEIRS] GrossProfit                2022-01-31  mine=143,754,000,000  theirs=-
+  [THEIRS] GrossProfit                2023-01-31  mine=147,568,000,000  theirs=-
+  [THEIRS] GrossProfit                2024-01-31  mine=157,983,000,000  theirs=-
+  [THEIRS] GrossProfit                2025-01-31  mine=169,232,000,000  theirs=-
+  [THEIRS] GrossProfit                2026-01-31  mine=177,768,000,000  theirs=-
+  -> 40 ok, 5 alternative-concept, 0 informational, 0 diff, 0 mine-missing, 5 theirs-missing, 0 not-applicable
+  [*] extracting JNJ (5 filings)
+
+JNJ  (50 metric-years)
+  [THEIRS] OperatingIncomeLoss        2022-01-02  mine=24,547,000,000   theirs=-
+  [THEIRS] OperatingIncomeLoss        2023-01-01  mine=24,486,000,000   theirs=-
+  [THEIRS] OperatingIncomeLoss        2023-12-31  mine=36,611,000,000   theirs=-
+  [THEIRS] OperatingIncomeLoss        2024-12-29  mine=36,640,000,000   theirs=-
+  [THEIRS] OperatingIncomeLoss        2025-12-28  mine=40,152,000,000   theirs=-
+  -> 45 ok, 0 alternative-concept, 0 informational, 0 diff, 0 mine-missing, 5 theirs-missing, 0 not-applicable
+  [*] extracting JPM (5 filings)
+
+JPM  (50 metric-years)
+  -> 20 ok, 0 alternative-concept, 4 informational, 0 diff, 0 mine-missing, 0 theirs-missing, 26 not-applicable
+  [*] extracting MET (5 filings)
+
+MET  (50 metric-years)
+  [THEIRS] OperatingIncomeLoss        2024-12-31  mine=5,996,000,000    theirs=-
+  [THEIRS] OperatingIncomeLoss        2025-12-31  mine=6,137,000,000    theirs=-
+  -> 20 ok, 0 alternative-concept, 5 informational, 0 diff, 0 mine-missing, 2 theirs-missing, 23 not-applicable
+  [*] extracting XOM (5 filings)
+
+XOM  (50 metric-years)
+  [ALT   ] Revenues                   2021-12-31  mine=285,640,000,000  theirs=276,692,000,000  (RevenueFromContractWithCustomerExcludingAssessedTax)
+  [THEIRS] Revenues                   2022-12-31  mine=413,680,000,000  theirs=-
+  [THEIRS] Revenues                   2023-12-31  mine=344,582,000,000  theirs=-
+  [THEIRS] Revenues                   2024-12-31  mine=349,585,000,000  theirs=-
+  [THEIRS] Revenues                   2025-12-31  mine=332,238,000,000  theirs=-
+  -> 30 ok, 1 alternative-concept, 0 informational, 0 diff, 0 mine-missing, 4 theirs-missing, 15 not-applicable
+  [*] extracting CAT (5 filings)
+
+CAT  (50 metric-years)
+  [THEIRS] GrossProfit                2021-12-31  mine=15,458,000,000   theirs=-
+  [THEIRS] GrossProfit                2022-12-31  mine=18,077,000,000   theirs=-
+  [THEIRS] GrossProfit                2023-12-31  mine=24,293,000,000   theirs=-
+  [THEIRS] GrossProfit                2024-12-31  mine=24,610,000,000   theirs=-
+  [THEIRS] GrossProfit                2025-12-31  mine=22,837,000,000   theirs=-
+  -> 45 ok, 0 alternative-concept, 0 informational, 0 diff, 0 mine-missing, 5 theirs-missing, 0 not-applicable
+  [*] extracting DUK (5 filings)
+
+DUK  (50 metric-years)
+  [ALT   ] Revenues                   2021-12-31  mine=24,703,000,000   theirs=25,097,000,000  (RegulatedAndUnregulatedOperatingRevenue)
+  [ALT   ] Revenues                   2022-12-31  mine=28,675,000,000   theirs=28,768,000,000  (RegulatedAndUnregulatedOperatingRevenue)
+  [ALT   ] Revenues                   2023-12-31  mine=28,674,000,000   theirs=29,060,000,000  (RegulatedAndUnregulatedOperatingRevenue)
+  [ALT   ] Revenues                   2024-12-31  mine=30,050,000,000   theirs=30,357,000,000  (RegulatedAndUnregulatedOperatingRevenue)
+  [ALT   ] Revenues                   2025-12-31  mine=31,741,000,000   theirs=32,237,000,000  (RegulatedAndUnregulatedOperatingRevenue)
+  [THEIRS] CostOfRevenue              2021-12-31  mine=10,323,000,000   theirs=-
+  [THEIRS] CostOfRevenue              2022-12-31  mine=15,005,000,000   theirs=-
+  [THEIRS] GrossProfit                2021-12-31  mine=14,380,000,000   theirs=-
+  [THEIRS] GrossProfit                2022-12-31  mine=13,670,000,000   theirs=-
+  [THEIRS] GrossProfit                2023-12-31  mine=14,451,000,000   theirs=-
+  [THEIRS] GrossProfit                2024-12-31  mine=15,902,000,000   theirs=-
+  [THEIRS] GrossProfit                2025-12-31  mine=18,709,000,000   theirs=-
+  -> 38 ok, 5 alternative-concept, 0 informational, 0 diff, 0 mine-missing, 7 theirs-missing, 0 not-applicable
+  [*] extracting O (5 filings)
+
+O  (50 metric-years)
+  -> 20 ok, 0 alternative-concept, 5 informational, 0 diff, 0 mine-missing, 0 theirs-missing, 25 not-applicable
+
+TOTAL: 353 ok, 11 alternative-concept, 18 informational, 0 diff, 0 mine-missing, 28 theirs-missing, 90 not-applicable
+Reports written to reports/crosscheck/

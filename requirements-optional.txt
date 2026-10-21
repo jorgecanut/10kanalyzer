@@ -1,0 +1,8 @@
+# Optional enrichment layer. The dashboard itself does not need any of this.
+#
+#   uv venv .venv && uv pip install -r requirements.txt -r requirements-optional.txt
+#
+# edgar-analytics pins edgartools <6, so keep it in the same environment as the
+# extractor but never below edgartools 5.0 (the statement API the repo uses).
+edgar-analytics>=1.0.7,<2
+openbb-sec>=2.0.0,<3
