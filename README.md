@@ -96,6 +96,7 @@ Routes:
 | --- | --- | --- |
 | `GET` | `/` | The UI (Run / Recent / Screener tabs) |
 | `POST` | `/api/run` | `{"ticker":"NFLX","filings":10}` → queues a run |
+| `POST` | `/api/cancel` | Cancels every queued/running job; keeps all files |
 | `GET` | `/api/status/<ticker>` | queued / running / done / error + log tail |
 | `GET` | `/api/identity` | Current SEC identity (name + email) |
 | `POST` | `/api/identity` | `{"identity":"Jane Doe jane@example.com"}` → save it |
@@ -124,14 +125,18 @@ from EDGAR; it never writes to `financial_graphs/`). It has two modes:
   reinvested.
 - **Backtest** — click any historical point on the chart to invest the amount
   at that close and value it today. The projection line stays visible but turns
-  grey and is disabled, as are target price, horizon, and dividend mode.
-  Dividends are cash payouts from the actual dividend events after the entry
-  date; they are never reinvested.
+  grey and is disabled, as are target price and horizon. Dividends can be paid
+  in cash (default) or reinvested at the payment-date price.
 
 The backtest lists one row per full year held (plus a final **Now** row):
 dividends received that year, portfolio value, gain in that year, and the
 running total gain. Clicking a future point or **reset** returns to projection.
 Estimates only; no taxes or fees.
+
+The header **cancel** button stops every queued/running pipeline job, aborts
+in-flight browser requests, and resets the interface to its initial state. It
+never deletes generated files; run logs and partial results stay in
+`financial_graphs/`.
 
 ## Auto-deploy on push
 

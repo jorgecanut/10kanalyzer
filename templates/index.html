@@ -81,6 +81,8 @@
                border:1px solid var(--line); background:var(--surface); color:var(--muted);
                font:inherit; font-size:13px; cursor:pointer; }
   .theme-btn:hover { color:var(--text); border-color:var(--muted); }
+  #cancel-btn:hover { color:var(--badge-error-fg); border-color:var(--badge-error-fg); }
+  #cancel-btn[disabled] { opacity:.5; cursor:not-allowed; }
   .theme-btn svg { width:18px; height:18px; display:block; }
   .theme-btn .icon-moon { display:none; }
   [data-theme="light"] .theme-btn .icon-sun { display:none; }
@@ -273,6 +275,16 @@
         <h1>Stocky</h1>
       </div>
       <div class="head-actions">
+        <button id="cancel-btn" class="theme-btn" onclick="cancelAll()"
+                title="Cancel running work and reset the interface — no files are deleted"
+                aria-label="Cancel running work and reset the interface">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.6">
+              <path d="M6 6l12 12M18 6L6 18" />
+            </g>
+          </svg>
+          <span>cancel</span>
+        </button>
         <button id="theme-btn" class="theme-btn" onclick="toggleTheme()" title="Switch colour theme" aria-label="Switch colour theme">
           <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true">
             <g fill="none">
@@ -503,6 +515,33 @@ let TERM_TICKER = '';
 const POLL_TIMERS = {};
 const LIVE = {};
 
+// All requests go through this wrapper so "cancel" can abort every in-flight
+// call at once. Aborted calls never settle: a detached handler must not write
+// stale results into the freshly reset interface.
+const rawFetch = window.fetch.bind(window);
+const INFLIGHT = new Set();
+window.fetch = (url, options = {}) => {
+  const controller = new AbortController();
+  INFLIGHT.add(controller);
+  return new Promise((resolve, reject) => {
+    rawFetch(url, { ...options, signal: controller.signal }).then(
+      response => {
+        INFLIGHT.delete(controller);
+        const json = response.json.bind(response);
+        response.json = () => json().catch(err =>
+          err && err.name === 'AbortError' ? new Promise(() => {}) : Promise.reject(err)
+        );
+        resolve(response);
+      },
+      error => {
+        INFLIGHT.delete(controller);
+        if (error && error.name === 'AbortError') return;
+        reject(error);
+      },
+    );
+  });
+};
+
 function pickActive() {
   const running = Object.keys(LIVE).find(t => LIVE[t] === 'running');
   const queued = Object.keys(LIVE).find(t => LIVE[t] === 'queued');
@@ -514,6 +553,96 @@ reads EDGAR filings, extracts XBRL, charts the ratios
 ────────────────────────────────────────────────────
 ready. enter a ticker above and press Run.
 the pipeline log streams into this terminal.`;
+
+const SCREEN_WELCOME = `ready. type several tickers in the bar above — the button turns into Screen —
+each run's pipeline log streams here.`;
+
+/* Cancel + full interface reset -------------------------------------------- */
+
+function cancelAll() {
+  // Fire-and-forget: the server stops every queued/running job and keeps all
+  // generated files. rawFetch keeps this request out of the abort set below.
+  rawFetch('/api/cancel', { method: 'POST' }).catch(() => {});
+  for (const controller of INFLIGHT) {
+    try { controller.abort(); } catch {}
+  }
+  INFLIGHT.clear();
+  resetUi();
+}
+
+function resetUi() {
+  for (const key of Object.keys(POLL_TIMERS)) {
+    clearTimeout(POLL_TIMERS[key]);
+    delete POLL_TIMERS[key];
+  }
+  clearTimeout(SCREEN.timer);
+  SCREEN.timer = null;
+  clearTimeout(timer);
+  timer = null;
+  for (const key of Object.keys(LIVE)) delete LIVE[key];
+  ACTIVE_TICKER = '';
+  TERM_TICKER = '';
+
+  $('#ticker').value = '';
+  updateMode();
+  $('#filings').value = '20';
+  $('#run-btn').disabled = false;
+  setStatus('idle', 'idle');
+  setTermLog(WELCOME);
+  $('#results-run').innerHTML = '';
+  $('#insider-panel').classList.add('hidden');
+  $('#insider-body').innerHTML = '';
+  $('#insider-more').textContent = '';
+  $('#recent').innerHTML = '';
+  $('#results-recent').innerHTML = '';
+  setScreenLog(SCREEN_WELCOME);
+  $('#screen-progress').textContent = '';
+  SCREEN.items = [];
+  SCREEN.order = [];
+  SCREEN.logs = {};
+  SCREEN.status = {};
+  SCREEN.total = 0;
+  SCREEN.mode = 'run';
+  SCREEN.sort = { key: 'ticker', dir: 1 };
+  SCREEN.pipeline = null;
+  renderScreener();
+  resetSimulation();
+  toggleUser(false);
+  $('#user-msg').textContent = '';
+  $('#user-input').value = '';
+  showTab('run');
+  window.scrollTo({ top: 0, behavior: 'auto' });
+}
+
+function resetSimulation() {
+  SIM.ticker = '';
+  SIM.data = null;
+  SIM.backtest = null;
+  SIM.mode = 'cash';
+  SIM.range = '1y';
+  SIM.seq = (SIM.seq || 0) + 1;
+  const select = $('#sim-run');
+  select.innerHTML = '';
+  delete select.dataset.loaded;
+  $('#sim-status').textContent = 'Select a ticker to simulate.';
+  $('#sim-svg').replaceChildren();
+  $('#sim-result').innerHTML = '';
+  $('#sim-target').value = '';
+  $('#sim-amount').value = '1000';
+  $('#sim-years').value = '4';
+  $('#sim-target').disabled = false;
+  $('#sim-years').disabled = false;
+  $('#sim-cash').disabled = false;
+  $('#sim-reinvest').disabled = false;
+  $('#sim-cash').classList.add('active');
+  $('#sim-reinvest').classList.remove('active');
+  $('#sim-clear').hidden = true;
+  $('#sim-form-title').textContent = 'Your projection';
+  $('#sim-hint').textContent = 'Click the chart to backtest an investment at a past date.';
+  $('#sim-note').textContent = 'Future dividends hold the trailing yield, so they grow with the projected price. Estimates only; no taxes or fees.';
+  document.querySelectorAll('#sim-ranges button')
+    .forEach(button => button.classList.toggle('active', button.dataset.range === '1y'));
+}
 
 /* Theme ------------------------------------------------------------------- */
 
@@ -693,10 +822,13 @@ function poll(ticker) {
         pickActive();
         $('#run-btn').disabled = false;
         loadResults(ticker, '#results-run');
-      } else if (job.status === 'error') {
+      } else if (job.status === 'error' || job.status === 'cancelled') {
         delete LIVE[ticker];
         pickActive();
         $('#run-btn').disabled = false;
+        if (job.status === 'cancelled') {
+          setStatus('cancelled', 'idle');
+        }
         if (job.error) setTermLog((job.log ? job.log + '\n' : '') + `error: ${job.error}`);
       } else {
         poll(ticker);
@@ -1059,7 +1191,6 @@ function simAnnualDividend() {
 }
 
 function setSimMode(mode) {
-  if (SIM.backtest) return;
   SIM.mode = mode;
   $('#sim-cash').classList.toggle('active', mode === 'cash');
   $('#sim-reinvest').classList.toggle('active', mode === 'reinvest');
@@ -1076,10 +1207,10 @@ function syncSimControls() {
   const backtest = !!SIM.backtest;
   $('#sim-target').disabled = backtest;
   $('#sim-years').disabled = backtest;
-  $('#sim-cash').disabled = backtest;
-  $('#sim-reinvest').disabled = backtest;
-  $('#sim-cash').classList.toggle('active', backtest || SIM.mode === 'cash');
-  $('#sim-reinvest').classList.toggle('active', !backtest && SIM.mode === 'reinvest');
+  $('#sim-cash').disabled = false;
+  $('#sim-reinvest').disabled = false;
+  $('#sim-cash').classList.toggle('active', SIM.mode === 'cash');
+  $('#sim-reinvest').classList.toggle('active', SIM.mode === 'reinvest');
   $('#sim-clear').hidden = !backtest;
   $('#sim-form-title').textContent = backtest ? 'Your past investment' : 'Your projection';
   $('#sim-hint').innerHTML = backtest
@@ -1087,7 +1218,9 @@ function syncSimControls() {
        on <b>${esc(SIM.backtest.date)}</b> — click a future point to reset.`
     : 'Click the chart to backtest an investment at a past date.';
   $('#sim-note').textContent = backtest
-    ? 'Dividends are paid in cash, not reinvested. Value is the shares held at the current price plus dividends received. Estimates only; no taxes or fees.'
+    ? (SIM.mode === 'reinvest'
+      ? 'Dividends are reinvested at the price on the payment date, so the share count grows. Value is the shares held at the current price. Estimates only; no taxes or fees.'
+      : 'Dividends are paid in cash, not reinvested. Value is the shares held at the current price plus dividends received. Estimates only; no taxes or fees.')
     : 'Future dividends hold the trailing yield, so they grow with the projected price. Estimates only; no taxes or fees.';
 }
 
@@ -1222,7 +1355,8 @@ function backtestPlan() {
   const bt = SIM.backtest;
   if (!data || !bt || !(bt.price > 0)) return null;
   const amount = Math.max(0, Number($('#sim-amount').value) || 0);
-  const shares = amount / bt.price;
+  const reinvest = SIM.mode === 'reinvest';
+  let shares = amount / bt.price;
   const entry = new Date(bt.date + 'T00:00:00Z');
   const last = data.prices[data.prices.length - 1];
   if (!last) return null;
@@ -1244,23 +1378,32 @@ function backtestPlan() {
 
   const rows = [];
   let cash = 0;
+  let paidTotal = 0;
   let paidIndex = 0;
   let previous = amount;
   const checkpoint = (date, label) => {
     const stamp = date.getTime();
     let paid = 0;
     while (paidIndex < dividends.length && dividends[paidIndex].t <= stamp) {
-      paid += shares * dividends[paidIndex].amount;
+      const payout = shares * dividends[paidIndex].amount;
+      paid += payout;
+      paidTotal += payout;
+      if (reinvest) {
+        // Buy more shares at the close on the dividend payment date.
+        const buyPrice = priceAt(dividends[paidIndex].t) ?? lastPrice;
+        if (buyPrice > 0) shares += payout / buyPrice;
+      } else {
+        cash += payout;
+      }
       paidIndex += 1;
     }
-    cash += paid;
     const price = stamp >= lastDate.getTime() ? lastPrice : (priceAt(stamp) ?? lastPrice);
     const value = shares * price + cash;
     rows.push({ label, dividends: paid, value, yearGain: value - previous, totalGain: value - amount });
     previous = value;
   };
 
-  // One checkpoint per full year held, then today (value includes cash dividends).
+  // One checkpoint per full year held, then today (value includes dividends).
   for (let year = 1; ; year += 1) {
     const at = new Date(Date.UTC(entry.getUTCFullYear() + year, entry.getUTCMonth(), entry.getUTCDate()));
     if (at.getTime() >= lastDate.getTime()) break;
@@ -1270,8 +1413,8 @@ function backtestPlan() {
 
   const value = rows[rows.length - 1].value;
   return {
-    amount, shares, entryPrice: bt.price, date: bt.date,
-    dividends: cash, value, profit: value - amount,
+    amount, shares, entryPrice: bt.price, date: bt.date, reinvest,
+    dividends: paidTotal, cash, value, profit: value - amount,
     returnPct: amount ? ((value - amount) / amount) * 100 : null,
     rows,
   };
@@ -1438,7 +1581,7 @@ function renderSimulation() {
         <div class="stat"><span>Invested</span><b>${fmtMoney(past.amount, data.currency)}</b></div>
         <div class="stat"><span>Bought at</span><b>${fmtMoney(past.entryPrice, data.currency)}</b></div>
         <div class="stat"><span>Shares</span><b>${fmtNum(past.shares, 4)}</b></div>
-        <div class="stat"><span>Dividends received</span><b>${past.dividends ? fmtMoney(past.dividends, data.currency) : 'No dividends'}</b></div>
+        <div class="stat"><span>${past.reinvest ? 'Dividends reinvested' : 'Dividends received'}</span><b>${past.dividends ? fmtMoney(past.dividends, data.currency) : 'No dividends'}</b></div>
         <div class="stat"><span>Value today</span><b>${fmtMoney(past.value, data.currency)}</b></div>
         <div class="stat"><span>Profit</span><b>${signed(past.profit)} · ${past.returnPct === null ? '—' : (past.returnPct >= 0 ? '+' : '') + fmtNum(past.returnPct) + '%'}</b></div>
       </div>

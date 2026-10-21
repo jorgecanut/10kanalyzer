@@ -15,6 +15,7 @@ import json
 import hashlib
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -60,6 +61,8 @@ app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = threading.Lock()
+# Live child processes, keyed by ticker, so /api/cancel can stop them.
+PROCS: dict[str, subprocess.Popen] = {}
 # SEC is rate-limited and the scrape is heavy; run one at a time.
 RUN_LOCK = threading.Lock()
 
@@ -229,9 +232,20 @@ def _current_quote(ticker: str) -> dict:
     return current
 
 
-def _worker(ticker: str, filings: int) -> None:
-    """Run the dashboard in a subprocess, one at a time."""
+def _worker(ticker: str, filings: int, job_id: str) -> None:
+    """Run the dashboard in a subprocess, one at a time.
+
+    The job id guards against stale worker threads: a cancelled or superseded
+    job must never overwrite the state of a newer run for the same ticker.
+    """
     with RUN_LOCK:
+        with JOBS_LOCK:
+            job = JOBS.get(ticker)
+            if not job or job.get("id") != job_id:
+                return
+            if job.get("cancel_requested") or job.get("status") == "cancelled":
+                return
+
         directory = _ticker_dir(ticker)
         try:
             directory.mkdir(parents=True, exist_ok=True)
@@ -245,11 +259,21 @@ def _worker(ticker: str, filings: int) -> None:
                 f"(uid={os.getuid()}; check the financial_graphs bind mount ownership)"
             )
             with JOBS_LOCK:
-                JOBS[ticker].update(status="error", finished=_now(), returncode=-1, error=message)
+                job = JOBS.get(ticker)
+                if job and job.get("id") == job_id:
+                    job.update(status="error", finished=_now(), returncode=-1, error=message)
             return
 
         with JOBS_LOCK:
-            JOBS[ticker].update(status="running", started=_now())
+            job = JOBS.get(ticker)
+            if not job or job.get("id") != job_id:
+                return
+            if job.get("cancel_requested"):
+                return
+            job.update(status="running", started=_now())
+
+        proc = None
+        status, code = "error", -1
         try:
             env = {**os.environ, "EDGAR_IDENTITY": _get_identity(), "PYTHONUNBUFFERED": "1"}
             with log_path.open("w") as log:
@@ -261,7 +285,14 @@ def _worker(ticker: str, filings: int) -> None:
                     env=env,
                 )
                 with JOBS_LOCK:
-                    JOBS[ticker]["pid"] = proc.pid
+                    job = JOBS.get(ticker)
+                    if job and job.get("id") == job_id:
+                        job["pid"] = proc.pid
+                    PROCS[ticker] = proc
+                    # Cancel may have landed between the status check and Popen.
+                    cancel_now = bool(job and job.get("id") == job_id and job.get("cancel_requested"))
+                if cancel_now and proc.poll() is None:
+                    proc.terminate()
                 try:
                     proc.wait(timeout=1800)
                     code = proc.returncode
@@ -270,6 +301,12 @@ def _worker(ticker: str, filings: int) -> None:
                     proc.wait()
                     code = -1
                     log.write(f"[{_now()}] killed after 30-minute timeout\n")
+                    log.flush()
+                with JOBS_LOCK:
+                    job = JOBS.get(ticker)
+                    cancelled = bool(job and job.get("id") == job_id and job.get("cancel_requested"))
+                if cancelled:
+                    log.write(f"[{_now()}] cancelled by user; files kept\n")
                     log.flush()
             status = "done" if code == 0 else "error"
         except Exception as exc:  # noqa: BLE001 - surface any launch failure in the UI
@@ -280,10 +317,22 @@ def _worker(ticker: str, filings: int) -> None:
             except OSError:
                 pass
             with JOBS_LOCK:
-                JOBS[ticker]["error"] = message
+                job = JOBS.get(ticker)
+                if job and job.get("id") == job_id:
+                    job["error"] = message
+        finally:
+            if proc is not None:
+                with JOBS_LOCK:
+                    if PROCS.get(ticker) is proc:
+                        PROCS.pop(ticker, None)
 
         with JOBS_LOCK:
-            JOBS[ticker].update(status=status, finished=_now(), returncode=code)
+            job = JOBS.get(ticker)
+            if job and job.get("id") == job_id:
+                if job.get("cancel_requested"):
+                    job.update(status="cancelled", finished=_now(), returncode=code)
+                else:
+                    job.update(status=status, finished=_now(), returncode=code)
 
 
 # --------------------------------------------------------------------------- #
@@ -391,10 +440,47 @@ def run():
             return jsonify(status=job["status"], ticker=ticker, message="Already running"), 200
 
     with JOBS_LOCK:
-        JOBS[ticker] = {"ticker": ticker, "status": "queued", "queued": _now()}
+        job_id = secrets.token_hex(8)
+        JOBS[ticker] = {"id": job_id, "ticker": ticker, "status": "queued", "queued": _now()}
 
-    threading.Thread(target=_worker, args=(ticker, filings), daemon=True).start()
+    threading.Thread(target=_worker, args=(ticker, filings, job_id), daemon=True).start()
     return jsonify(status="queued", ticker=ticker), 202
+
+
+@app.post("/api/cancel")
+def cancel_all():
+    """Stop every queued/running job. Results on disk are never touched."""
+    procs: list[subprocess.Popen] = []
+    tickers: list[str] = []
+    with JOBS_LOCK:
+        for ticker, job in JOBS.items():
+            if job.get("status") not in ("queued", "running"):
+                continue
+            job["cancel_requested"] = True
+            job["status"] = "cancelled"
+            job["finished"] = _now()
+            tickers.append(ticker)
+            proc = PROCS.get(ticker)
+            if proc is not None:
+                procs.append(proc)
+
+    for proc in procs:
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+    # Give the pipeline a moment to exit, then make sure it is gone.
+    for proc in procs:
+        deadline = time.time() + 3
+        while proc.poll() is None and time.time() < deadline:
+            time.sleep(0.05)
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+    return jsonify(cancelled=tickers)
 
 
 @app.get("/api/status/<ticker>")
@@ -713,8 +799,9 @@ def screener_run():
                 queued.append(ticker)
                 items.append({"ticker": ticker, "status": job["status"]})
                 continue
-            JOBS[ticker] = {"ticker": ticker, "status": "queued", "queued": _now()}
-        threading.Thread(target=_worker, args=(ticker, 10), daemon=True).start()
+            job_id = secrets.token_hex(8)
+            JOBS[ticker] = {"id": job_id, "ticker": ticker, "status": "queued", "queued": _now()}
+        threading.Thread(target=_worker, args=(ticker, 10, job_id), daemon=True).start()
         queued.append(ticker)
         items.append({"ticker": ticker, "status": "queued"})
 
