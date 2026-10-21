@@ -558,12 +558,25 @@ def screener():
                 continue
             path = directory / "evaluation.csv"
             if not path.is_file():
+                # Results exist but the pipeline that produced them wrote no
+                # valuation data (e.g. an older checkout): surface it instead of
+                # silently hiding the ticker from the screener.
+                if (directory / "financial_data.csv").is_file():
+                    modified = max(
+                        (p.stat().st_mtime for p in directory.iterdir() if p.is_file()),
+                        default=0,
+                    )
+                    items.append({
+                        "ticker": directory.name,
+                        "has_evaluation": False,
+                        "modified": datetime.fromtimestamp(modified, timezone.utc).isoformat(timespec="seconds"),
+                    })
                 continue
             rows = _csv_records(path)
             if not rows:
                 continue
             latest = rows[-1]
-            item = {"ticker": directory.name}
+            item = {"ticker": directory.name, "has_evaluation": True}
             for field in SCREENER_FIELDS:
                 item[field] = latest.get(field)
             item["modified"] = datetime.fromtimestamp(

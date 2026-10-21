@@ -306,15 +306,15 @@
 
   <div class="toolbar">
     <div class="toolbar-inner">
-      <input id="ticker" type="text" placeholder="Ticker, e.g. NFLX" maxlength="10"
-             onkeydown="if(event.key==='Enter')runTicker()">
+      <input id="ticker" type="text" placeholder="Ticker, or several: AAPL, MSFT, DOW" maxlength="120"
+             oninput="updateMode()" onkeydown="if(event.key==='Enter')handlePrimary()">
       <select id="filings" title="Number of 10-K filings">
         <option value="3">3 filings</option>
         <option value="5">5 filings</option>
         <option value="10">10 filings</option>
         <option value="20" selected>20 filings</option>
       </select>
-      <button id="run-btn" class="primary" onclick="runTicker()">Run</button>
+      <button id="run-btn" class="primary" onclick="handlePrimary()">Run</button>
       <span id="status" class="status"><span class="badge idle">idle</span></span>
     </div>
   </div>
@@ -375,27 +375,16 @@ the pipeline log streams into this terminal.</pre>
 
   <!-- Screener tab -->
   <section id="pane-screener" class="hidden">
-    <div class="panel">
-      <div class="panel-head">
-        <span class="panel-title">Screener</span>
-        <span class="panel-actions">
-          <button class="panel-btn" onclick="loadScreener()">refresh</button>
-        </span>
-      </div>
-      <div class="panel-body">
-        <textarea id="screen-input" placeholder="Tickers, comma or newline separated: AAPL, MSFT, BRK.B"></textarea>
-        <div class="row screen-actions">
-          <button class="primary" id="screen-btn" onclick="submitScreen()">Screen</button>
-          <span id="screen-progress" class="muted"></span>
-        </div>
-      </div>
-    </div>
     <section class="panel" id="screen-terminal">
       <div class="panel-head">
         <span class="panel-title">Screener log</span>
+        <span class="panel-actions">
+          <span class="muted" id="screen-progress"></span>
+          <button class="panel-btn" onclick="loadScreener()">refresh</button>
+        </span>
       </div>
       <div class="panel-body term-body" id="screen-term-body">
-        <pre id="screen-term-log" class="term-log" role="log" aria-live="polite">ready. queue tickers above and press Screen —
+        <pre id="screen-term-log" class="term-log" role="log" aria-live="polite">ready. type several tickers in the bar above — the button turns into Screen —
 each run's pipeline log streams here.</pre>
       </div>
     </section>
@@ -498,6 +487,7 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>'
 let timer = null;
 let identityCache = '';
 let ACTIVE_TICKER = '';
+let TERM_TICKER = '';
 const POLL_TIMERS = {};
 const LIVE = {};
 
@@ -599,6 +589,7 @@ async function refreshRun() {
     LIVE[ticker] = job.status;
     pickActive();
     ACTIVE_TICKER = ticker;
+    TERM_TICKER = ticker;
     setStatus(job.status, job.status);
     if (job.log) setTermLog(job.log);
     if (job.status === 'done') loadResults(ticker, '#results-run');
@@ -635,18 +626,22 @@ function gotoRun() {
   const ticker = $('#status').dataset.ticker || ACTIVE_TICKER;
   if (!ticker) return;
   ACTIVE_TICKER = ticker;
+  TERM_TICKER = ticker;
   showTab('run');
   $('#ticker').value = ticker;
+  updateMode();
   refreshRun();
   const term = $('#terminal');
   if (term && term.scrollIntoView) term.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-async function runTicker() {
-  const ticker = $('#ticker').value.trim().toUpperCase();
+async function runTicker(rawTicker) {
+  const ticker = String(rawTicker || $('#ticker').value).trim().toUpperCase();
   if (!ticker) return;
+  $('#ticker').value = ticker;
   LIVE[ticker] = 'queued';
   ACTIVE_TICKER = ticker;
+  TERM_TICKER = ticker;
   const filings = Number($('#filings').value);
   $('#run-btn').disabled = true;
   $('#results-run').innerHTML = '';
@@ -661,6 +656,7 @@ async function runTicker() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || data.message || 'Request failed');
+    $('#run-btn').disabled = false;
     poll(ticker);
   } catch (err) {
     setStatus('error', 'error');
@@ -679,7 +675,7 @@ function poll(ticker) {
       LIVE[ticker] = job.status;
       pickActive();
       if (ticker === ACTIVE_TICKER) setStatus(job.status, job.status);
-      if (job.log && ticker === ACTIVE_TICKER) setTermLog(job.log);
+      if (job.log && ticker === TERM_TICKER) setTermLog(job.log);
       if (job.status === 'done') {
         delete LIVE[ticker];
         pickActive();
@@ -794,8 +790,31 @@ function openRecent(ticker) {
 
 const SCREEN = {
   items: [], sort: { key: 'ticker', dir: 1 }, timer: null,
-  order: [], logs: {}, status: {}, total: 0,
+  order: [], logs: {}, status: {}, total: 0, mode: 'run',
 };
+
+function parseTickers(raw) {
+  return String(raw || '').split(/[\s,]+/).map(t => t.trim().toUpperCase()).filter(Boolean);
+}
+
+function updateMode() {
+  const tickers = parseTickers($('#ticker').value);
+  const mode = tickers.length > 1 ? 'screen' : 'run';
+  SCREEN.mode = mode;
+  const btn = $('#run-btn');
+  btn.textContent = mode === 'screen' ? 'Screen' : 'Run';
+  btn.title = mode === 'screen'
+    ? `Screen ${tickers.length} tickers`
+    : 'Full 10-K analysis for one ticker';
+  return tickers;
+}
+
+function handlePrimary() {
+  const tickers = updateMode();
+  if (!tickers.length) return;
+  if (tickers.length > 1) submitScreen(tickers);
+  else runTicker(tickers[0]);
+}
 
 function setScreenLog(text) {
   const log = $('#screen-term-log');
@@ -833,15 +852,12 @@ async function refreshScreenLogs(tickers) {
   renderScreenLog();
 }
 
-function submitScreen() {
-  const tickers = $('#screen-input').value
-    .split(/[\s,]+/).map(t => t.trim().toUpperCase()).filter(Boolean);
-  if (!tickers.length) {
-    $('#screen-progress').textContent = 'Enter at least one ticker.';
-    return;
-  }
+function submitScreen(tickers) {
+  tickers = tickers || parseTickers($('#ticker').value);
+  if (tickers.length < 2) return;
+  showTab('screener');
   clearTimeout(SCREEN.timer);
-  $('#screen-btn').disabled = true;
+  $('#run-btn').disabled = true;
   $('#screen-progress').textContent = 'queuing…';
   SCREEN.order = tickers;
   SCREEN.logs = {};
@@ -873,7 +889,7 @@ function submitScreen() {
       SCREEN.logs[SCREEN.order[0]] = `error: ${err.message}`;
       renderScreenLog();
     })
-    .finally(() => { $('#screen-btn').disabled = false; });
+    .finally(() => { $('#run-btn').disabled = false; });
 }
 
 function screenPoll(queue, total) {
@@ -930,6 +946,12 @@ function renderScreener() {
     body.innerHTML = '<tr><td colspan="9" class="muted">No screened tickers yet.</td></tr>';
     return;
   }
+  const stale = SCREEN.items.filter(row => row.has_evaluation === false).length;
+  const banner = stale
+    ? `<tr><td colspan="9" class="muted">${stale} ticker(s) have results but no <code>evaluation.csv</code> —
+        the pipeline that produced them wrote no valuation data (usually an older checkout or a failed Yahoo fetch).
+        Re-run them to populate the table.</td></tr>`
+    : '';
   const { key, dir } = SCREEN.sort;
   const missing = v => v === null || v === undefined || v === ''
     || (key !== 'ticker' && key !== 'modified' && Number.isNaN(Number(v)));
@@ -942,10 +964,10 @@ function renderScreener() {
     if (key === 'modified') return (new Date(av) - new Date(bv)) * dir;
     return (Number(av) - Number(bv)) * dir;
   });
-  body.innerHTML = rows.map(row => `<tr>
+  body.innerHTML = banner + rows.map(row => `<tr>
       <td><strong>${esc(row.ticker)}</strong></td>
-      <td>${esc(row.fiscal_year ?? '—')}</td>
-      <td>${scoreCell(row.f_score, 7, 3)}</td>
+      <td>${row.has_evaluation === false ? '—' : esc(row.fiscal_year ?? '—')}</td>
+      <td>${row.has_evaluation === false ? '<span class="badge queued">no valuation</span>' : scoreCell(row.f_score, 7, 3)}</td>
       <td>${scoreCell(row.z_score, 2.99, 1.81)}</td>
       <td>${fmtNum(row.pe, 1)}</td>
       <td>${fmtNum(row.ev_ebit, 1)}</td>
@@ -1253,9 +1275,12 @@ loadIdentity();
   for (const it of items) {
     const job = await (await fetch(`/api/status/${it.ticker}`)).json();
     if (job.status === 'queued' || job.status === 'running') {
-      $('#ticker').value = it.ticker;
-      ACTIVE_TICKER = it.ticker;
-      $('#run-btn').disabled = true;
+      if (!$('#ticker').value.trim()) {
+        $('#ticker').value = it.ticker;
+        ACTIVE_TICKER = it.ticker;
+        TERM_TICKER = it.ticker;
+        updateMode();
+      }
       poll(it.ticker);
       break;
     }
