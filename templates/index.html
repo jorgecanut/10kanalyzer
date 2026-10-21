@@ -136,6 +136,9 @@
   .done { background:var(--badge-done-bg); color:var(--badge-done-fg); }
   .error { background:var(--badge-error-bg); color:var(--badge-error-fg); }
   .idle { background:var(--badge-idle-bg); color:var(--badge-idle-fg); }
+  .badge-link { cursor:pointer; }
+  .badge-link:hover { text-decoration:underline; }
+  .badge-link:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:14px; }
   figure { margin:0; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:10px; }
   figure img { width:100%; border-radius:6px; display:block; background:#fff; }
@@ -494,6 +497,15 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let timer = null;
 let identityCache = '';
+let ACTIVE_TICKER = '';
+const POLL_TIMERS = {};
+const LIVE = {};
+
+function pickActive() {
+  const running = Object.keys(LIVE).find(t => LIVE[t] === 'running');
+  const queued = Object.keys(LIVE).find(t => LIVE[t] === 'queued');
+  if (running || queued) ACTIVE_TICKER = running || queued;
+}
 
 const WELCOME = `stocky 1.0 · SEC 10-K dashboard
 reads EDGAR filings, extracts XBRL, charts the ratios
@@ -584,6 +596,9 @@ async function refreshRun() {
   if (!ticker) return;
   try {
     const job = await (await fetch(`/api/status/${ticker}`)).json();
+    LIVE[ticker] = job.status;
+    pickActive();
+    ACTIVE_TICKER = ticker;
     setStatus(job.status, job.status);
     if (job.log) setTermLog(job.log);
     if (job.status === 'done') loadResults(ticker, '#results-run');
@@ -607,12 +622,31 @@ function showTab(name) {
 }
 
 function setStatus(text, cls) {
-  $('#status').innerHTML = `<span class="badge ${cls}">${text}</span>`;
+  const live = cls === 'queued' || cls === 'running';
+  const badge = live
+    ? `<span class="badge ${cls} badge-link" role="button" tabindex="0" title="Go to this run" onclick="gotoRun()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();gotoRun();}">${text}</span>`
+    : `<span class="badge ${cls}">${text}</span>`;
+  const status = $('#status');
+  status.innerHTML = badge;
+  status.dataset.ticker = live ? ACTIVE_TICKER : '';
+}
+
+function gotoRun() {
+  const ticker = $('#status').dataset.ticker || ACTIVE_TICKER;
+  if (!ticker) return;
+  ACTIVE_TICKER = ticker;
+  showTab('run');
+  $('#ticker').value = ticker;
+  refreshRun();
+  const term = $('#terminal');
+  if (term && term.scrollIntoView) term.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 async function runTicker() {
   const ticker = $('#ticker').value.trim().toUpperCase();
   if (!ticker) return;
+  LIVE[ticker] = 'queued';
+  ACTIVE_TICKER = ticker;
   const filings = Number($('#filings').value);
   $('#run-btn').disabled = true;
   $('#results-run').innerHTML = '';
@@ -636,22 +670,32 @@ async function runTicker() {
 }
 
 function poll(ticker) {
-  clearTimeout(timer);
-  timer = setTimeout(async () => {
+  LIVE[ticker] = LIVE[ticker] || 'queued';
+  pickActive();
+  clearTimeout(POLL_TIMERS[ticker]);
+  POLL_TIMERS[ticker] = setTimeout(async () => {
     try {
       const job = await (await fetch(`/api/status/${ticker}`)).json();
-      setStatus(job.status, job.status);
-      if (job.log) setTermLog(job.log);
+      LIVE[ticker] = job.status;
+      pickActive();
+      if (ticker === ACTIVE_TICKER) setStatus(job.status, job.status);
+      if (job.log && ticker === ACTIVE_TICKER) setTermLog(job.log);
       if (job.status === 'done') {
+        delete LIVE[ticker];
+        pickActive();
         $('#run-btn').disabled = false;
         loadResults(ticker, '#results-run');
       } else if (job.status === 'error') {
+        delete LIVE[ticker];
+        pickActive();
         $('#run-btn').disabled = false;
       } else {
         poll(ticker);
       }
     } catch (err) {
-      setStatus('error', 'error');
+      delete LIVE[ticker];
+      pickActive();
+      if (ticker === ACTIVE_TICKER) setStatus('error', 'error');
       $('#run-btn').disabled = false;
     }
   }, 2000);
@@ -1210,6 +1254,7 @@ loadIdentity();
     const job = await (await fetch(`/api/status/${it.ticker}`)).json();
     if (job.status === 'queued' || job.status === 'running') {
       $('#ticker').value = it.ticker;
+      ACTIVE_TICKER = it.ticker;
       $('#run-btn').disabled = true;
       poll(it.ticker);
       break;
