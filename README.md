@@ -4,6 +4,15 @@ Connect to SEC EDGAR, download the last ten 10-K filings for a company,
 extract the XBRL financial data, and write it as CSV into `financial_graphs/`.
 The run form accepts 3, 5, 10 or 20 filings. No charts are generated.
 
+## Change workflow
+
+After every requested change, stage the affected files, commit, and push to
+`origin` without waiting for a separate request. Keep commit messages short and
+descriptive.
+
+If a change is left uncommitted or unpushed (for example, because you asked to
+review it first), say so explicitly and list the affected files.
+
 ## Setup
 
 ```bash

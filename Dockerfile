@@ -16,6 +16,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Application code.
 COPY edgar_dashboard.py xbrl_extract.py verify_facts.py app.py charts.py ./
 COPY templates ./templates
+COPY static ./static
 
 RUN mkdir -p /app/financial_graphs
 
