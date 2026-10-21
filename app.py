@@ -519,12 +519,18 @@ def simulation(ticker: str):
             continue
         prices.append({"date": day.date().isoformat(), "close": close})
 
-    dividend_cutoff = datetime.now(timezone.utc) - timedelta(days=365)
+    now = datetime.now(timezone.utc)
+    dividend_cutoff = now - timedelta(days=365)
     dividends = []
+    annual_dividend = 0.0
     for stamp, event in (result.get("events", {}).get("dividends") or {}).items():
         day = datetime.fromtimestamp(int(stamp), timezone.utc)
+        amount = event.get("amount", 0) or 0
         if day >= dividend_cutoff:
-            dividends.append({"date": day.date().isoformat(), "amount": event.get("amount", 0)})
+            annual_dividend += amount
+        # Keep the whole visible range for backtests; a shorter range wins.
+        if cutoff is None or day >= cutoff:
+            dividends.append({"date": day.date().isoformat(), "amount": amount})
     dividends.sort(key=lambda item: item["date"])
 
     trailing_pe = None
@@ -561,6 +567,7 @@ def simulation(ticker: str):
         "price": meta.get("regularMarketPrice") or (prices[-1]["close"] if prices else None),
         "trailing_pe": trailing_pe,
         "dividend_rate": dividend_rate,
+        "annual_dividend": annual_dividend,
         "prices": prices,
         "dividends": dividends,
     }

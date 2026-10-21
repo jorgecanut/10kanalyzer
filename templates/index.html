@@ -180,9 +180,17 @@
   .sim-controls button { padding:5px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bar);
                          color:var(--muted); font-size:12px; cursor:pointer; }
   .sim-controls button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
+  .sim-past { align-items:center; justify-content:space-between; }
+  .sim-hint { color:var(--muted); font-size:12px; }
+  .sim-hint b { color:var(--text); font-weight:600; }
+  .sim-controls #sim-clear[hidden] { display:none; }
   .sim-stats { display:block; }
   .sim-result { margin-top:14px; padding-top:10px; border-top:1px solid var(--line-soft); }
   .sim-result:empty { display:none; }
+  .sim-table { margin-top:14px; padding-top:10px; border-top:1px solid var(--line-soft); }
+  .sim-table table.data td, .sim-table table.data th { padding:6px 10px; }
+  .sim-form input:disabled { opacity:.45; cursor:not-allowed; }
+  .sim-mode button:disabled { opacity:.45; cursor:not-allowed; }
   .sim-summary { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0 20px; }
   .sim-years { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:0 20px;
                margin-top:12px; padding-top:10px; border-top:1px solid var(--line-soft); }
@@ -433,6 +441,10 @@ each run's pipeline log streams here.</pre>
           <div class="sim-chart">
             <svg id="sim-svg" viewBox="0 0 900 430" role="img"
                  aria-label="Stock price history and investment projection"></svg>
+            <div class="sim-controls sim-past">
+              <span class="sim-hint" id="sim-hint">Click the chart to backtest an investment at a past date.</span>
+              <button id="sim-clear" hidden onclick="clearBacktest()">reset</button>
+            </div>
             <div class="sim-controls" id="sim-ranges">
               <button data-range="1mo">1 month</button>
               <button data-range="4mo">4 months</button>
@@ -450,7 +462,7 @@ each run's pipeline log streams here.</pre>
           </aside>
         </div>
         <div class="sim-section">
-          <h3>Your projection</h3>
+          <h3 id="sim-form-title">Your projection</h3>
           <div class="sim-form">
             <div>
               <label for="sim-target">Target price</label>
@@ -473,7 +485,7 @@ each run's pipeline log streams here.</pre>
             </div>
           </div>
           <div class="sim-result" id="sim-result"></div>
-          <p class="sim-note">Future dividends hold the trailing yield, so they grow with the
+          <p class="sim-note" id="sim-note">Future dividends hold the trailing yield, so they grow with the
             projected price. Estimates only; no taxes or fees.</p>
         </div>
       </div>
@@ -1014,7 +1026,7 @@ function renderScreener() {
 
 /* Simulation --------------------------------------------------------------- */
 
-const SIM = { ticker: '', range: '1y', mode: 'cash', data: null };
+const SIM = { ticker: '', range: '1y', mode: 'cash', data: null, backtest: null };
 
 const fmtMoney = (v, currency = 'USD') => {
   if (v === null || v === undefined || Number.isNaN(v)) return '—';
@@ -1038,11 +1050,45 @@ const fmtDate = value => {
   return `${day}/${month}/${d.getUTCFullYear()}`;
 };
 
+function simAnnualDividend() {
+  const data = SIM.data;
+  if (!data) return 0;
+  if (data.dividend_rate !== null && data.dividend_rate !== undefined) return data.dividend_rate;
+  if (data.annual_dividend !== null && data.annual_dividend !== undefined) return data.annual_dividend;
+  return (data.dividends || []).reduce((sum, d) => sum + d.amount, 0);
+}
+
 function setSimMode(mode) {
+  if (SIM.backtest) return;
   SIM.mode = mode;
   $('#sim-cash').classList.toggle('active', mode === 'cash');
   $('#sim-reinvest').classList.toggle('active', mode === 'reinvest');
   renderSimulation();
+}
+
+function clearBacktest() {
+  if (!SIM.backtest) return;
+  SIM.backtest = null;
+  renderSimulation();
+}
+
+function syncSimControls() {
+  const backtest = !!SIM.backtest;
+  $('#sim-target').disabled = backtest;
+  $('#sim-years').disabled = backtest;
+  $('#sim-cash').disabled = backtest;
+  $('#sim-reinvest').disabled = backtest;
+  $('#sim-cash').classList.toggle('active', backtest || SIM.mode === 'cash');
+  $('#sim-reinvest').classList.toggle('active', !backtest && SIM.mode === 'reinvest');
+  $('#sim-clear').hidden = !backtest;
+  $('#sim-form-title').textContent = backtest ? 'Your past investment' : 'Your projection';
+  $('#sim-hint').innerHTML = backtest
+    ? `Investing <b>${fmtMoney(Math.max(0, Number($('#sim-amount').value) || 0), SIM.data ? SIM.data.currency : 'USD')}</b>
+       on <b>${esc(SIM.backtest.date)}</b> — click a future point to reset.`
+    : 'Click the chart to backtest an investment at a past date.';
+  $('#sim-note').textContent = backtest
+    ? 'Dividends are paid in cash, not reinvested. Value is the shares held at the current price plus dividends received. Estimates only; no taxes or fees.'
+    : 'Future dividends hold the trailing yield, so they grow with the projected price. Estimates only; no taxes or fees.';
 }
 
 async function initSimulation(force = false) {
@@ -1087,6 +1133,7 @@ async function loadSimulation(keepTarget = false) {
     if (seq !== SIM.seq) return;
     if (!res.ok) throw new Error(data.error || 'Request failed');
     SIM.data = data;
+    SIM.backtest = null;
     if (changedTicker || !keepTarget) {
       const target = $('#sim-target');
       target.value = data.price ? (data.price * 1.2).toFixed(2) : '';
@@ -1113,7 +1160,7 @@ function renderStats() {
   const high = Math.max(...highs);
   const low = Math.min(...highs);
   const change = first ? ((price - first) / first) * 100 : null;
-  const annual = data.dividend_rate ?? data.dividends.reduce((sum, d) => sum + d.amount, 0);
+  const annual = simAnnualDividend();
   const yieldPct = price ? (annual / price) * 100 : null;
   $('#sim-title').textContent = `${data.ticker} market data`;
   $('#sim-stats').innerHTML = `
@@ -1139,7 +1186,7 @@ function simulate() {
   const years = Math.max(0.25, Number($('#sim-years').value) || 4);
   const entered = Number($('#sim-target').value);
   const target = entered > 0 ? entered : data.price;
-  const annual = data.dividend_rate || data.dividends.reduce((sum, d) => sum + d.amount, 0) || 0;
+  const annual = simAnnualDividend();
   // Hold the trailing yield, so a higher projected price pays more per share.
   const dividendYield = data.price ? annual / data.price : 0;
   const startShares = amount / data.price;
@@ -1170,9 +1217,70 @@ function simulate() {
   };
 }
 
+function backtestPlan() {
+  const data = SIM.data;
+  const bt = SIM.backtest;
+  if (!data || !bt || !(bt.price > 0)) return null;
+  const amount = Math.max(0, Number($('#sim-amount').value) || 0);
+  const shares = amount / bt.price;
+  const entry = new Date(bt.date + 'T00:00:00Z');
+  const last = data.prices[data.prices.length - 1];
+  if (!last) return null;
+  const lastDate = new Date(last.date + 'T00:00:00Z');
+  const lastPrice = data.price || last.close;
+  const dividends = (data.dividends || [])
+    .filter(d => d.date > bt.date)
+    .map(d => ({ t: new Date(d.date + 'T00:00:00Z').getTime(), amount: d.amount }))
+    .sort((a, b) => a.t - b.t);
+
+  const priceAt = stamp => {
+    let price = null;
+    for (const point of data.prices) {
+      if (new Date(point.date + 'T00:00:00Z').getTime() > stamp) break;
+      price = point.close;
+    }
+    return price;
+  };
+
+  const rows = [];
+  let cash = 0;
+  let paidIndex = 0;
+  let previous = amount;
+  const checkpoint = (date, label) => {
+    const stamp = date.getTime();
+    let paid = 0;
+    while (paidIndex < dividends.length && dividends[paidIndex].t <= stamp) {
+      paid += shares * dividends[paidIndex].amount;
+      paidIndex += 1;
+    }
+    cash += paid;
+    const price = stamp >= lastDate.getTime() ? lastPrice : (priceAt(stamp) ?? lastPrice);
+    const value = shares * price + cash;
+    rows.push({ label, dividends: paid, value, yearGain: value - previous, totalGain: value - amount });
+    previous = value;
+  };
+
+  // One checkpoint per full year held, then today (value includes cash dividends).
+  for (let year = 1; ; year += 1) {
+    const at = new Date(Date.UTC(entry.getUTCFullYear() + year, entry.getUTCMonth(), entry.getUTCDate()));
+    if (at.getTime() >= lastDate.getTime()) break;
+    checkpoint(at, `Year ${year}`);
+  }
+  checkpoint(lastDate, 'Now');
+
+  const value = rows[rows.length - 1].value;
+  return {
+    amount, shares, entryPrice: bt.price, date: bt.date,
+    dividends: cash, value, profit: value - amount,
+    returnPct: amount ? ((value - amount) / amount) * 100 : null,
+    rows,
+  };
+}
+
 function renderSimulation() {
   const data = SIM.data;
   if (!data || !data.prices.length) return;
+  syncSimControls();
   const plan = simulate();
   const svg = $('#sim-svg');
   const W = 900, H = 430, L = 62, R = 18, T = 20, B = 36;
@@ -1220,11 +1328,32 @@ function renderSimulation() {
   svg.append(svgEl('path', { d: histPath, fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2 }));
   const projPath = [{ t: now.getTime(), p: price }].concat(proj)
     .map((d, i) => `${i ? 'L' : 'M'}${x(d.t).toFixed(1)},${y(d.p).toFixed(1)}`).join(' ');
-  svg.append(svgEl('path', { d: projPath, fill: 'none', stroke: 'var(--green)', 'stroke-width': 2, 'stroke-dasharray': '6 5' }));
+  svg.append(svgEl('path', {
+    d: projPath, fill: 'none',
+    stroke: SIM.backtest ? 'var(--muted)' : 'var(--green)',
+    opacity: SIM.backtest ? 0.45 : 1,
+    'stroke-width': 2, 'stroke-dasharray': '6 5',
+  }));
   svg.append(svgEl('line', {
     x1: x(now.getTime()), x2: x(now.getTime()), y1: T, y2: H - B,
     stroke: 'var(--line)', 'stroke-width': 1, 'stroke-dasharray': '3 4',
   }));
+
+  // Backtest marker: the price paid and the density of the invested amount.
+  const entryIndex = SIM.backtest
+    ? hist.findIndex(d => d.t === new Date(SIM.backtest.date + 'T00:00:00Z').getTime())
+    : -1;
+  if (entryIndex >= 0) {
+    const entry = hist[entryIndex];
+    svg.append(svgEl('line', {
+      x1: x(entry.t), x2: x(entry.t), y1: T, y2: H - B,
+      stroke: 'var(--green)', 'stroke-width': 1, 'stroke-dasharray': '3 4', opacity: 0.8,
+    }));
+    svg.append(svgEl('circle', {
+      cx: x(entry.t), cy: y(entry.p), r: 4.5,
+      fill: 'var(--green)', stroke: 'var(--surface)', 'stroke-width': 1.5,
+    }));
+  }
 
   // X labels
   for (let i = 0; i <= 4; i += 1) {
@@ -1239,7 +1368,9 @@ function renderSimulation() {
 
   // Legend
   const legend = svgEl('text', { x: L, y: T - 4, fill: 'var(--muted)', 'font-size': 11 });
-  legend.textContent = `price · projection to ${fmtMoney(target, data.currency)}`;
+  legend.textContent = SIM.backtest
+    ? `price · projection disabled · backtest from ${SIM.backtest.date}`
+    : `price · projection to ${fmtMoney(target, data.currency)}`;
   svg.append(legend);
 
   // Hover crosshair + tooltip
@@ -1275,6 +1406,69 @@ function renderSimulation() {
     dot.setAttribute('opacity', 0);
     tip.setAttribute('opacity', 0);
   };
+  svg.onclick = event => {
+    const rect = svg.getBoundingClientRect();
+    const px = ((event.clientX - rect.left) / rect.width) * W;
+    const stamp = t0 + ((px - L) / (W - L - R)) * (t1 - t0);
+    if (stamp >= now.getTime()) {
+      clearBacktest();
+      return;
+    }
+    let best = null;
+    let bestDiff = Infinity;
+    for (const point of data.prices) {
+      const t = new Date(point.date + 'T00:00:00Z').getTime();
+      const diff = Math.abs(t - stamp);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = point;
+      }
+    }
+    if (!best || !(best.close > 0)) return;
+    SIM.backtest = { date: best.date, price: best.close };
+    renderSimulation();
+  };
+
+  if (SIM.backtest) {
+    const past = backtestPlan();
+    if (!past) return;
+    const signed = value => (value > 0 ? '+' : '') + fmtMoney(value, data.currency);
+    $('#sim-result').innerHTML = `
+      <div class="sim-summary">
+        <div class="stat"><span>Invested</span><b>${fmtMoney(past.amount, data.currency)}</b></div>
+        <div class="stat"><span>Bought at</span><b>${fmtMoney(past.entryPrice, data.currency)}</b></div>
+        <div class="stat"><span>Shares</span><b>${fmtNum(past.shares, 4)}</b></div>
+        <div class="stat"><span>Dividends received</span><b>${past.dividends ? fmtMoney(past.dividends, data.currency) : 'No dividends'}</b></div>
+        <div class="stat"><span>Value today</span><b>${fmtMoney(past.value, data.currency)}</b></div>
+        <div class="stat"><span>Profit</span><b>${signed(past.profit)} · ${past.returnPct === null ? '—' : (past.returnPct >= 0 ? '+' : '') + fmtNum(past.returnPct) + '%'}</b></div>
+      </div>
+      <div class="sim-table">
+        <div class="table-wrap">
+          <table class="data">
+            <thead>
+              <tr>
+                <th>Year</th>
+                <th>Dividends</th>
+                <th>Value</th>
+                <th>Gain in year</th>
+                <th>Total gain</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${past.rows.map(row => `
+                <tr>
+                  <td>${esc(row.label)}</td>
+                  <td>${fmtMoney(row.dividends, data.currency)}</td>
+                  <td>${fmtMoney(row.value, data.currency)}</td>
+                  <td>${signed(row.yearGain)}</td>
+                  <td>${signed(row.totalGain)}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+    return;
+  }
 
   if (!plan) return;
   $('#sim-result').innerHTML = `

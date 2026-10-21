@@ -114,6 +114,25 @@ The **Screener** tab posts up to 25 tickers, shows a sortable table of scores an
 ratios, and caches each ticker's result for 7 days. Tickers with no cached data
 are queued through the same serialized worker as `/api/run`.
 
+### Simulation tab
+
+The **Simulation** tab charts the selected ticker's price from Yahoo (separate
+from EDGAR; it never writes to `financial_graphs/`). It has two modes:
+
+- **Projection** — set a target price, an investment amount, and a horizon. The
+  dashed line projects the price, with dividends either paid in cash or
+  reinvested.
+- **Backtest** — click any historical point on the chart to invest the amount
+  at that close and value it today. The projection line stays visible but turns
+  grey and is disabled, as are target price, horizon, and dividend mode.
+  Dividends are cash payouts from the actual dividend events after the entry
+  date; they are never reinvested.
+
+The backtest lists one row per full year held (plus a final **Now** row):
+dividends received that year, portfolio value, gain in that year, and the
+running total gain. Clicking a future point or **reset** returns to projection.
+Estimates only; no taxes or fees.
+
 ## Auto-deploy on push
 
 A self-hosted GitHub Actions runner on the server runs `stocky` after every
