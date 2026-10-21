@@ -368,8 +368,8 @@ the pipeline log streams into this terminal.</pre>
             </div>
           </div>
           <div class="sim-result" id="sim-result"></div>
-          <p class="sim-note">Future dividends use the trailing 12-month rate, paid evenly.
-            Estimates only; no taxes or fees.</p>
+          <p class="sim-note">Future dividends hold the trailing yield, so they grow with the
+            projected price. Estimates only; no taxes or fees.</p>
         </div>
       </div>
     </div>
@@ -715,7 +715,8 @@ function simulate() {
   const entered = Number($('#sim-target').value);
   const target = entered > 0 ? entered : data.price;
   const annual = data.dividend_rate || data.dividends.reduce((sum, d) => sum + d.amount, 0) || 0;
-  const quarterly = annual / 4;
+  // Hold the trailing yield, so a higher projected price pays more per share.
+  const dividendYield = data.price ? annual / data.price : 0;
   const startShares = amount / data.price;
   let shares = startShares;
   let cash = 0;
@@ -724,8 +725,9 @@ function simulate() {
   for (let q = 1; q <= steps; q += 1) {
     const t = q / steps;
     const price = data.price + (target - data.price) * t;
-    if (SIM.mode === 'reinvest' && quarterly > 0) shares += (shares * quarterly) / price;
-    else cash += shares * quarterly;
+    const dividendPerShare = (price * dividendYield) / 4;
+    if (SIM.mode === 'reinvest' && dividendPerShare > 0) shares += (shares * dividendPerShare) / price;
+    else cash += shares * dividendPerShare;
     if (q % 4 === 0 || q === steps) {
       rows.push({
         label: (q / 4).toFixed(2).replace(/\.?0+$/, '') + 'y',
