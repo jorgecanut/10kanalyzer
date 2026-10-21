@@ -41,7 +41,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-set "HTTP_PORT=8000"
+set "HTTP_PORT=8053"
 for /f "tokens=1,2 delims==" %%A in (.env) do (
   if /i "%%A"=="HTTP_PORT" set "HTTP_PORT=%%B"
 )

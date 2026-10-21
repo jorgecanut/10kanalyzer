@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
+import urllib.error
 import urllib.request
 
 import pandas as pd
@@ -27,7 +29,12 @@ from edgar import Company, set_identity
 
 set_identity(os.environ.get("EDGAR_IDENTITY", "Data Analyst analyst@example.com"))
 
-HEADERS = {"User-Agent": "Data Analyst analyst@example.com", "Accept-Encoding": "identity"}
+HEADERS = {
+    "User-Agent": os.environ.get("EDGAR_IDENTITY", "Data Analyst analyst@example.com"),
+    "Accept-Encoding": "identity",
+}
+
+TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 
 DURATION_TAGS = {
     "Revenues": [
@@ -90,8 +97,10 @@ def fetch_concept(cik: int, tag: str):
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read().decode())
-    except Exception:
-        return None
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:  # company never tagged this concept: a genuine SKIP
+            return None
+        raise
 
 
 def build_map(data, duration: bool) -> dict:
@@ -101,7 +110,7 @@ def build_map(data, duration: bool) -> dict:
         if unit != "USD":
             continue
         for e in entries:
-            if not str(e.get("form", "")).startswith("10-K"):
+            if not str(e.get("form", "")).startswith(("10-K", "20-F", "40-F")):
                 continue
             end = e.get("end")
             if not end:
@@ -148,10 +157,20 @@ def verify_ticker(ticker: str) -> tuple[int, int]:
         # same period in the same filing). Keep every candidate value so a
         # priority-fallback metric matches against the tag it actually used.
         sec_map: dict = {}
+        fetch_error: tuple[str, Exception] | None = None
         for tag in tags:
-            for key, value in build_map(fetch_concept(cik, tag), duration).items():
-                sec_map.setdefault(key, []).append(value)
+            try:
+                for key, value in build_map(fetch_concept(cik, tag), duration).items():
+                    sec_map.setdefault(key, []).append(value)
+            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                fetch_error = (tag, exc)
+                break
             time.sleep(0.15)
+        if fetch_error:
+            tag, exc = fetch_error
+            print(f"  [ERROR] {tag} {metric}: {exc}")
+            total_bad += 1
+            continue
         if not sec_map:
             print(f"  [SKIP] {metric:<19} SEC API has no annual 10-K facts")
             continue
@@ -164,7 +183,8 @@ def verify_ticker(ticker: str) -> tuple[int, int]:
             # GrossProfit is often derived (Revenues - CostOfRevenue) when a
             # filer only tags it quarterly. Verify the derivation internally
             # against the two already-verified columns instead of the SEC API.
-            if metric == "GrossProfit" and bool(row.get("gross_profit_derived", False)):
+            if metric == "GrossProfit" and \
+                    str(row.get("gross_profit_derived", "")).strip().lower() in ("true", "1", "yes"):
                 rev, cogs = row["Revenues"], row["CostOfRevenue"]
                 derived = rev - cogs if pd.notna(rev) and pd.notna(cogs) else float("nan")
                 if pd.isna(derived) and pd.isna(row["GrossProfit"]):
@@ -201,9 +221,18 @@ def verify_ticker(ticker: str) -> tuple[int, int]:
 
 def main() -> None:
     tickers = sys.argv[1:] or DEFAULT_TICKERS
+    for t in tickers:
+        if not TICKER_RE.match(t.upper()):
+            print(f"[ERROR] invalid ticker: {t}")
+            sys.exit(1)
     total_ok = total_bad = 0
     for ticker in tickers:
-        ok, bad = verify_ticker(ticker.upper())
+        try:
+            ok, bad = verify_ticker(ticker.upper())
+        except Exception as exc:
+            print(f"\n[ERROR] {ticker}: {exc}")
+            total_bad += 1
+            continue
         total_ok += ok
         total_bad += bad
 

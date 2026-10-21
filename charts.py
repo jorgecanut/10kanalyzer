@@ -7,6 +7,7 @@ statement lines, and ``facts.csv`` for items such as shares outstanding.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from typing import Iterable
 
@@ -135,7 +136,7 @@ def _fmt_shares(value: float) -> str:
 def _color_for(label: str) -> str:
     if label in COLORS:
         return COLORS[label]
-    idx = abs(hash(label)) % len(FALLBACK_PALETTE)
+    idx = int(hashlib.md5(label.encode()).hexdigest(), 16) % len(FALLBACK_PALETTE)
     return FALLBACK_PALETTE[idx]
 
 
@@ -161,7 +162,9 @@ def _stmt_series(
         return pd.Series(np.nan, index=years)
     statements = statements.copy()
     statements["value"] = pd.to_numeric(statements["value"], errors="coerce")
-    statements["fiscal_year"] = pd.to_numeric(statements["fiscal_year"], errors="coerce").astype(int)
+    statements["fiscal_year"] = pd.to_numeric(statements["fiscal_year"], errors="coerce").astype("Int64")
+    statements = statements.dropna(subset=["fiscal_year"])
+    concepts = list(concepts)
     std_mask = statements["standard_concept"].fillna("").isin(concepts)
     label_mask = pd.Series(False, index=statements.index)
     if include_labels:
@@ -185,7 +188,11 @@ def _stmt_series(
         inflow = labels.str.contains(r"proceeds|issuance", regex=True)
         sub.loc[outflow, "value"] = -sub.loc[outflow, "value"].abs()
         sub.loc[inflow, "value"] = sub.loc[inflow, "value"].abs()
-    s = sub.groupby("fiscal_year")["value"].sum() / USD_TO_MILLIONS
+    priority = {concept: i for i, concept in enumerate(concepts)}
+    sub = sub.assign(
+        _priority=sub["standard_concept"].map(priority).fillna(len(concepts))
+    ).sort_values(["fiscal_year", "_priority"])
+    s = sub.groupby("fiscal_year")["value"].first() / USD_TO_MILLIONS
     return s.reindex(years)
 
 
@@ -198,7 +205,8 @@ def _fact_series(
     if facts.empty:
         return pd.Series(np.nan, index=years)
     facts = facts.copy()
-    facts["fiscal_year"] = pd.to_numeric(facts["fiscal_year"], errors="coerce").astype(int)
+    facts["fiscal_year"] = pd.to_numeric(facts["fiscal_year"], errors="coerce").astype("Int64")
+    facts = facts.dropna(subset=["fiscal_year"])
     concept_name = facts["concept"].str.split(":").str[-1]
     mask = concept_name.isin(concepts) & (~facts["is_dimensioned"].astype(bool))
     sub = facts[mask]
@@ -222,7 +230,8 @@ def _shares_series(facts: pd.DataFrame, concepts: Iterable[str], years: list[int
     if facts.empty:
         return pd.Series(np.nan, index=years)
     facts = facts.copy()
-    facts["fiscal_year"] = pd.to_numeric(facts["fiscal_year"], errors="coerce").astype(int)
+    facts["fiscal_year"] = pd.to_numeric(facts["fiscal_year"], errors="coerce").astype("Int64")
+    facts = facts.dropna(subset=["fiscal_year"])
     concept_name = facts["concept"].str.split(":").str[-1]
     mask = concept_name.isin(concepts) & (~facts["is_dimensioned"].astype(bool))
     sub = facts[mask].copy()
@@ -230,6 +239,9 @@ def _shares_series(facts: pd.DataFrame, concepts: Iterable[str], years: list[int
         return pd.Series(np.nan, index=years)
     sub["numeric"] = pd.to_numeric(sub["value"], errors="coerce")
     sub = sub.dropna(subset=["numeric"])
+    is_dei = sub["concept"].str.startswith("dei:")
+    years_with_gaap = sub.loc[~is_dei, "fiscal_year"].unique()
+    sub = sub[~is_dei | ~sub["fiscal_year"].isin(years_with_gaap)]
     # One value per concept per year, then add across share classes.
     s = sub.groupby(["fiscal_year", "concept"])["numeric"].first().groupby("fiscal_year").sum()
     s = s / USD_TO_MILLIONS
@@ -914,13 +926,20 @@ def render_all(
         return []
 
     paths: list[str] = []
-    paths.extend(chart_income_statement(ticker, output_dir, df, statements, years))
-    paths.extend(chart_margins(ticker, output_dir, df, years))
-    paths.extend(chart_balance(ticker, output_dir, df, statements, facts, years))
-    paths.extend(chart_debt(ticker, output_dir, df, statements, years))
-    paths.extend(chart_cashflow_operations(ticker, output_dir, df, statements, years))
-    paths.extend(chart_cashflow_financing(ticker, output_dir, df, statements, years))
-    paths.extend(chart_returns(ticker, output_dir, df, statements, years))
+    chart_calls = [
+        lambda: chart_income_statement(ticker, output_dir, df, statements, years),
+        lambda: chart_margins(ticker, output_dir, df, years),
+        lambda: chart_balance(ticker, output_dir, df, statements, facts, years),
+        lambda: chart_debt(ticker, output_dir, df, statements, years),
+        lambda: chart_cashflow_operations(ticker, output_dir, df, statements, years),
+        lambda: chart_cashflow_financing(ticker, output_dir, df, statements, years),
+        lambda: chart_returns(ticker, output_dir, df, statements, years),
+    ]
+    for call in chart_calls:
+        try:
+            paths.extend(call())
+        finally:
+            plt.close("all")
 
     _write_quality_csv(output_dir)
     return paths

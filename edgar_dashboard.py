@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from typing import Iterable
 
 import numpy as np
@@ -33,6 +34,7 @@ import xbrl_extract
 set_identity(os.environ.get("EDGAR_IDENTITY", "Data Analyst analyst@example.com"))
 
 TICKER = "NFLX"
+TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 NUM_FILINGS = 10
 BASE_OUTPUT_DIR = "financial_graphs"
 
@@ -361,14 +363,20 @@ def build_dataset(ticker: str, n_filings: int) -> tuple[pd.DataFrame, pd.DataFra
                     continue
                 seen_accessions.add(accession)
                 all_filings.append(filing)
-        except Exception:  # noqa: BLE001 - a missing form should not abort the others
+        except Exception as exc:  # noqa: BLE001 - a missing form should not abort the others
+            print(f"    [!] {form}: filing list failed ({exc.__class__.__name__}: {exc}); continuing")
             continue
 
-    filings = sorted(
-        all_filings,
-        key=lambda f: (str(f.period_of_report or "")),
-        reverse=True,
-    )[:n_filings]
+    period_filings: list[tuple[str, object]] = []
+    for filing in all_filings:
+        try:
+            period = str(filing.period_of_report or "")
+        except Exception as exc:  # noqa: BLE001 - skip filings with unreadable periods
+            print(f"    [!] unreadable period ({exc.__class__.__name__}: {exc}); skipping filing")
+            continue
+        period_filings.append((period, filing))
+    period_filings.sort(key=lambda item: item[0], reverse=True)
+    filings = [filing for _, filing in period_filings[:n_filings]]
 
     records: list[dict] = []
     statement_records: list[dict] = []
@@ -378,6 +386,7 @@ def build_dataset(ticker: str, n_filings: int) -> tuple[pd.DataFrame, pd.DataFra
     for filing in filings:
         if len(records) >= n_filings:
             break
+        accession = None
 
         # Everything is guarded per filing: edgartools can raise on individual
         # malformed filings (e.g. missing filing dates) and one bad filing
@@ -408,7 +417,10 @@ def build_dataset(ticker: str, n_filings: int) -> tuple[pd.DataFrame, pd.DataFra
             # calendar year of the period end).
             fy_facts = facts.loc[facts["concept"] == "dei:DocumentFiscalYearFocus", "value"]
             if len(fy_facts):
-                fiscal_year = int(float(fy_facts.iloc[0]))
+                try:
+                    fiscal_year = int(float(fy_facts.iloc[0]))
+                except (ValueError, TypeError):
+                    fiscal_year = int(period_key[:4])
             else:
                 fiscal_year = int(period_key[:4])
 
@@ -421,14 +433,15 @@ def build_dataset(ticker: str, n_filings: int) -> tuple[pd.DataFrame, pd.DataFra
                 row[metric] = extract_metric(
                     facts, concepts, period_of_report, period_type, statement_values
                 )
-            statement_records.extend(statement_rows)
-            fact_records.extend(xbrl_extract.extract_facts(xbrl, period_key))
+            filing_facts = xbrl_extract.extract_facts(xbrl, period_key)
         except Exception as exc:  # noqa: BLE001 - skip unparseable filings
-            ident = locals().get("accession") or getattr(filing, "accession_no", "?")
+            ident = accession or getattr(filing, "accession_no", "?")
             print(f"    [!] {ident}: unreadable ({exc.__class__.__name__}: {exc}); skipping")
             continue
 
         records.append(row)
+        statement_records.extend(statement_rows)
+        fact_records.extend(filing_facts)
         seen_periods.add(period_key)
         print(f"    [+] FY{fiscal_year} (period end {period_key}): extracted {accession}")
 
@@ -559,6 +572,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if not TICKER_RE.match(args.ticker.upper()):
+        parser.error("invalid ticker")
+
     # Point the module globals at a per-ticker output directory.
     TICKER = args.ticker.upper()
     OUTPUT_DIR = os.path.join(BASE_OUTPUT_DIR, TICKER)
@@ -566,7 +582,7 @@ def main() -> None:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     print(f"[*] Extracting {args.ticker} data from the last {args.filings} 10-K filings")
-    raw, statements, facts = build_dataset(args.ticker, args.filings)
+    raw, statements, facts = build_dataset(TICKER, args.filings)
     df = clean_and_derive(raw)
 
     df.to_csv(DATA_CSV, index=False)

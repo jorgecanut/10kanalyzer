@@ -56,6 +56,9 @@ def _period_column(data: pd.DataFrame, period_of_report: str) -> str | None:
     filings do not overwrite the originally reported year.
     """
     for column in data.columns:
+        if isinstance(column, str) and column == period_of_report:
+            return column
+    for column in data.columns:
         if isinstance(column, str) and column.startswith(period_of_report):
             return column
     return None
@@ -111,34 +114,37 @@ def extract_statements(xbrl, period_of_report: str) -> list[dict]:
         line_rows: list[dict] = []
         section = None
         for _, row in data.iterrows():
-            concept = str(row.get("concept") or "")
-            label = str(row.get("label") or "")
-            level = row.get("level")
-            if bool(row.get("abstract")):
-                # A top-level header names the section (ASSETS, REVENUE, ...).
-                if label and (level is None or float(level) <= 2):
-                    section = label
+            try:
+                concept = str(row.get("concept") or "")
+                label = str(row.get("label") or "")
+                level = row.get("level")
+                if bool(row.get("abstract")):
+                    # A top-level header names the section (ASSETS, REVENUE, ...).
+                    if label and (level is None or float(level) <= 2):
+                        section = label
+                    continue
+                if bool(row.get("dimension")):  # breakdown row, not the consolidated line
+                    continue
+                value = pd.to_numeric(row.get(column), errors="coerce")
+                if pd.isna(value):
+                    continue
+                standard = row.get("standard_concept")
+                parent = row.get("parent_concept")
+                line_rows.append({
+                    "statement": key,
+                    "section": section,
+                    "concept": concept,
+                    "standard_concept": _clean(standard),
+                    "label": label,
+                    "value": float(value),
+                    "parent_concept": _clean(parent),
+                    "level": _clean(level),
+                    "balance": _clean(row.get("balance")),
+                    "weight": _clean(row.get("weight")),
+                    "period_of_report": period_of_report,
+                })
+            except (ValueError, TypeError):
                 continue
-            if bool(row.get("dimension")):  # breakdown row, not the consolidated line
-                continue
-            value = pd.to_numeric(row.get(column), errors="coerce")
-            if pd.isna(value):
-                continue
-            standard = row.get("standard_concept")
-            parent = row.get("parent_concept")
-            line_rows.append({
-                "statement": key,
-                "section": section,
-                "concept": concept,
-                "standard_concept": _clean(standard),
-                "label": label,
-                "value": float(value),
-                "parent_concept": _clean(parent),
-                "level": _clean(level),
-                "balance": _clean(row.get("balance")),
-                "weight": _clean(row.get("weight")),
-                "period_of_report": period_of_report,
-            })
         if key == "balance":
             _classify_section(line_rows)
         rows.extend(line_rows)
@@ -152,7 +158,8 @@ def extract_facts(xbrl, period_of_report: str) -> list[dict]:
     """
     try:
         facts = xbrl.facts.to_dataframe()
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        print(f"    [!] {period_of_report}: facts unreadable ({exc.__class__.__name__}: {exc})")
         return []
     if facts is None or facts.empty:
         return []
@@ -162,6 +169,15 @@ def extract_facts(xbrl, period_of_report: str) -> list[dict]:
     instant = pd.to_datetime(facts.get("period_instant"), errors="coerce") \
         if "period_instant" in facts.columns else pd.Series(pd.NaT, index=facts.index)
     subset = facts[end.eq(target) | instant.eq(target)]
+    dei = facts[
+        (facts["concept"] == "dei:EntityCommonStockSharesOutstanding")
+        & instant.notna()
+        & (instant > target)
+        & (instant <= target + pd.Timedelta(days=45))
+    ]
+    if not dei.empty:
+        dei_instants = instant.loc[dei.index]
+        subset = pd.concat([subset, dei[dei_instants == dei_instants.max()]])
     if subset.empty:
         return []
 

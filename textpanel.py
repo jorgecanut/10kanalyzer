@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 
 import sys
 from datetime import datetime, timezone
@@ -47,6 +48,8 @@ SECTIONS: dict[str, str] = {
 
 DEFAULT_TICKERS = ["AAPL"]
 
+TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
+
 
 def latest_fiscal_year(ticker: str) -> int | None:
     """The newest fiscal year the numeric pipeline already extracted.
@@ -62,7 +65,10 @@ def latest_fiscal_year(ticker: str) -> int | None:
     table = pd.read_csv(path)
     if "fiscal_year" not in table.columns or table.empty:
         return None
-    return int(table["fiscal_year"].max())
+    newest = table["fiscal_year"].max()
+    if pd.isna(newest):
+        return None
+    return int(newest)
 
 
 def render(name: str, payload) -> str:
@@ -79,11 +85,13 @@ def render(name: str, payload) -> str:
         if name == "risk_factors":
             heading = getattr(item, "risk_factor", None)
             body = getattr(item, "text", "")
-            blocks.append(f"## {heading}\n\n{body}".strip() if heading else str(body))
+            if body:
+                blocks.append(f"## {heading}\n\n{body}".strip() if heading else str(body))
         elif name == "disclosures":
             heading = getattr(item, "name", None)
             body = getattr(item, "text", "")
-            blocks.append(f"## {heading}\n\n{body}".strip() if heading else str(body))
+            if body:
+                blocks.append(f"## {heading}\n\n{body}".strip() if heading else str(body))
         else:
             heading = getattr(item, "name", None)
             body = getattr(item, "text", "")
@@ -109,11 +117,11 @@ def collect(ticker: str, sections: list[str], year: int | None) -> dict:
     }
 
     for name in sections:
-        endpoint = getattr(obb.sec, SECTIONS[name])
         kwargs: dict = {"symbol": ticker}
         if year is not None:
             kwargs["calendar_year"] = year
         try:
+            endpoint = getattr(obb.sec, SECTIONS[name])
             response = endpoint(**kwargs)
             text = render(name, response.results)
         except Exception as exc:  # noqa: BLE001 - one section must not stop the rest
@@ -150,6 +158,10 @@ def main() -> None:
     args = parser.parse_args()
 
     tickers = [t.upper() for t in (args.tickers or DEFAULT_TICKERS)]
+    for ticker in tickers:
+        if not TICKER_RE.match(ticker):
+            print(f"invalid ticker: {ticker!r}", file=sys.stderr)
+            sys.exit(2)
     results = {}
     for ticker in tickers:
         print(f"\n{ticker}")
@@ -161,7 +173,8 @@ def main() -> None:
 
     ok = sum(1 for m in results.values() if any(s["status"] == "ok" for s in m["sections"].values()))
     print(f"\n{ok}/{len(results)} tickers produced text")
-    sys.exit(0 if ok else 1)
+    statuses = [s["status"] for m in results.values() for s in m["sections"].values()]
+    sys.exit(1 if statuses and all(s == "error" for s in statuses) else 0)
 
 
 if __name__ == "__main__":

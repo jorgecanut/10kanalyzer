@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -45,6 +46,8 @@ import pandas as pd
 
 # The SEC rejects anonymous requests; keep the same contract as the dashboard.
 IDENTITY = os.environ.get("EDGAR_IDENTITY", "Data Analyst analyst@example.com")
+
+TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 
 BASE_OUTPUT_DIR = Path("financial_graphs")
 REPORT_DIR = Path("reports/crosscheck")
@@ -170,11 +173,11 @@ def compare(
                  "theirs": None, "delta": None, "status": "MINE"}
             )
             continue
-        theirs_series = theirs.get(key) or {}
+        theirs_series = {str(k)[:10]: v for k, v in (theirs.get(key) or {}).items()}
         # Periods the dashboard claims to cover; theirs may hold more (its own
         # lookback), which is fine and not reported.
         for _, record in mine.iterrows():
-            period = str(record["period_of_report"])
+            period = str(record["period_of_report"])[:10]
             raw = record[column]
             mine_usd = None if pd.isna(raw) else float(raw) * USD_TO_MILLIONS
             theirs_usd = theirs_series.get(period)
@@ -276,6 +279,11 @@ def main() -> None:
     failures = 0
 
     for ticker in tickers:
+        if not TICKER_RE.match(ticker):
+            print(f"  [!] invalid ticker: {ticker}")
+            failures += 1
+            continue
+
         if args.refresh and not refresh(ticker, args.filings):
             failures += 1
             continue

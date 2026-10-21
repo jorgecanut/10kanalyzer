@@ -2,7 +2,8 @@
 
 Connect to SEC EDGAR, download the last ten 10-K filings for a company,
 extract the XBRL financial data, and write it as CSV into `financial_graphs/`.
-The run form accepts 3, 5, 10 or 20 filings. No charts are generated.
+The run form accepts 3, 5, 10 or 20 filings; the API accepts any value 1–20.
+No charts are generated.
 
 ## Change workflow
 
@@ -74,7 +75,7 @@ available later from the **Recent** tab. No accounts, no database.
 
 ```bash
 pip install -r requirements.txt
-python app.py            # http://localhost:8000
+python app.py            # http://localhost:8053
 ```
 
 Routes:
@@ -110,7 +111,7 @@ A single service that publishes one HTTP port:
 > the browser.
 
 ```bash
-docker compose up -d --build     # http://localhost:${HTTP_PORT:-8000}
+docker compose up -d --build     # http://localhost:${HTTP_PORT:-8053}
 ```
 
 ### Dockge
@@ -138,7 +139,7 @@ are bundled on purpose — you handle that side.
 ### Your own nginx
 
 `nginx/dashboard.conf` is a ready server block. Copy it, set `server_name`, make
-`proxy_pass` match your published port, and reload:
+`proxy_pass` match your published port (default 8053), and reload:
 
 ```bash
 sudo cp nginx/dashboard.conf /etc/nginx/conf.d/dashboard.conf
@@ -157,8 +158,9 @@ sudo htpasswd -c /etc/nginx/.htpasswd you
 
 - `./financial_graphs` is bind-mounted so results also land on the host; the
   container runs as root, so those files may be root-owned.
-- `edgar_cache` / `edgar_data` are named volumes that persist edgartools' raw
-  SEC downloads, making repeat runs much faster.
+- edgartools' raw SEC downloads are cached on the host: the compose file
+  bind-mounts `/mnt/tanques/stocky/edgar_cache` and `/mnt/tanques/stocky/edgar_data`
+  to `/root/.edgar_cache` and `/root/.edgar`, making repeat runs much faster.
 - The app listens on `0.0.0.0:8000` inside the container (override with `PORT`).
   It has **no authentication** — keep it behind nginx or a private network.
 - Runs are serialized (one at a time); ~1–3 minutes per ticker the first time.
@@ -179,9 +181,8 @@ docker compose up -d                # start it again
 
 - Code-only changes usually just need `docker compose up -d --build`.
 - `docker builder prune` clears leftover build cache if you want the space back.
-- Add `-v` to `docker compose down` to also drop the `edgar_cache` /
-  `edgar_data` volumes (SEC download cache). `./financial_graphs` on the host is
-  untouched either way.
+- The SEC download cache lives on host bind paths, not named volumes, so
+  `docker compose down -v` leaves it (and `./financial_graphs`) untouched.
 - If you removed `image:` from the compose file, check the generated name with
   `docker compose images`.
 
@@ -288,3 +289,74 @@ All checks pass exactly (e.g. KHC 125/125, the default sample 284/284).
 > values that SEC's `companyconcept` API does not expose, so those specific
 > year-values are skipped rather than compared. Everything the API does expose
 > is matched exactly.
+
+## Security & reliability hardening (2026-10)
+
+A full audit of the AI-generated codebase led to these changes. Agents editing
+this project must not regress them.
+
+**Web layer (`app.py`, `templates/index.html`)**
+
+- Runs are killed after a 30-minute subprocess timeout; previously one hung
+  SEC fetch held the global run lock forever and froze the pipeline.
+- `DELETE /api/recent/<ticker>` re-checks for an active run under the job lock
+  immediately before `rmtree` (TOCTOU race).
+- `/api/simulation/` responses are cached 60 s per ticker+range; previously
+  every poll proxied Yahoo live (abuse amplifier + rate-limit risk).
+- All responses send `X-Content-Type-Options: nosniff`, `X-Frame-Options:
+  DENY`, `Referrer-Policy: no-referrer` and a CSP (`default-src 'self'`, inline
+  script/style allowed for the single template).
+- The UI escapes server/API strings before `innerHTML` (`esc()` helper).
+- The app still has **no authentication**; nginx `auth_basic` is the intended
+  gate (see `nginx/dashboard.conf`).
+
+**Pipeline (`edgar_dashboard.py`, `xbrl_extract.py`, `charts.py`)**
+
+- Filing list is pre-filtered for unreadable `period_of_report` *before*
+  sorting; the sort used to raise outside the per-filing guard and abort runs.
+- A filing's statement/fact rows are committed only after the filing fully
+  succeeds; partial rows used to produce NaN `fiscal_year` and crash every
+  chart (`astype(int)` on NaN). Charts now use nullable `Int64` + `dropna`.
+- A present-but-dirty `dei:DocumentFiscalYearFocus` falls back to the period
+  year instead of sinking the filing; per-row parse errors in statement
+  extraction skip the row, not the filing.
+- `dei:EntityCommonStockSharesOutstanding` (cover-page instant, after period
+  end) is now kept from the nearest instant within 45 days after period end;
+  the shares chart previously had a dead first candidate.
+- Chart concept aggregation is priority first-match per year (same rule as the
+  extractor); summing all candidates double-counted combined + component
+  concepts. dei share counts are dropped for years with us-gaap share data.
+- Fallback palette colours are md5-based; Python's `hash()` differs per
+  process and changed chart colours run to run.
+- Chart rendering closes all figures in a `finally`; an exception mid-chart
+  no longer leaks figures.
+- All CLI tools validate tickers against `^[A-Z][A-Z0-9.\-]{0,9}$` (path
+  traversal via `--ticker ../../x` wrote outside `financial_graphs/`).
+- Silent `except: continue/return` paths (form list, facts frame) now print
+  warnings instead of masquerading as "no data".
+
+**Verifier (`verify_facts.py`, `crosscheck.py`)**
+
+- The SEC API User-Agent is built from `EDGAR_IDENTITY` at runtime; a
+  hardcoded placeholder was always sent before.
+- Network failures are `[ERROR]` and fail the run (exit non-zero); HTTP 404
+  (company never tagged the concept) remains a SKIP. One ticker's crash no
+  longer aborts the rest.
+- 20-F/40-F filings are verified too (the extractor already handles them).
+- `gross_profit_derived` is parsed string-safely (`bool("False")` is `True`).
+
+**Deployment (`Dockerfile`, `docker-compose.yml`, `nginx/`, requirements)**
+
+- **Port contract: 8053 everywhere** — compose `${HTTP_PORT:-8053}:8000`,
+  `.env.example`, nginx `proxy_pass`, Windows launcher, `python app.py`
+  default. 8000 is only the container-internal port.
+- Container runs as non-root user `appuser` (uid 10001); `mem_limit` raised to
+  2g (1g OOM-killed pandas mid-run, leaving partial CSVs).
+- The dead `edgar_cache` / `edgar_data` named volumes were removed; caches
+  are host bind mounts.
+- The image serves Flask via `waitress`, not the dev server.
+- `requirements.txt` is pinned to exact tested versions (auto-deploy builds
+  on every push; unpinned deps were unreviewed supply-chain exposure).
+
+Known remaining exposure: the app has no auth and no request-rate limiting of
+its own — keep it behind nginx `auth_basic` and never expose it directly.

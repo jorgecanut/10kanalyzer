@@ -378,6 +378,7 @@ the pipeline log streams into this terminal.</pre>
 
 <script>
 const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let timer = null;
 let identityCache = '';
 
@@ -546,16 +547,16 @@ async function loadResults(ticker, target) {
 function renderResults(data, target) {
   const grid = data.charts.map(name => `
     <figure>
-      <a href="/files/${data.ticker}/${name}" target="_blank">
-        <img src="/files/${data.ticker}/${name}" alt="${name}" loading="lazy"></a>
-      <figcaption><span>${name.replace(/^\d+_/, '').replace('.png','').replaceAll('_',' ')}</span>
-        <a href="/download/${data.ticker}/${name}">download</a></figcaption>
+      <a href="/files/${esc(data.ticker)}/${esc(name)}" target="_blank">
+        <img src="/files/${esc(data.ticker)}/${esc(name)}" alt="${esc(name)}" loading="lazy"></a>
+      <figcaption><span>${esc(name.replace(/^\d+_/, '').replace('.png','').replaceAll('_',' '))}</span>
+        <a href="/download/${esc(data.ticker)}/${esc(name)}">download</a></figcaption>
     </figure>`).join('');
   $(target).innerHTML = `
     <div class="card">
       <div class="row" style="justify-content:space-between">
-        <strong>${data.ticker} — ${data.charts.length} charts</strong>
-        <span><a href="/download/${data.ticker}">Download all (.zip)</a></span>
+        <strong>${esc(data.ticker)} — ${data.charts.length} charts</strong>
+        <span><a href="/download/${esc(data.ticker)}">Download all (.zip)</a></span>
       </div>
     </div>
     <div class="grid">${grid}</div>`;
@@ -568,10 +569,10 @@ async function loadRecent() {
   if (!items.length) { list.innerHTML = '<li class="muted">No runs yet.</li>'; return; }
   list.innerHTML = items.map(it => `
     <li>
-      <span class="t" onclick="openRecent('${it.ticker}')">${it.ticker}</span>
+      <span class="t" onclick="openRecent('${esc(it.ticker)}')">${esc(it.ticker)}</span>
       <span class="muted">${it.charts.length} charts · ${fmtDate(it.modified)}
-        · <a href="/download/${it.ticker}">zip</a>
-        · <a href="#" onclick="removeRecent('${it.ticker}');return false">remove</a></span>
+        · <a href="/download/${esc(it.ticker)}">zip</a>
+        · <a href="#" onclick="removeRecent('${esc(it.ticker)}');return false">remove</a></span>
     </li>`).join('');
 }
 
@@ -607,7 +608,7 @@ const SIM = { ticker: '', range: '1y', mode: 'cash', data: null };
 
 const fmtMoney = (v, currency = 'USD') => {
   if (v === null || v === undefined || Number.isNaN(v)) return '—';
-  const symbol = currency === 'USD' ? '$' : currency + ' ';
+  const symbol = currency === 'USD' ? '$' : esc(currency) + ' ';
   return symbol + Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 });
 };
 const fmtNum = (v, digits = 2) =>
@@ -641,7 +642,7 @@ async function initSimulation(force = false) {
       }
       const current = SIM.ticker;
       select.innerHTML = runs.map(item =>
-        `<option value="${item.ticker}">${item.ticker} · ${fmtDate(item.modified)}</option>`
+        `<option value="${esc(item.ticker)}">${esc(item.ticker)} · ${fmtDate(item.modified)}</option>`
       ).join('');
       SIM.ticker = '';
       select.value = runs.some(item => item.ticker === current) ? current : runs[0].ticker;

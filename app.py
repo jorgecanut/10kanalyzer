@@ -5,7 +5,7 @@ Enter a ticker, watch the run, then view or download the generated charts.
 No auth, no database -- it shells out to ``edgar_dashboard.py`` and serves
 whatever lands in ``financial_graphs/<TICKER>/``.
 
-Run locally:   python app.py            (http://localhost:8000)
+Run locally:   python app.py            (http://localhost:8053)
 """
 
 from __future__ import annotations
@@ -143,6 +143,7 @@ def _log_tail(ticker: str, max_lines: int = 200) -> str:
 YAHOO_UA = "Mozilla/5.0 (X11; Linux x86_64) Stocky/1.0"
 _YAHOO_SESSION = {"opener": None, "crumb": "", "ts": 0.0}
 _YAHOO_LOCK = threading.Lock()
+_SIM_CACHE: dict = {}
 
 
 def _yahoo_session():
@@ -191,7 +192,15 @@ def _worker(ticker: str, filings: int) -> None:
                 )
                 with JOBS_LOCK:
                     JOBS[ticker]["pid"] = proc.pid
-                code = proc.wait()
+                try:
+                    proc.wait(timeout=1800)
+                    code = proc.returncode
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                    code = -1
+                    log.write(f"[{_now()}] killed after 30-minute timeout\n")
+                    log.flush()
             status = "done" if code == 0 else "error"
         except Exception as exc:  # noqa: BLE001 - surface any launch failure in the UI
             status, code = "error", -1
@@ -209,6 +218,18 @@ def _worker(ticker: str, filings: int) -> None:
 def handle_http_error(err: HTTPException):
     """Return JSON for API errors instead of Flask's HTML error page."""
     return jsonify(error=err.description, status=err.code), err.code
+
+
+@app.after_request
+def set_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; img-src 'self' data:; "
+        "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+    )
+    return response
 
 
 @app.get("/")
@@ -296,11 +317,14 @@ def remove_recent(ticker: str):
     directory = _ticker_dir(ticker)
     if not directory.is_dir():
         abort(404, "No results for that ticker yet.")
-    try:
-        shutil.rmtree(directory)
-    except OSError as exc:
-        abort(500, f"Could not remove results: {exc}")
     with JOBS_LOCK:
+        job = JOBS.get(ticker)
+        if job and job["status"] in ("queued", "running"):
+            abort(409, "A run is active for that ticker.")
+        try:
+            shutil.rmtree(directory)
+        except OSError as exc:
+            abort(500, f"Could not remove results: {exc}")
         JOBS.pop(ticker, None)
     return jsonify(removed=ticker)
 
@@ -330,6 +354,12 @@ def simulation(ticker: str):
     }
     if period not in periods:
         abort(400, "Unsupported simulation range.")
+
+    cache_key = (ticker, period)
+    with _YAHOO_LOCK:
+        cached = _SIM_CACHE.get(cache_key)
+        if cached and time.time() - cached[0] < 60:
+            return jsonify(cached[1])
 
     yahoo_ticker = ticker.replace(".", "-")
     cutoff_days = periods[period][1]
@@ -398,15 +428,18 @@ def simulation(ticker: str):
         pass
 
     meta = result.get("meta", {})
-    return jsonify(
-        ticker=ticker,
-        currency=meta.get("currency", "USD"),
-        price=meta.get("regularMarketPrice") or (prices[-1]["close"] if prices else None),
-        trailing_pe=trailing_pe,
-        dividend_rate=dividend_rate,
-        prices=prices,
-        dividends=dividends,
-    )
+    payload = {
+        "ticker": ticker,
+        "currency": meta.get("currency", "USD"),
+        "price": meta.get("regularMarketPrice") or (prices[-1]["close"] if prices else None),
+        "trailing_pe": trailing_pe,
+        "dividend_rate": dividend_rate,
+        "prices": prices,
+        "dividends": dividends,
+    }
+    with _YAHOO_LOCK:
+        _SIM_CACHE[cache_key] = (time.time(), payload)
+    return jsonify(payload)
 
 
 @app.get("/files/<ticker>/<path:name>")
@@ -447,4 +480,4 @@ def download_file(ticker: str, name: str):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "8000")), threaded=True)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "8053")), threaded=True)

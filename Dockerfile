@@ -18,11 +18,13 @@ COPY edgar_dashboard.py xbrl_extract.py verify_facts.py app.py charts.py ./
 COPY templates ./templates
 COPY static ./static
 
-RUN mkdir -p /app/financial_graphs
+RUN useradd --create-home --uid 10001 appuser && mkdir -p /app/financial_graphs && chown -R appuser:appuser /app
+
+USER appuser
 
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')" || exit 1
 
-CMD ["python", "app.py"]
+CMD ["waitress-serve", "--listen=0.0.0.0:8000", "app:app"]
