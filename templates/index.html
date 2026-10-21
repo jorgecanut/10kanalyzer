@@ -147,6 +147,35 @@
   .muted { color:var(--muted); font-size:13px; }
   .hidden { display:none; }
 
+  /* Simulation */
+  .sim { display:grid; grid-template-columns:minmax(0,1fr) 290px; gap:14px; align-items:start; }
+  .sim-chart { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .sim-chart svg { display:block; width:100%; height:auto; cursor:crosshair; touch-action:none; }
+  .sim-controls { display:flex; gap:6px; flex-wrap:wrap; margin-top:12px; }
+  .sim-controls button { padding:5px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg);
+                         color:var(--muted); font-size:12px; cursor:pointer; }
+  .sim-controls button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
+  .sim-side .card { margin-bottom:14px; }
+  .sim-side h3 { margin:0 0 12px; font-size:13px; color:var(--muted); font-weight:600;
+                 text-transform:uppercase; letter-spacing:.04em; }
+  .stat { display:flex; justify-content:space-between; gap:12px; padding:7px 0;
+          border-bottom:1px solid var(--line-soft); font-size:13px; }
+  .stat:last-child { border-bottom:0; }
+  .stat span:first-child { color:var(--muted); }
+  .stat b { font-weight:600; }
+  .sim-form label { display:block; font-size:12px; color:var(--muted); margin:10px 0 5px; }
+  .sim-form input, .sim-form select { width:100%; padding:8px 10px; border:1px solid var(--line);
+                                      border-radius:7px; background:var(--bg); color:var(--text); font-size:14px; }
+  .sim-mode { display:flex; gap:6px; }
+  .sim-mode button { flex:1; padding:7px 8px; border:1px solid var(--line); border-radius:7px;
+                     background:var(--bg); color:var(--muted); font-size:12px; cursor:pointer; }
+  .sim-mode button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
+  .sim-result { margin-top:12px; padding-top:12px; border-top:1px solid var(--line); }
+  .sim-note { color:var(--muted); font-size:12px; margin-top:10px; }
+  @media (max-width:820px) {
+    .sim { grid-template-columns:1fr; }
+  }
+
   /* Terminal: same colour as the page background, retractable. */
   .terminal { max-width:860px; margin:6px auto 24px; background:var(--bg);
               border:1px solid var(--line); border-radius:8px; overflow:hidden;
@@ -231,6 +260,7 @@
   <div class="tabs">
     <button id="tab-run" class="active" onclick="showTab('run')">Run</button>
     <button id="tab-recent" onclick="showTab('recent')">Recent</button>
+    <button id="tab-simulation" onclick="showTab('simulation')">Simulation</button>
   </div>
 
   <!-- Run tab -->
@@ -262,6 +292,61 @@ the pipeline log streams into this terminal.</pre>
       <ul id="recent" class="recent"><li class="muted">Loading…</li></ul>
     </div>
     <div id="results-recent"></div>
+  </section>
+
+  <!-- Simulation tab -->
+  <section id="pane-simulation" class="hidden">
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <strong>Simulation</strong>
+        <span class="row">
+          <select id="sim-run" title="Successful run" onchange="loadSimulation(false)"></select>
+          <a href="#" onclick="initSimulation(true);return false">refresh</a>
+        </span>
+      </div>
+      <p class="muted" id="sim-status">Loading…</p>
+    </div>
+    <div class="sim">
+      <div class="sim-chart">
+        <svg id="sim-svg" viewBox="0 0 900 430" role="img"
+             aria-label="Stock price history and investment projection"></svg>
+        <div class="sim-controls" id="sim-ranges">
+          <button data-range="1mo">1 month</button>
+          <button data-range="4mo">4 months</button>
+          <button data-range="6mo">6 months</button>
+          <button data-range="1y" class="active">1 year</button>
+          <button data-range="3y">3 years</button>
+          <button data-range="5y">5 years</button>
+          <button data-range="10y">10 years</button>
+          <button data-range="max">max</button>
+        </div>
+      </div>
+      <div class="sim-side">
+        <div class="card">
+          <h3 id="sim-title">Key data</h3>
+          <div id="sim-stats"><div class="stat"><span>Loading…</span><b>—</b></div></div>
+        </div>
+        <div class="card">
+          <h3>Projection</h3>
+          <div class="sim-form">
+            <label for="sim-target">Target price</label>
+            <input id="sim-target" type="number" min="0" step="0.01" oninput="renderSimulation()">
+            <label for="sim-amount">Investment</label>
+            <input id="sim-amount" type="number" min="0" step="100" value="1000" oninput="renderSimulation()">
+            <label for="sim-years">Horizon (max 4 years)</label>
+            <input id="sim-years" type="number" min="0.25" max="4" step="0.25" value="4" oninput="renderSimulation()">
+            <label>Dividends</label>
+            <div class="sim-mode">
+              <button id="sim-cash" class="active" onclick="setSimMode('cash')">Cash payout</button>
+              <button id="sim-reinvest" onclick="setSimMode('reinvest')">Reinvest</button>
+            </div>
+            <div class="sim-result" id="sim-result"></div>
+          </div>
+          <p class="sim-note">Future dividends use the trailing 12-month rate, paid evenly.
+            Estimates only; no taxes or fees.</p>
+        </div>
+      </div>
+    </div>
   </section>
 </main>
 
@@ -362,12 +447,13 @@ function setTermLog(text) {
 /* ------------------------------------------------------------------------ */
 
 function showTab(name) {
-  const isRun = name === 'run';
-  $('#pane-run').classList.toggle('hidden', !isRun);
-  $('#pane-recent').classList.toggle('hidden', isRun);
-  $('#tab-run').classList.toggle('active', isRun);
-  $('#tab-recent').classList.toggle('active', !isRun);
-  if (!isRun) loadRecent();
+  for (const tab of ['run', 'recent', 'simulation']) {
+    const active = tab === name;
+    $(`#pane-${tab}`).classList.toggle('hidden', !active);
+    $(`#tab-${tab}`).classList.toggle('active', active);
+  }
+  if (name === 'recent') loadRecent();
+  if (name === 'simulation') initSimulation();
 }
 
 function setStatus(text, cls) {
@@ -470,6 +556,274 @@ function openRecent(ticker) {
   loadResults(ticker, '#results-recent');
   $('#results-recent').scrollIntoView({ behavior: 'smooth' });
 }
+
+/* Simulation --------------------------------------------------------------- */
+
+const SIM = { ticker: '', range: '1y', mode: 'cash', data: null };
+
+const fmtMoney = (v, currency = 'USD') => {
+  if (v === null || v === undefined || Number.isNaN(v)) return '—';
+  const symbol = currency === 'USD' ? '$' : currency + ' ';
+  return symbol + Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 });
+};
+const fmtNum = (v, digits = 2) =>
+  v === null || v === undefined || Number.isNaN(v) ? '—' : Number(v).toFixed(digits);
+
+function setSimMode(mode) {
+  SIM.mode = mode;
+  $('#sim-cash').classList.toggle('active', mode === 'cash');
+  $('#sim-reinvest').classList.toggle('active', mode === 'reinvest');
+  renderSimulation();
+}
+
+async function initSimulation(force = false) {
+  const select = $('#sim-run');
+  if (force || !select.dataset.loaded) {
+    select.dataset.loaded = '1';
+    try {
+      const { items } = await (await fetch('/api/recent')).json();
+      const runs = items.filter(item => item.has_csv);
+      if (!runs.length) {
+        $('#sim-status').textContent = 'No successful runs yet. Run a ticker first.';
+        select.innerHTML = '';
+        return;
+      }
+      const current = SIM.ticker;
+      select.innerHTML = runs.map(item =>
+        `<option value="${item.ticker}">${item.ticker} · ${new Date(item.modified).toLocaleDateString()}</option>`
+      ).join('');
+      SIM.ticker = '';
+      select.value = runs.some(item => item.ticker === current) ? current : runs[0].ticker;
+    } catch {
+      $('#sim-status').textContent = 'Could not load runs.';
+      return;
+    }
+  }
+  if (!select.value) return;
+  if (!force && SIM.data && SIM.ticker === select.value) return;
+  loadSimulation();
+}
+
+async function loadSimulation(keepTarget = false) {
+  const select = $('#sim-run');
+  const ticker = select.value;
+  if (!ticker) return;
+  const seq = (SIM.seq = (SIM.seq || 0) + 1);
+  const changedTicker = ticker !== SIM.ticker;
+  SIM.ticker = ticker;
+  $('#sim-status').textContent = `Fetching ${ticker} market data…`;
+  try {
+    const res = await fetch(`/api/simulation/${ticker}?range=${SIM.range}`);
+    const data = await res.json();
+    if (seq !== SIM.seq) return;
+    if (!res.ok) throw new Error(data.error || 'Request failed');
+    SIM.data = data;
+    if (changedTicker || !keepTarget) {
+      const target = $('#sim-target');
+      target.value = data.price ? (data.price * 1.2).toFixed(2) : '';
+    }
+    $('#sim-status').textContent =
+      `${ticker} · ${data.currency} · ${data.prices.length} price points`;
+    renderStats();
+    renderSimulation();
+  } catch (err) {
+    if (seq !== SIM.seq) return;
+    SIM.data = null;
+    $('#sim-svg').replaceChildren();
+    $('#sim-result').innerHTML = '';
+    $('#sim-status').textContent = `Market data unavailable: ${err.message}`;
+  }
+}
+
+function renderStats() {
+  const data = SIM.data;
+  if (!data || !data.prices.length) return;
+  const price = data.price;
+  const first = data.prices[0].close;
+  const highs = data.prices.map(p => p.close);
+  const high = Math.max(...highs);
+  const low = Math.min(...highs);
+  const change = first ? ((price - first) / first) * 100 : null;
+  const annual = data.dividend_rate ?? data.dividends.reduce((sum, d) => sum + d.amount, 0);
+  const yieldPct = price ? (annual / price) * 100 : null;
+  $('#sim-title').textContent = `${data.ticker} key data`;
+  $('#sim-stats').innerHTML = `
+    <div class="stat"><span>Stock price</span><b>${fmtMoney(price, data.currency)}</b></div>
+    <div class="stat"><span>Period change</span><b>${change === null ? '—' : (change >= 0 ? '+' : '') + fmtNum(change) + '%'}</b></div>
+    <div class="stat"><span>Period high</span><b>${fmtMoney(high, data.currency)}</b></div>
+    <div class="stat"><span>Period low</span><b>${fmtMoney(low, data.currency)}</b></div>
+    <div class="stat"><span>Trailing P/E</span><b>${fmtNum(data.trailing_pe)}</b></div>
+    <div class="stat"><span>Annual dividend</span><b>${fmtMoney(annual, data.currency)}</b></div>
+    <div class="stat"><span>Dividend yield</span><b>${yieldPct === null ? '—' : fmtNum(yieldPct) + '%'}</b></div>`;
+}
+
+function svgEl(name, attrs = {}) {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', name);
+  for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, value);
+  return el;
+}
+
+function simulate() {
+  const data = SIM.data;
+  if (!data || !data.price) return null;
+  const amount = Math.max(0, Number($('#sim-amount').value) || 0);
+  const years = Math.min(4, Math.max(0.25, Number($('#sim-years').value) || 4));
+  const entered = Number($('#sim-target').value);
+  const target = entered > 0 ? entered : data.price;
+  const annual = data.dividend_rate ?? data.dividends.reduce((sum, d) => sum + d.amount, 0) ?? 0;
+  const quarterly = annual / 4;
+  const startShares = amount / data.price;
+  let shares = startShares;
+  let cash = 0;
+  const rows = [];
+  const steps = Math.round(years * 4); // quarterly dividend schedule
+  for (let q = 1; q <= steps; q += 1) {
+    const t = q / steps;
+    const price = data.price + (target - data.price) * t;
+    if (SIM.mode === 'reinvest' && quarterly > 0) shares += (shares * quarterly) / price;
+    else cash += shares * quarterly;
+    if (q % 4 === 0 || q === steps) {
+      rows.push({
+        label: (q / 4).toFixed(2).replace(/\.?0+$/, '') + 'y',
+        price,
+        value: shares * price + cash,
+      });
+    }
+  }
+  const marketValue = shares * target;
+  const dividendGain = SIM.mode === 'cash' ? cash : marketValue - startShares * target;
+  return {
+    price: data.price, target, years, amount, rows,
+    marketValue, dividendGain, total: marketValue + (SIM.mode === 'cash' ? cash : 0),
+    profit: marketValue + (SIM.mode === 'cash' ? cash : 0) - amount,
+  };
+}
+
+function renderSimulation() {
+  const data = SIM.data;
+  if (!data || !data.prices.length) return;
+  const plan = simulate();
+  const svg = $('#sim-svg');
+  const W = 900, H = 430, L = 62, R = 18, T = 20, B = 36;
+  svg.replaceChildren();
+
+  const price = data.price;
+  const entered = Number($('#sim-target').value);
+  const target = entered > 0 ? entered : price;
+  const years = Math.min(4, Math.max(0.25, Number($('#sim-years').value) || 4));
+  const now = new Date(data.prices[data.prices.length - 1].date + 'T00:00:00Z');
+  const end = new Date(now.getTime() + years * 365.25 * 86400000);
+  const hist = data.prices.map(p => ({ t: new Date(p.date + 'T00:00:00Z').getTime(), p: p.close }));
+  const proj = [];
+  for (let i = 1; i <= 24; i += 1) {
+    const t = i / 24;
+    proj.push({
+      t: now.getTime() + (end.getTime() - now.getTime()) * t,
+      p: price + (target - price) * t,
+    });
+  }
+  const all = hist.concat(proj);
+  const t0 = all[0].t, t1 = all[all.length - 1].t;
+  const values = all.map(d => d.p).concat([price, target]);
+  let lo = Math.min(...values), hi = Math.max(...values);
+  const pad = (hi - lo || hi * 0.1 || 1) * 0.08;
+  lo -= pad; hi += pad;
+  const x = t => L + ((t - t0) / (t1 - t0 || 1)) * (W - L - R);
+  const y = v => T + (1 - (v - lo) / (hi - lo || 1)) * (H - T - B);
+
+  // Grid + y labels
+  for (let i = 0; i <= 4; i += 1) {
+    const v = lo + ((hi - lo) * i) / 4;
+    svg.append(svgEl('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: 'var(--line-soft)', 'stroke-width': 1 }));
+    const label = svgEl('text', { x: L - 8, y: y(v) + 4, 'text-anchor': 'end', fill: 'var(--muted)', 'font-size': 11 });
+    label.textContent = fmtMoney(v, data.currency);
+    svg.append(label);
+  }
+
+  // Historical area + line
+  const histPath = hist.map((d, i) => `${i ? 'L' : 'M'}${x(d.t).toFixed(1)},${y(d.p).toFixed(1)}`).join(' ');
+  svg.append(svgEl('path', {
+    d: `${histPath} L${x(hist[hist.length - 1].t)},${H - B} L${x(hist[0].t)},${H - B} Z`,
+    fill: 'var(--accent-soft)', stroke: 'none',
+  }));
+  svg.append(svgEl('path', { d: histPath, fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2 }));
+  const projPath = [{ t: now.getTime(), p: price }].concat(proj)
+    .map((d, i) => `${i ? 'L' : 'M'}${x(d.t).toFixed(1)},${y(d.p).toFixed(1)}`).join(' ');
+  svg.append(svgEl('path', { d: projPath, fill: 'none', stroke: 'var(--green)', 'stroke-width': 2, 'stroke-dasharray': '6 5' }));
+  svg.append(svgEl('line', {
+    x1: x(now.getTime()), x2: x(now.getTime()), y1: T, y2: H - B,
+    stroke: 'var(--line)', 'stroke-width': 1, 'stroke-dasharray': '3 4',
+  }));
+
+  // X labels
+  for (let i = 0; i <= 4; i += 1) {
+    const t = t0 + ((t1 - t0) * i) / 4;
+    const label = svgEl('text', {
+      x: x(t), y: H - B + 18, 'text-anchor': i === 0 ? 'start' : i === 4 ? 'end' : 'middle',
+      fill: 'var(--muted)', 'font-size': 11,
+    });
+    label.textContent = new Date(t).toISOString().slice(0, 10);
+    svg.append(label);
+  }
+
+  // Legend
+  const legend = svgEl('text', { x: L, y: T - 4, fill: 'var(--muted)', 'font-size': 11 });
+  legend.textContent = `price · projection to ${fmtMoney(target, data.currency)}`;
+  svg.append(legend);
+
+  // Hover crosshair + tooltip
+  const cross = svgEl('line', { y1: T, y2: H - B, stroke: 'var(--muted)', 'stroke-width': 1, opacity: 0 });
+  const dot = svgEl('circle', { r: 3.5, fill: 'var(--accent)', opacity: 0 });
+  const tip = svgEl('g', { opacity: 0 });
+  tip.append(svgEl('rect', { width: 176, height: 46, rx: 6, fill: 'var(--surface-2)', stroke: 'var(--line)' }));
+  const tipDate = svgEl('text', { x: 9, y: 18, fill: 'var(--muted)', 'font-size': 11 });
+  const tipPrice = svgEl('text', { x: 9, y: 35, fill: 'var(--text)', 'font-size': 12 });
+  tip.append(tipDate, tipPrice);
+  svg.append(cross, dot, tip);
+
+  svg.onmousemove = event => {
+    const rect = svg.getBoundingClientRect();
+    const px = ((event.clientX - rect.left) / rect.width) * W;
+    const best = all.reduce((a, b) =>
+      Math.abs(x(b.t) - px) < Math.abs(x(a.t) - px) ? b : a
+    );
+    cross.setAttribute('x1', x(best.t));
+    cross.setAttribute('x2', x(best.t));
+    cross.setAttribute('opacity', 0.6);
+    dot.setAttribute('cx', x(best.t));
+    dot.setAttribute('cy', y(best.p));
+    dot.setAttribute('opacity', 1);
+    tipDate.textContent = new Date(best.t).toISOString().slice(0, 10) + (best.t > now.getTime() ? ' · projected' : '');
+    tipPrice.textContent = fmtMoney(best.p, data.currency);
+    const tx = Math.min(Math.max(x(best.t) - 88, L), W - R - 176);
+    tip.setAttribute('transform', `translate(${tx},16)`);
+    tip.setAttribute('opacity', 1);
+  };
+  svg.onmouseleave = () => {
+    cross.setAttribute('opacity', 0);
+    dot.setAttribute('opacity', 0);
+    tip.setAttribute('opacity', 0);
+  };
+
+  if (!plan) return;
+  $('#sim-result').innerHTML = `
+    <div class="stat"><span>Market value</span><b>${fmtMoney(plan.marketValue, data.currency)}</b></div>
+    <div class="stat"><span>Dividend gains</span><b>${fmtMoney(plan.dividendGain, data.currency)}</b></div>
+    <div class="stat"><span>Total value</span><b>${fmtMoney(plan.total, data.currency)}</b></div>
+    <div class="stat"><span>Profit</span><b>${fmtMoney(plan.profit, data.currency)}</b></div>
+    ${plan.rows.map(row => `
+      <div class="stat"><span>Year ${row.label}</span><b>${fmtMoney(row.value, data.currency)}</b></div>`).join('')}`;
+}
+
+document.querySelectorAll('#sim-ranges button').forEach(button => {
+  button.onclick = () => {
+    SIM.range = button.dataset.range;
+    document.querySelectorAll('#sim-ranges button')
+      .forEach(other => other.classList.toggle('active', other === button));
+    if (SIM.ticker) loadSimulation(true);
+  };
+});
+
 
 // If a run is already in progress when the page loads, resume watching it.
 applyTheme(document.documentElement.dataset.theme || 'dark');

@@ -11,14 +11,20 @@ Run locally:   python app.py            (http://localhost:8000)
 from __future__ import annotations
 
 import io
+import json
 import os
 import re
 import subprocess
 import sys
 import threading
+import time
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from http.cookiejar import CookieJar
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
 from flask import (
     Flask,
@@ -131,6 +137,36 @@ def _log_tail(ticker: str, max_lines: int = 200) -> str:
         return ""
     text = log.read_text(errors="replace").splitlines()
     return "\n".join(text[-max_lines:])
+
+
+YAHOO_UA = "Mozilla/5.0 (X11; Linux x86_64) Stocky/1.0"
+_YAHOO_SESSION = {"opener": None, "crumb": "", "ts": 0.0}
+_YAHOO_LOCK = threading.Lock()
+
+
+def _yahoo_session():
+    """Return a cookie-aware opener and the crumb Yahoo's quote API requires."""
+    with _YAHOO_LOCK:
+        if _YAHOO_SESSION["opener"] and time.time() - _YAHOO_SESSION["ts"] < 3600:
+            return _YAHOO_SESSION["opener"], _YAHOO_SESSION["crumb"]
+        opener = build_opener(HTTPCookieProcessor(CookieJar()))
+        try:
+            # Often answers 404; the response still sets the identity cookie.
+            opener.open(Request("https://fc.yahoo.com", headers={"User-Agent": YAHOO_UA}), timeout=10).read()
+        except (HTTPError, URLError, TimeoutError):
+            pass
+        crumb = ""
+        try:
+            response = opener.open(
+                Request("https://query1.finance.yahoo.com/v1/test/getcrumb",
+                        headers={"User-Agent": YAHOO_UA}),
+                timeout=10,
+            )
+            crumb = response.read().decode("utf-8", "replace").strip()
+        except (HTTPError, URLError, TimeoutError):
+            pass
+        _YAHOO_SESSION.update(opener=opener, crumb=crumb, ts=time.time())
+        return opener, crumb
 
 
 def _worker(ticker: str, filings: int) -> None:
@@ -256,6 +292,101 @@ def files(ticker: str):
     if not summary:
         abort(404, "No results for that ticker yet.")
     return jsonify(summary)
+
+
+@app.get("/api/simulation/<ticker>")
+def simulation(ticker: str):
+    ticker = _normalise_ticker(ticker)
+    period = request.args.get("range", "1y")
+    periods = {
+        "1mo": ("1mo", 30),
+        "4mo": ("6mo", 122),
+        "6mo": ("6mo", 183),
+        "1y": ("1y", 365),
+        "3y": ("5y", 1095),
+        "5y": ("5y", 1826),
+        "10y": ("10y", 3652),
+        "max": ("max", None),
+    }
+    if period not in periods:
+        abort(400, "Unsupported simulation range.")
+
+    yahoo_ticker = ticker.replace(".", "-")
+    cutoff_days = periods[period][1]
+    chart_range = periods[period][0]
+    if cutoff_days and cutoff_days < 365:
+        # Always cover a trailing year so dividends are available for projections.
+        chart_range = "1y"
+    query = urlencode({"range": chart_range, "interval": "1d", "events": "div,splits"})
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_ticker}?{query}"
+    req = Request(url, headers={"User-Agent": YAHOO_UA})
+    try:
+        with urlopen(req, timeout=15) as response:
+            payload = json.load(response)
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+        abort(502, f"Yahoo Finance request failed: {exc}")
+
+    result = ((payload.get("chart") or {}).get("result") or [None])[0]
+    if not result:
+        message = (payload.get("chart") or {}).get("error") or {}
+        abort(502, message.get("description") or "Yahoo Finance returned no price data.")
+
+    quotes = (result.get("indicators", {}).get("quote") or [{}])[0]
+    cutoff = datetime.now(timezone.utc) - timedelta(days=cutoff_days) if cutoff_days else None
+    prices = []
+    for stamp, close in zip(result.get("timestamp") or [], quotes.get("close") or []):
+        if close is None:
+            continue
+        day = datetime.fromtimestamp(stamp, timezone.utc)
+        if cutoff and day < cutoff:
+            continue
+        prices.append({"date": day.date().isoformat(), "close": close})
+
+    dividend_cutoff = datetime.now(timezone.utc) - timedelta(days=365)
+    dividends = []
+    for stamp, event in (result.get("events", {}).get("dividends") or {}).items():
+        day = datetime.fromtimestamp(int(stamp), timezone.utc)
+        if day >= dividend_cutoff:
+            dividends.append({"date": day.date().isoformat(), "amount": event.get("amount", 0)})
+    dividends.sort(key=lambda item: item["date"])
+
+    trailing_pe = None
+    dividend_rate = None
+    try:
+        opener, crumb = _yahoo_session()
+        quote_url = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/" + yahoo_ticker
+        quote_url += "?" + urlencode({
+            "modules": "summaryDetail,defaultKeyStatistics",
+            "crumb": crumb,
+        })
+        with opener.open(Request(quote_url, headers={"User-Agent": YAHOO_UA}), timeout=10) as response:
+            quote = json.load(response)
+        details = ((quote.get("quoteSummary") or {}).get("result") or [{}])[0]
+        summary = details.get("summaryDetail", {})
+        raw_pe = (summary.get("trailingPE") or {}).get("raw")
+        if raw_pe is None:
+            raw_pe = (details.get("defaultKeyStatistics", {}).get("trailingPE") or {}).get("raw")
+        if raw_pe is None:
+            stats = details.get("defaultKeyStatistics", {})
+            eps = (stats.get("trailingEps") or {}).get("raw")
+            spot = (result.get("meta") or {}).get("regularMarketPrice")
+            if eps and spot:
+                raw_pe = spot / eps
+        trailing_pe = raw_pe
+        dividend_rate = (summary.get("dividendRate") or {}).get("raw")
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, IndexError, AttributeError):
+        pass
+
+    meta = result.get("meta", {})
+    return jsonify(
+        ticker=ticker,
+        currency=meta.get("currency", "USD"),
+        price=meta.get("regularMarketPrice") or (prices[-1]["close"] if prices else None),
+        trailing_pe=trailing_pe,
+        dividend_rate=dividend_rate,
+        prices=prices,
+        dividends=dividends,
+    )
 
 
 @app.get("/files/<ticker>/<path:name>")
