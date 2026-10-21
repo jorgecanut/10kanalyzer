@@ -164,7 +164,7 @@
   .panel-body > :last-child { margin-bottom:0; }
 
   /* Simulation: market data left of the chart, projection underneath. */
-  .sim-row { display:grid; grid-template-columns:250px minmax(0,1fr); gap:20px; align-items:start; }
+  .sim-row { display:grid; grid-template-columns:minmax(0,1fr) 250px; gap:20px; align-items:start; }
   .sim-section h3, .sim-market h3 { margin:0 0 12px; font-size:12px; color:var(--muted); font-weight:600;
                                     text-transform:uppercase; letter-spacing:.04em; }
   .sim-meta { color:var(--muted); font-size:12px; margin:0 0 10px; }
@@ -174,9 +174,13 @@
                          color:var(--muted); font-size:12px; cursor:pointer; }
   .sim-controls button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
   .sim-stats { display:block; }
-  .sim-result { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0 20px;
-                margin-top:14px; padding-top:10px; border-top:1px solid var(--line-soft); }
+  .sim-result { margin-top:14px; padding-top:10px; border-top:1px solid var(--line-soft); }
   .sim-result:empty { display:none; }
+  .sim-summary { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0 20px; }
+  .sim-years { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:0 20px;
+               margin-top:12px; padding-top:10px; border-top:1px solid var(--line-soft); }
+  .sim-years .stat { border-bottom:0; padding:4px 0; font-size:12px; }
+  .sim-years .stat b { font-weight:500; color:var(--muted); }
   .stat { display:flex; justify-content:space-between; gap:12px; padding:7px 0;
           border-bottom:1px solid var(--line-soft); font-size:13px; }
   .stat:last-child { border-bottom:0; }
@@ -321,10 +325,6 @@ the pipeline log streams into this terminal.</pre>
       <div class="panel-body">
         <p class="sim-meta" id="sim-status">Loading…</p>
         <div class="sim-row">
-          <aside class="sim-market">
-            <h3 id="sim-title">Market data</h3>
-            <div id="sim-stats" class="sim-stats"><div class="stat"><span>Loading…</span><b>—</b></div></div>
-          </aside>
           <div class="sim-chart">
             <svg id="sim-svg" viewBox="0 0 900 430" role="img"
                  aria-label="Stock price history and investment projection"></svg>
@@ -339,6 +339,10 @@ the pipeline log streams into this terminal.</pre>
               <button data-range="max">max</button>
             </div>
           </div>
+          <aside class="sim-market">
+            <h3 id="sim-title">Market data</h3>
+            <div id="sim-stats" class="sim-stats"><div class="stat"><span>Loading…</span><b>—</b></div></div>
+          </aside>
         </div>
         <div class="sim-section">
           <h3>Your projection</h3>
@@ -566,8 +570,29 @@ async function loadRecent() {
     <li>
       <span class="t" onclick="openRecent('${it.ticker}')">${it.ticker}</span>
       <span class="muted">${it.charts.length} charts · ${new Date(it.modified).toLocaleString()}
-        · <a href="/download/${it.ticker}">zip</a></span>
+        · <a href="/download/${it.ticker}">zip</a>
+        · <a href="#" onclick="removeRecent('${it.ticker}');return false">remove</a></span>
     </li>`).join('');
+}
+
+async function removeRecent(ticker) {
+  if (!confirm(`Remove ${ticker}? This deletes financial_graphs/${ticker}.`)) return;
+  const res = await fetch(`/api/recent/${ticker}`, { method: 'DELETE' });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Could not remove run.');
+    return;
+  }
+  if (SIM.ticker === ticker) {
+    SIM.ticker = '';
+    SIM.data = null;
+    $('#sim-svg').replaceChildren();
+    $('#sim-result').innerHTML = '';
+    $('#sim-status').textContent = `${ticker} removed.`;
+  }
+  $('#sim-run').dataset.loaded = '';
+  $('#results-recent').innerHTML = '';
+  loadRecent();
 }
 
 function openRecent(ticker) {
@@ -689,7 +714,7 @@ function simulate() {
   const years = Math.max(0.25, Number($('#sim-years').value) || 4);
   const entered = Number($('#sim-target').value);
   const target = entered > 0 ? entered : data.price;
-  const annual = data.dividend_rate ?? data.dividends.reduce((sum, d) => sum + d.amount, 0) ?? 0;
+  const annual = data.dividend_rate || data.dividends.reduce((sum, d) => sum + d.amount, 0) || 0;
   const quarterly = annual / 4;
   const startShares = amount / data.price;
   let shares = startShares;
@@ -712,7 +737,7 @@ function simulate() {
   const marketValue = shares * target;
   const dividendGain = SIM.mode === 'cash' ? cash : marketValue - startShares * target;
   return {
-    price: data.price, target, years, amount, rows,
+    price: data.price, target, years, amount, rows, annual,
     marketValue, dividendGain, total: marketValue + (SIM.mode === 'cash' ? cash : 0),
     profit: marketValue + (SIM.mode === 'cash' ? cash : 0) - amount,
   };
@@ -826,12 +851,16 @@ function renderSimulation() {
 
   if (!plan) return;
   $('#sim-result').innerHTML = `
-    <div class="stat"><span>Market value</span><b>${fmtMoney(plan.marketValue, data.currency)}</b></div>
-    <div class="stat"><span>Dividend gains</span><b>${fmtMoney(plan.dividendGain, data.currency)}</b></div>
-    <div class="stat"><span>Total value</span><b>${fmtMoney(plan.total, data.currency)}</b></div>
-    <div class="stat"><span>Profit</span><b>${fmtMoney(plan.profit, data.currency)}</b></div>
-    ${plan.rows.map(row => `
-      <div class="stat"><span>Year ${row.label}</span><b>${fmtMoney(row.value, data.currency)}</b></div>`).join('')}`;
+    <div class="sim-summary">
+      <div class="stat"><span>Market value</span><b>${fmtMoney(plan.marketValue, data.currency)}</b></div>
+      <div class="stat"><span>Dividend gains</span><b>${plan.annual ? fmtMoney(plan.dividendGain, data.currency) : 'No dividends'}</b></div>
+      <div class="stat"><span>Total value</span><b>${fmtMoney(plan.total, data.currency)}</b></div>
+      <div class="stat"><span>Profit</span><b>${fmtMoney(plan.profit, data.currency)}</b></div>
+    </div>
+    <div class="sim-years">
+      ${plan.rows.map(row => `
+        <div class="stat"><span>Year ${row.label}</span><b>${fmtMoney(row.value, data.currency)}</b></div>`).join('')}
+    </div>`;
 }
 
 document.querySelectorAll('#sim-ranges button').forEach(button => {

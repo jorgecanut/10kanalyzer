@@ -14,6 +14,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -283,6 +284,25 @@ def recent():
     for item in items:
         item.pop("modified_ts", None)
     return jsonify(items=items)
+
+
+@app.delete("/api/recent/<ticker>")
+def remove_recent(ticker: str):
+    ticker = _normalise_ticker(ticker)
+    with JOBS_LOCK:
+        job = JOBS.get(ticker)
+        if job and job["status"] in ("queued", "running"):
+            abort(409, "A run is active for that ticker.")
+    directory = _ticker_dir(ticker)
+    if not directory.is_dir():
+        abort(404, "No results for that ticker yet.")
+    try:
+        shutil.rmtree(directory)
+    except OSError as exc:
+        abort(500, f"Could not remove results: {exc}")
+    with JOBS_LOCK:
+        JOBS.pop(ticker, None)
+    return jsonify(removed=ticker)
 
 
 @app.get("/api/files/<ticker>")
