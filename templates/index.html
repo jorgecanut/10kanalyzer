@@ -569,7 +569,7 @@ async function loadRecent() {
   list.innerHTML = items.map(it => `
     <li>
       <span class="t" onclick="openRecent('${it.ticker}')">${it.ticker}</span>
-      <span class="muted">${it.charts.length} charts · ${new Date(it.modified).toLocaleString()}
+      <span class="muted">${it.charts.length} charts · ${fmtDate(it.modified)}
         · <a href="/download/${it.ticker}">zip</a>
         · <a href="#" onclick="removeRecent('${it.ticker}');return false">remove</a></span>
     </li>`).join('');
@@ -612,6 +612,13 @@ const fmtMoney = (v, currency = 'USD') => {
 };
 const fmtNum = (v, digits = 2) =>
   v === null || v === undefined || Number.isNaN(v) ? '—' : Number(v).toFixed(digits);
+const fmtDate = value => {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+  return `${day}/${month}/${d.getUTCFullYear()}`;
+};
 
 function setSimMode(mode) {
   SIM.mode = mode;
@@ -634,7 +641,7 @@ async function initSimulation(force = false) {
       }
       const current = SIM.ticker;
       select.innerHTML = runs.map(item =>
-        `<option value="${item.ticker}">${item.ticker} · ${new Date(item.modified).toLocaleDateString()}</option>`
+        `<option value="${item.ticker}">${item.ticker} · ${fmtDate(item.modified)}</option>`
       ).join('');
       SIM.ticker = '';
       select.value = runs.some(item => item.ticker === current) ? current : runs[0].ticker;
@@ -808,7 +815,7 @@ function renderSimulation() {
       x: x(t), y: H - B + 18, 'text-anchor': i === 0 ? 'start' : i === 4 ? 'end' : 'middle',
       fill: 'var(--muted)', 'font-size': 11,
     });
-    label.textContent = new Date(t).toISOString().slice(0, 10);
+    label.textContent = fmtDate(t);
     svg.append(label);
   }
 
@@ -839,7 +846,7 @@ function renderSimulation() {
     dot.setAttribute('cx', x(best.t));
     dot.setAttribute('cy', y(best.p));
     dot.setAttribute('opacity', 1);
-    tipDate.textContent = new Date(best.t).toISOString().slice(0, 10) + (best.t > now.getTime() ? ' · projected' : '');
+    tipDate.textContent = fmtDate(best.t) + (best.t > now.getTime() ? ' · projected' : '');
     tipPrice.textContent = fmtMoney(best.p, data.currency);
     const tx = Math.min(Math.max(x(best.t) - 88, L), W - R - 176);
     tip.setAttribute('transform', `translate(${tx},16)`);
