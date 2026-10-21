@@ -1,14 +1,17 @@
+# syntax=docker/dockerfile:1
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
     MPLBACKEND=Agg
 
 WORKDIR /app
 
 # Dependencies first so the layer is cached across code changes.
+# The BuildKit cache mount keeps downloaded wheels between rebuilds, even
+# when the requirements layer itself is invalidated.
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 
 # Application code.
 COPY edgar_dashboard.py xbrl_extract.py verify_facts.py app.py charts.py ./
