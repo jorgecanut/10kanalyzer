@@ -1,80 +1,72 @@
-# Auto-deploy on push
+# Deploy without GitHub
 
-Every push to `main` runs `stocky` on the server through a self-hosted GitHub
-Actions runner. `.github/workflows/deploy.yml` is the whole pipeline; there is
-no checkout, no third-party action, and no secret involved.
+Deploys go straight from the laptop to the TrueNAS box over the VPN. GitHub is
+an optional backup remote and plays no part in deployment.
 
-## Security warning (public repository)
-
-GitHub recommends **not** attaching self-hosted runners to public repositories.
-The mitigations used here:
-
-- The workflow triggers only on `push` to `main` and manual dispatch.
-- No `pull_request` or `pull_request_target` trigger. Never add one.
-- No third-party actions, so nothing from the marketplace runs on the runner.
-- The job is restricted to `jorgecanut/10kanalyzer` and `refs/heads/main`.
-- Only users with write access can push to `main` or dispatch the workflow.
-
-Anyone can still open a PR, but its code cannot reach the runner unless a
-maintainer merges it. Review merged changes as you would any server change.
-
-## 1. Install the runner
-
-Use GitHub's current install commands: repository **Settings → Actions →
-Runners → New self-hosted runner**. Run it as a dedicated user, not as your
-login and not as root. `docker` group membership is effectively root-equivalent,
-so keep that user limited to this machine's deploy duties.
-
-```bash
-sudo useradd -m -s /bin/bash ghrunner
-sudo usermod -aG docker ghrunner          # only if stocky uses rootful Docker
-sudo -iu ghrunner
-mkdir -p ~/actions-runner && cd ~/actions-runner
-# Download the tarball shown on the "New self-hosted runner" page, then:
-tar xzf actions-runner-linux-x64-*.tar.gz
-./config.sh \
-  --url https://github.com/jorgecanut/10kanalyzer \
-  --token <RUNNER_TOKEN_FROM_GITHUB_UI> \
-  --labels stocky \
-  --name stocky-01 \
-  --unattended
-sudo ./svc.sh install ghrunner
-sudo ./svc.sh start
+```
+laptop ──git push nas main──► /mnt/tanques/stocky/10kanalyzer.git (bare)
+                                     │ post-receive hook
+                                     ▼
+                            /mnt/tanques/stocky/10kanalyzer
+                            git reset --hard origin/main
+                            docker compose up -d --build
+                            curl /healthz
 ```
 
-The `stocky` label is required: the workflow targets `[self-hosted, stocky]`.
+## One-time setup
 
-Prefer an ephemeral runner (`--ephemeral`) restarted after each job if you want
-to limit what a bad deploy can leave behind.
+1. Install the laptop key on the server (one password prompt):
 
-## 2. Requirements for `stocky`
+   ```bash
+   ssh-copy-id -i ~/.ssh/stocky.pub truenas_admin@canut.xyz
+   ```
 
-- On `PATH` for the `ghrunner` user (the systemd service has a minimal `PATH`;
-  check with `sudo -iu ghrunner which stocky`).
-- Non-interactive and fail-fast, e.g.:
+   `~/.ssh/config` already maps `nas` to `canut.xyz` with that key.
+
+2. Create the bare repo, repoint the server checkout and install the hook:
+
+   ```bash
+   ssh nas 'bash -s' < scripts/nas-setup.sh
+   ```
+
+   The script prints a warning if the deploy user cannot reach Docker. Fix it
+   with `sudo usermod -aG docker truenas_admin` and a fresh login, or make
+   `sudo -n docker` work; the hook tries both.
+
+3. Push:
+
+   ```bash
+   git push nas main      # or: git deploy
+   ```
+
+   The push blocks until the image is rebuilt and `/healthz` answers. Full
+   output also lands in `/mnt/tanques/stocky/deploy.log`.
+
+## Rules
+
+- The server checkout is a **deploy target**: never edit files there. The hook
+  runs `git reset --hard`, so local edits are discarded. Runtime state lives in
+  bind mounts (`financial_graphs`, `edgar_cache`, `edgar_data`) and `.env`,
+  all untracked.
+- Only `main` triggers a deploy. Other branches can be pushed without a rebuild.
+- GitHub stays as a backup: `git push origin main` still works, but it no longer
+  deploys anything. The self-hosted runner is no longer needed; stop and remove
+  it at leisure.
+- To redeploy the current commit (e.g. after changing `.env`):
 
   ```bash
-  #!/usr/bin/env bash
-  set -euo pipefail
-  cd /mnt/tanques/stocky/10kanalyzer
-  git pull --ff-only
-  docker compose build
-  docker compose up -d --remove-orphans
+  ssh nas 'cd /mnt/tanques/stocky/10kanalyzer && docker compose up -d --build'
   ```
 
-- Any failure must exit non-zero, otherwise the workflow reports success.
-- A deploy lock is optional: the workflow already serialises runs with
-  `concurrency`, so two pushes queue rather than overlap.
+- Verify with `/healthz`: `features` and the `sha1` of `edgar_dashboard.py` /
+  `charts.py` must match the pushed commit (`sha1sum` in the repo root).
 
-## 3. Repository settings
+## Troubleshooting
 
-- **Settings → Actions → General → Fork pull request workflows**: require
-  approval for all outside collaborators. This is the default for public repos;
-  do not relax it.
-- Keep this the only workflow, and keep it free of `pull_request` triggers.
-
-## 4. Verify
-
-- Merge this change. The run stays **Queued** until the runner is online.
-- Start the runner; the queued job should deploy.
-- Later, use **Actions → Deploy to server → Run workflow** to test on demand.
+- **Push rejects the hook** — read the tail of `/mnt/tanques/stocky/deploy.log`;
+  the push fails when the build or health check fails.
+- **`no docker access`** — the deploy user is not in the `docker` group and
+  passwordless sudo is unavailable.
+- **App runs old code** — compare the `sha1` values from `/healthz` with
+  `sha1sum` of the checkout; a mismatched hash means the container was not
+  rebuilt.

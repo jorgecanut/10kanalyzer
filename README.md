@@ -138,12 +138,13 @@ in-flight browser requests, and resets the interface to its initial state. It
 never deletes generated files; run logs and partial results stay in
 `financial_graphs/`.
 
-## Auto-deploy on push
+## Deploy on push (direct, no GitHub)
 
-A self-hosted GitHub Actions runner on the server runs `stocky` after every
-push to `main` (`.github/workflows/deploy.yml`). Because the repository is
-public, the workflow deliberately has no `pull_request` trigger and uses no
-third-party actions. Setup and security notes: **[DEPLOY.md](DEPLOY.md)**.
+`git push nas main` (alias `git deploy`) pushes to a bare repo on the TrueNAS
+box over the VPN; a `post-receive` hook resets the server checkout, rebuilds
+the container and waits for `/healthz`. GitHub is a backup remote only and
+deploys nothing. One-time setup, rules and troubleshooting:
+**[DEPLOY.md](DEPLOY.md)**.
 
 ## Docker
 
