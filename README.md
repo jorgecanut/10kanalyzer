@@ -93,6 +93,13 @@ Routes:
 | `GET` | `/download/<ticker>/<name>` | One file |
 | `GET` | `/healthz` | Health probe |
 
+## Auto-deploy on push
+
+A self-hosted GitHub Actions runner on the server runs `stocky` after every
+push to `main` (`.github/workflows/deploy.yml`). Because the repository is
+public, the workflow deliberately has no `pull_request` trigger and uses no
+third-party actions. Setup and security notes: **[DEPLOY.md](DEPLOY.md)**.
+
 ## Docker
 
 A single service that publishes one HTTP port:
