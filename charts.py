@@ -17,6 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as path_effects
 import matplotlib.ticker as mticker
+from matplotlib.transforms import blended_transform_factory
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -297,19 +298,15 @@ def _declutter(
     candidates: list[tuple[float, float, str, int]],
     fontsize: int = 5,
     color: str = "#374151",
-    min_value_fraction: float = 0.0,
     draw_ax: plt.Axes | None = None,
+    draw_transform=None,
 ) -> None:
-    """Draw labels so none overlap; drop the ones that cannot fit.
+    """Draw every label, pushing each away from the ones already placed.
 
     Each label is pushed away from its anchor in ``prefer`` direction first,
     then to the opposite side, then further out, until it clears every label
-    already placed. A label with no free slot after six steps is dropped: a
-    missing number is better than two numbers stacked on each other.
-
-    ``min_value_fraction`` skips labels for bars too short to read, measured
-    against the axis range. Use it for bar charts only: on a line chart a near
-    zero reading is exactly what the viewer needs to see.
+    already placed. Every label is drawn: when no clear slot exists the label
+    still goes out at its first natural offset, so no column is left unlabelled.
     """
     if not candidates:
         return
@@ -319,35 +316,39 @@ def _declutter(
     x_range = (x1 - x0) or 1.0
     y_half = 0.018 * y_range
     placed: list[tuple[float, float, float]] = []
-    # Labels are sometimes painted on a twin axis so they sit above its line.
+    # ``draw_ax`` may differ from ``ax`` so labels can be painted on a
+    # foreground axes while their positions are measured on a twin axis.
     target = draw_ax or ax
+    trans = draw_transform or ax.transData
 
     for x, y, text, prefer in candidates:
-        if abs(y) < min_value_fraction * y_range:
-            continue
         width = 0.0042 * x_range * max(len(text), 3)
+        centre = None
         # Step 0 is deliberately skipped: a label centred on its own anchor sits
         # on the marker or the bar edge. Always leave at least one step of room.
         for step in (1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6):
             dy = prefer * step * 2.1 * y_half
-            centre = y + dy
-            if not (y0 <= centre <= y1):
+            trial = y + dy
+            if not (y0 <= trial <= y1):
                 continue
             clear = all(
                 abs(x - px) >= (width + pw) / 2 + 0.006 * x_range
-                or abs(centre - py) >= 2.2 * y_half
+                or abs(trial - py) >= 2.2 * y_half
                 for px, py, pw in placed
             )
             if clear:
-                placed.append((x, centre, width))
-                target.text(
-                    x, centre, text, ha="center", va="center",
-                    fontsize=fontsize, color=color, transform=ax.transData,
-                    # A white halo keeps the number readable when it lands on
-                    # a bar or a line; it does not hide the data underneath.
-                    path_effects=[path_effects.withStroke(linewidth=2, foreground="white")],
-                )
+                centre = trial
                 break
+        if centre is None:
+            centre = float(np.clip(y + prefer * 2.1 * y_half, y0, y1))
+        placed.append((x, centre, width))
+        target.text(
+            x, centre, text, ha="center", va="center",
+            fontsize=fontsize, color=color, transform=trans,
+            # A white halo keeps the number readable when it lands on
+            # a bar or a line; it does not hide the data underneath.
+            path_effects=[path_effects.withStroke(linewidth=2, foreground="white")],
+        )
 
 
 def _legend(ax: plt.Axes, derived_labels: set[str]) -> None:
@@ -543,11 +544,13 @@ def chart_balance(
                     candidates, bar.get_x() + bar.get_width() / 2, bar.get_height(), v
                 )
 
-        # Shares on right axis.
-        overlay = None
+        # Shares on right axis. The twin axis is pushed behind the bars so its
+        # line never crosses over the columns; its labels are drawn on the
+        # primary axes (blended transform) so they still sit above the bars.
         if not shares.reindex(window).dropna().empty:
             ax2 = ax.twinx()
-            overlay = ax2
+            ax2.set_zorder(ax.get_zorder() - 1)
+            ax.patch.set_visible(False)
             ax2.plot(
                 positions,
                 shares.reindex(window).to_numpy(),
@@ -562,12 +565,18 @@ def chart_balance(
             ax2.set_ylabel("Shares outstanding (millions)", fontsize=10)
             ax2.tick_params(axis="y", labelsize=8)
             ax2.margins(y=0.20)
-            _declutter(ax2, share_candidates, color=_color_for("Total Shares Outstanding"))
+            _declutter(
+                ax2,
+                share_candidates,
+                color=_color_for("Total Shares Outstanding"),
+                draw_ax=ax,
+                draw_transform=blended_transform_factory(ax.transData, ax2.transData),
+            )
 
         _style_axes(ax, window)
         ax.set_ylabel("USD millions", fontsize=10)
         ax.margins(y=0.16)
-        _declutter(ax, candidates, min_value_fraction=0.03, draw_ax=overlay)
+        _declutter(ax, candidates)
         _legend(ax, derived_labels)
         paths.append(_save(fig, os.path.join(output_dir, f"03_balance_{suffix}.png")))
     return paths
@@ -857,7 +866,7 @@ def _grouped_bar_windows(
         _style_axes(ax, window)
         ax.set_ylabel(ylabel, fontsize=10)
         ax.margins(y=0.14)
-        _declutter(ax, candidates, min_value_fraction=0.03)
+        _declutter(ax, candidates)
         if active:
             _legend(ax, derived_labels)
         else:
