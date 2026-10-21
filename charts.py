@@ -545,22 +545,33 @@ def chart_balance(
                 )
 
         # Shares on right axis. The twin axis is pushed behind the bars so its
-        # line never crosses over the columns; its labels are drawn on the
-        # primary axes (blended transform) so they still sit above the bars.
+        # line never crosses over the columns. Markers and labels are painted
+        # on the primary axes (blended transform) so they stay in front.
         if not shares.reindex(window).dropna().empty:
             ax2 = ax.twinx()
             ax2.set_zorder(ax.get_zorder() - 1)
             ax.patch.set_visible(False)
+            share_color = _color_for("Total Shares Outstanding")
+            share_values = shares.reindex(window).to_numpy()
+            share_trans = blended_transform_factory(ax.transData, ax2.transData)
             ax2.plot(
                 positions,
-                shares.reindex(window).to_numpy(),
-                color=_color_for("Total Shares Outstanding"),
-                marker="s",
+                share_values,
+                color=share_color,
                 linewidth=2,
                 label="Total Shares Outstanding",
             )
+            ax.plot(
+                positions,
+                share_values,
+                linestyle="none",
+                marker="s",
+                markersize=6,
+                color=share_color,
+                transform=share_trans,
+            )
             share_candidates: list[tuple[float, float, str, int]] = []
-            for x, v in enumerate(shares.reindex(window).to_numpy()):
+            for x, v in enumerate(share_values):
                 _collect_label(share_candidates, x, v, v, "shares")
             ax2.set_ylabel("Shares outstanding (millions)", fontsize=10)
             ax2.tick_params(axis="y", labelsize=8)
@@ -568,9 +579,9 @@ def chart_balance(
             _declutter(
                 ax2,
                 share_candidates,
-                color=_color_for("Total Shares Outstanding"),
+                color=share_color,
                 draw_ax=ax,
-                draw_transform=blended_transform_factory(ax.transData, ax2.transData),
+                draw_transform=share_trans,
             )
 
         _style_axes(ax, window)
