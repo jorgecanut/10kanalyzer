@@ -318,10 +318,6 @@ All checks pass exactly (e.g. KHC 125/125, the default sample 284/284).
 - Cheapness: rank by low P/E percentile — cheap against its own history, not
   the market — and by high FCF yield.
 - Cross-check insider buys (Form 4 code `P`); sells (code `S`) need a reason.
-- Sanity-check the price with the **Simulation** tab's "What the market
-  implies" card: one-stage implied growth is `discount rate − FCF / market cap`.
-  If that sits far above the historical FCF CAGR, the price asks for growth the
-  company has never delivered.
 - These scores are mechanical screens, not recommendations.
 
 ## Security & reliability hardening (2026-10)

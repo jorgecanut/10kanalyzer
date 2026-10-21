@@ -449,21 +449,6 @@ the pipeline log streams into this terminal.</pre>
             </div>
           </div>
           <div class="sim-result" id="sim-result"></div>
-          <div class="panel" id="implied-panel">
-            <div class="panel-head">
-              <span class="panel-title">What the market implies</span>
-              <span class="panel-actions"><span class="muted">using market cap as EV proxy</span></span>
-            </div>
-            <div class="panel-body">
-              <div class="sim-form">
-                <div>
-                  <label for="sim-discount">Discount rate %</label>
-                  <input id="sim-discount" type="number" step="0.5" value="9" oninput="renderImplied()">
-                </div>
-              </div>
-              <p class="sim-meta" id="implied-text">implied growth: — · historical FCF CAGR (— y): —</p>
-            </div>
-          </div>
           <p class="sim-note">Future dividends hold the trailing yield, so they grow with the
             projected price. Estimates only; no taxes or fees.</p>
         </div>
@@ -905,7 +890,6 @@ async function loadSimulation(keepTarget = false) {
   const seq = (SIM.seq = (SIM.seq || 0) + 1);
   const changedTicker = ticker !== SIM.ticker;
   SIM.ticker = ticker;
-  loadImplied(ticker);
   $('#sim-status').textContent = `Fetching ${ticker} market data…`;
   try {
     const res = await fetch(`/api/simulation/${ticker}?range=${SIM.range}`);
@@ -1117,67 +1101,6 @@ function renderSimulation() {
 }
 
 /* Implied growth ----------------------------------------------------------- */
-
-const IMPLIED = { ticker: '', latest: null, rows: [] };
-
-function fcfTrend(rows) {
-  const valid = rows
-    .filter(row => Number(row && row.FreeCashFlow) > 0)
-    .slice()
-    .sort((a, b) => Number(a.fiscal_year) - Number(b.fiscal_year));
-  if (valid.length < 2) return null;
-  const first = valid[0], last = valid[valid.length - 1];
-  const span = Number(last.fiscal_year) - Number(first.fiscal_year);
-  const years = span > 0 ? span : valid.length - 1;
-  if (!years) return null;
-  return {
-    rate: Math.pow(Number(last.FreeCashFlow) / Number(first.FreeCashFlow), 1 / years) - 1,
-    years,
-  };
-}
-
-function latestFcf(rows) {
-  const sorted = rows.slice().sort((a, b) => Number(a.fiscal_year) - Number(b.fiscal_year));
-  const row = sorted[sorted.length - 1];
-  const value = row ? Number(row.FreeCashFlow) : NaN;
-  return Number.isFinite(value) ? value : null;
-}
-
-function renderImplied() {
-  const text = $('#implied-text');
-  if (!text) return;
-  const latest = IMPLIED.latest;
-  const discount = Number($('#sim-discount').value);
-  const trend = fcfTrend(IMPLIED.rows);
-  const fcf = latestFcf(IMPLIED.rows);
-  let growth = '—';
-  if (latest && Number.isFinite(discount) && fcf !== null) {
-    // market_cap and FreeCashFlow share the same USD-millions scale.
-    const ev = Number(latest.market_cap);
-    if (ev > 0) growth = fmtNum(discount - (fcf / ev) * 100, 1) + '%';
-  }
-  text.textContent = `implied growth: ${growth} · historical FCF CAGR (${trend ? trend.years : '—'} y): ${trend ? fmtNum(trend.rate * 100, 1) + '%' : '—'}`;
-}
-
-async function loadImplied(ticker) {
-  IMPLIED.ticker = ticker;
-  try {
-    const [evalRes, fundRes] = await Promise.all([
-      fetch(`/api/evaluation/${encodeURIComponent(ticker)}`),
-      fetch(`/api/fundamentals/${encodeURIComponent(ticker)}`),
-    ]);
-    const evaluation = evalRes.ok ? await evalRes.json() : null;
-    const fundamentals = fundRes.ok ? await fundRes.json() : null;
-    if (IMPLIED.ticker !== ticker) return;
-    IMPLIED.latest = evaluation && evaluation.latest ? evaluation.latest : null;
-    IMPLIED.rows = fundamentals && Array.isArray(fundamentals.rows) ? fundamentals.rows : [];
-  } catch {
-    if (IMPLIED.ticker !== ticker) return;
-    IMPLIED.latest = null;
-    IMPLIED.rows = [];
-  }
-  renderImplied();
-}
 
 document.querySelectorAll('#sim-ranges button').forEach(button => {
   button.onclick = () => {

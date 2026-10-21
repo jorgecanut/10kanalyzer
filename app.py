@@ -55,6 +55,7 @@ TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 ALLOWED_FILES = {".png", ".csv", ".log"}
 
 app = Flask(__name__)
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = threading.Lock()
@@ -279,6 +280,8 @@ def set_security_headers(response):
         "default-src 'self'; img-src 'self' data:; "
         "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
     )
+    if response.mimetype == "text/html":
+        response.headers["Cache-Control"] = "no-store"
     return response
 
 
