@@ -15,6 +15,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as path_effects
 import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
@@ -272,29 +273,100 @@ def _style_axes(ax: plt.Axes, years: list[int]) -> None:
     ax.axhline(0, color="black", linewidth=0.8)
 
 
-def _label_bar(ax: plt.Axes, x: float, y: float, value: float, fmt: str = "mm") -> None:
+def _collect_label(
+    candidates: list[tuple[float, float, str, int]],
+    x: float,
+    y: float,
+    value: float,
+    fmt: str = "mm",
+) -> None:
+    """Queue a value label; placement happens once the axes limits are final."""
     if pd.isna(value):
         return
-    text = _fmt_mm(value) if fmt == "mm" else _fmt_pct(value)
-    offset = 3 if value >= 0 else -3
-    va = "bottom" if value >= 0 else "top"
-    ax.annotate(
-        text,
-        (x, y),
-        textcoords="offset points",
-        xytext=(0, offset),
-        ha="center",
-        va=va,
-        fontsize=5,
-        rotation=0,
-    )
+    if fmt == "mm":
+        text = _fmt_mm(value)
+    elif fmt == "shares":
+        text = _fmt_shares(value)
+    else:
+        text = _fmt_pct(value)
+    candidates.append((x, y, text, 1 if value >= 0 else -1))
+
+
+def _declutter(
+    ax: plt.Axes,
+    candidates: list[tuple[float, float, str, int]],
+    fontsize: int = 5,
+    color: str = "#374151",
+    min_value_fraction: float = 0.0,
+    draw_ax: plt.Axes | None = None,
+) -> None:
+    """Draw labels so none overlap; drop the ones that cannot fit.
+
+    Each label is pushed away from its anchor in ``prefer`` direction first,
+    then to the opposite side, then further out, until it clears every label
+    already placed. A label with no free slot after six steps is dropped: a
+    missing number is better than two numbers stacked on each other.
+
+    ``min_value_fraction`` skips labels for bars too short to read, measured
+    against the axis range. Use it for bar charts only: on a line chart a near
+    zero reading is exactly what the viewer needs to see.
+    """
+    if not candidates:
+        return
+    y0, y1 = ax.get_ylim()
+    x0, x1 = ax.get_xlim()
+    y_range = (y1 - y0) or 1.0
+    x_range = (x1 - x0) or 1.0
+    y_half = 0.018 * y_range
+    placed: list[tuple[float, float, float]] = []
+    # Labels are sometimes painted on a twin axis so they sit above its line.
+    target = draw_ax or ax
+
+    for x, y, text, prefer in candidates:
+        if abs(y) < min_value_fraction * y_range:
+            continue
+        width = 0.0042 * x_range * max(len(text), 3)
+        # Step 0 is deliberately skipped: a label centred on its own anchor sits
+        # on the marker or the bar edge. Always leave at least one step of room.
+        for step in (1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6):
+            dy = prefer * step * 2.1 * y_half
+            centre = y + dy
+            if not (y0 <= centre <= y1):
+                continue
+            clear = all(
+                abs(x - px) >= (width + pw) / 2 + 0.006 * x_range
+                or abs(centre - py) >= 2.2 * y_half
+                for px, py, pw in placed
+            )
+            if clear:
+                placed.append((x, centre, width))
+                target.text(
+                    x, centre, text, ha="center", va="center",
+                    fontsize=fontsize, color=color, transform=ax.transData,
+                    # A white halo keeps the number readable when it lands on
+                    # a bar or a line; it does not hide the data underneath.
+                    path_effects=[path_effects.withStroke(linewidth=2, foreground="white")],
+                )
+                break
 
 
 def _legend(ax: plt.Axes, derived_labels: set[str]) -> None:
     handles, labels = ax.get_legend_handles_labels()
     if derived_labels:
         labels = [f"{lab} *" if lab in derived_labels else lab for lab in labels]
-    ax.legend(handles, labels, loc="upper left", fontsize=8, framealpha=0.9)
+    if not handles:
+        return
+    columns = min(len(labels), 5)
+    rows = -(-len(labels) // columns)  # ceil, so the anchor clears every row
+    ax.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.16 - 0.055 * (rows - 1)),
+        ncol=columns,
+        fontsize=8,
+        frameon=False,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -360,25 +432,17 @@ def chart_margins(
     for label, series, source in metrics:
         _record_quality(label, series, source)
     fig, ax = _new_figure(f"{ticker} - Margins", "Gross / Operating / Net margin")
+    candidates: list[tuple[float, float, str, int]] = []
     for label, series, _source in metrics:
         ax.plot(range(len(years)), series.to_numpy(), marker="o", label=label, color=_color_for(label))
         for x, v in enumerate(series.to_numpy()):
-            if pd.notna(v):
-                # Net margin label below the point so it does not overlap gross.
-                below = label == "Net Margin"
-                ax.annotate(
-                    _fmt_pct(v),
-                    (x, v),
-                    textcoords="offset points",
-                    xytext=(0, -6 if below else 6),
-                    ha="center",
-                    va="top" if below else "bottom",
-                    fontsize=6,
-                )
+            _collect_label(candidates, x, v, v, "pct")
     _style_axes(ax, years)
     ax.set_ylabel("Margin (%)", fontsize=10)
     ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
-    ax.legend(loc="best", fontsize=8)
+    ax.margins(y=0.18)
+    _declutter(ax, candidates)
+    _legend(ax, set())
     path = _save(fig, os.path.join(output_dir, "02_margins_full.png"))
     return [path]
 
@@ -454,8 +518,10 @@ def chart_balance(
             f"{ticker} - Balance Sheet", f"Fiscal years {suffix}"
         )
         positions = np.arange(len(window))
+        fig.set_size_inches(11, max(6.5, 5.2 + 0.42 * len(usd_metrics)))
         width = 0.8 / len(usd_metrics)
         derived_labels: set[str] = set()
+        candidates: list[tuple[float, float, str, int]] = []
 
         for i, (label, series_full, source) in enumerate(usd_metrics):
             series = series_full.reindex(window)
@@ -473,11 +539,15 @@ def chart_balance(
                 color=_color_for(label),
             )
             for bar, v in zip(bars, series.to_numpy()):
-                _label_bar(ax, bar.get_x() + bar.get_width() / 2, bar.get_height(), v)
+                _collect_label(
+                    candidates, bar.get_x() + bar.get_width() / 2, bar.get_height(), v
+                )
 
         # Shares on right axis.
+        overlay = None
         if not shares.reindex(window).dropna().empty:
             ax2 = ax.twinx()
+            overlay = ax2
             ax2.plot(
                 positions,
                 shares.reindex(window).to_numpy(),
@@ -486,23 +556,18 @@ def chart_balance(
                 linewidth=2,
                 label="Total Shares Outstanding",
             )
+            share_candidates: list[tuple[float, float, str, int]] = []
             for x, v in enumerate(shares.reindex(window).to_numpy()):
-                if pd.notna(v):
-                    ax2.annotate(
-                        _fmt_shares(v),
-                        (x, v),
-                        textcoords="offset points",
-                        xytext=(0, 6),
-                        ha="center",
-                        va="bottom",
-                        fontsize=5,
-                        color=_color_for("Total Shares Outstanding"),
-                    )
+                _collect_label(share_candidates, x, v, v, "shares")
             ax2.set_ylabel("Shares outstanding (millions)", fontsize=10)
             ax2.tick_params(axis="y", labelsize=8)
+            ax2.margins(y=0.20)
+            _declutter(ax2, share_candidates, color=_color_for("Total Shares Outstanding"))
 
         _style_axes(ax, window)
         ax.set_ylabel("USD millions", fontsize=10)
+        ax.margins(y=0.16)
+        _declutter(ax, candidates, min_value_fraction=0.03, draw_ax=overlay)
         _legend(ax, derived_labels)
         paths.append(_save(fig, os.path.join(output_dir, f"03_balance_{suffix}.png")))
     return paths
@@ -576,6 +641,12 @@ def chart_debt(
     total_debt = total_debt.replace(0, np.nan)
     net_debt = total_debt - cash
 
+    # A debt-free filer (TAL Education, for one) would otherwise render a cash
+    # bar with the debt series silently absent, which reads as missing data.
+    note = None
+    if all(series.dropna().empty for series in (lt_debt, current_debt, capital_leases)):
+        note = "No borrowings or finance leases reported in the balance sheet"
+
     metrics = [
         ("Long-Term Debt", lt_debt, "reported"),
         ("Current Portion Debt/Leases", current_debt, "reported"),
@@ -585,7 +656,7 @@ def chart_debt(
         ("Net Debt", net_debt, "derived"),
     ]
     return _grouped_bar_windows(
-        ticker, output_dir, "04_debt", metrics, years, ylabel="USD millions"
+        ticker, output_dir, "04_debt", metrics, years, ylabel="USD millions", note=note
     )
 
 
@@ -722,24 +793,18 @@ def chart_returns(
     for label, series, source in metrics:
         _record_quality(label, series, source)
     fig, ax = _new_figure(f"{ticker} - Returns", "ROE / ROA / ROIC")
+    candidates: list[tuple[float, float, str, int]] = []
     for label, series, _source in metrics:
         ax.plot(range(len(years)), series.to_numpy(), marker="o", label=label, color=_color_for(label))
         for x, v in enumerate(series.to_numpy()):
-            if pd.notna(v):
-                ax.annotate(
-                    _fmt_pct(v),
-                    (x, v),
-                    textcoords="offset points",
-                    xytext=(0, 6),
-                    ha="center",
-                    va="bottom",
-                    fontsize=6,
-                )
+            _collect_label(candidates, x, v, v, "pct")
     _style_axes(ax, years)
     ax.set_ylabel("Return (%)", fontsize=10)
     ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
     ax.axhline(0, color="black", linewidth=0.8)
-    ax.legend(loc="best", fontsize=8)
+    ax.margins(y=0.18)
+    _declutter(ax, candidates)
+    _legend(ax, set())
     path = _save(fig, os.path.join(output_dir, "07_returns_full.png"))
     return [path]
 
@@ -754,6 +819,7 @@ def _grouped_bar_windows(
     metrics: list[tuple[str, pd.Series, str]],
     years: list[int],
     ylabel: str,
+    note: str | None = None,
 ) -> list[str]:
     paths: list[str] = []
     for window in _year_windows(years):
@@ -766,8 +832,10 @@ def _grouped_bar_windows(
             for label, series_full, source in metrics
             if not series_full.reindex(window).dropna().empty
         ]
+        fig.set_size_inches(11, max(6.5, 5.2 + 0.42 * len(active)))
         width = 0.8 / max(len(active), 1)
         derived_labels: set[str] = set()
+        candidates: list[tuple[float, float, str, int]] = []
 
         for i, (label, series, source) in enumerate(active):
             _record_quality(label, series, source)
@@ -782,10 +850,14 @@ def _grouped_bar_windows(
                 color=_color_for(label),
             )
             for bar, v in zip(bars, series.to_numpy()):
-                _label_bar(ax, bar.get_x() + bar.get_width() / 2, bar.get_height(), v)
+                _collect_label(
+                    candidates, bar.get_x() + bar.get_width() / 2, bar.get_height(), v
+                )
 
         _style_axes(ax, window)
         ax.set_ylabel(ylabel, fontsize=10)
+        ax.margins(y=0.14)
+        _declutter(ax, candidates, min_value_fraction=0.03)
         if active:
             _legend(ax, derived_labels)
         else:
@@ -798,6 +870,8 @@ def _grouped_bar_windows(
                 va="center",
                 color="#6b7280",
             )
+        if note:
+            fig.text(0.5, 0.015, note, ha="center", va="bottom", fontsize=9, color="#6b7280")
         paths.append(
             _save(fig, os.path.join(output_dir, f"{filename_prefix}_{suffix}.png"))
         )

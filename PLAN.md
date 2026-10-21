@@ -86,6 +86,29 @@ Reports (added) — `reports/crosscheck/<TICKER>.csv`,
 `reports/crosscheck/<TICKER>_theirs.json`,
 `reports/crosscheck/summary.csv`.
 
+### Chart conventions
+
+Charts are drawn from the CSVs, never from live data, so a chart can always be
+reproduced from a ticker folder.
+
+- **Value labels** are queued with `_collect_label` and placed once by
+  `_declutter` after the axes limits are final. It nudges each label away from
+  its anchor until it clears the ones already placed, and **drops** a label that
+  cannot fit after six steps. A missing number is better than two numbers
+  stacked on each other.
+- **Legends sit below the axes** (`_legend`), never over the plot area. Figure
+  height grows with the series count so the extra legend row and the labels
+  both fit.
+- **Bar charts** skip labels for bars shorter than 3% of the axis range; those
+  numbers are noise at label size and remain in `financial_data.csv`. Line
+  charts keep every label, including values near zero, because there the near
+  zero reading is the point.
+- **White halo** on every label (`path_effects.withStroke`) keeps it readable
+  when it lands on a bar or a line. It does not hide the data underneath.
+- **A debt-free filer** gets an explicit note under the debt chart instead of a
+  cash-only panel that looks like missing data.
+
+
 ---
 
 ## 3. Addition 1 — `crosscheck.py`

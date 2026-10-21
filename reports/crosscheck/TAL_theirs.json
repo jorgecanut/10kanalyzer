@@ -1,0 +1,148 @@
+{
+  "ticker": "TAL",
+  "annual_data": {
+    "Revenue": {},
+    "Net Income": {},
+    "Gross Profit": {},
+    "Operating Income": {},
+    "Cost of Revenue": {},
+    "Interest Expense": {},
+    "Income Tax Expense": {},
+    "Total Assets": {
+      "2023-02-28": 4724354000.0,
+      "2024-02-29": 4927949000.0,
+      "2025-02-28": 5503067000.0,
+      "2026-02-28": 5936289000.0
+    },
+    "Total Equity": {
+      "2023-02-28": 3844643000.0,
+      "2024-02-29": 3662098000.0,
+      "2025-02-28": 3766567000.0,
+      "2026-02-28": 3774437000.0
+    },
+    "Total Liabilities": {
+      "2023-02-28": 903441000.0,
+      "2024-02-29": 1289185000.0,
+      "2025-02-28": 1736669000.0,
+      "2026-02-28": 2162603000.0
+    },
+    "Current Assets": {
+      "2023-02-28": 3468407000.0,
+      "2024-02-29": 3699174000.0,
+      "2025-02-28": 4126920000.0,
+      "2026-02-28": 3843118000.0
+    },
+    "Current Liabilities": {
+      "2023-02-28": 783865000.0,
+      "2024-02-29": 1082218000.0,
+      "2025-02-28": 1441345000.0,
+      "2026-02-28": 1767186000.0
+    },
+    "Cash from Operations": {
+      "2023-02-28": 7358000.0,
+      "2024-02-29": 306172000.0,
+      "2025-02-28": 397923000.0,
+      "2026-02-28": 601467000.0
+    },
+    "CapEx": {
+      "2023-02-28": 110326000.0,
+      "2024-02-29": 112737000.0,
+      "2025-02-28": 111728000.0,
+      "2026-02-28": 93191000.0
+    },
+    "Free Cash Flow": {
+      "2023-02-28": -102968000.0,
+      "2024-02-29": 193435000.0,
+      "2025-02-28": 286195000.0,
+      "2026-02-28": 508276000.0
+    }
+  },
+  "cagr": {
+    "Revenue": NaN,
+    "Total Assets": 7.907093288268419,
+    "Total Equity": -0.6122949366033748,
+    "Total Liabilities": 33.76120700139757,
+    "Current Assets": 3.477954250779014,
+    "Current Liabilities": 31.115334269660156,
+    "Cash from Operations": 333.8489947110604,
+    "Free Cash Flow": NaN,
+    "CapEx": -5.469720917611076
+  },
+  "filing_info": {
+    "form_type": "20-F",
+    "filed_date": "2026-06-12",
+    "company": "TAL Education Group",
+    "accession_no": "0001104659-26-073410"
+  },
+  "scores": {
+    "per_share": {
+      "eps_basic": 2.79,
+      "eps_diluted": 2.75,
+      "book_value_per_share": NaN,
+      "fcf_per_share": NaN
+    },
+    "working_capital": {
+      "dso": 0.005580097497165085,
+      "dio": 38.94061469522045,
+      "dpo": 41.4366546824174,
+      "cash_conversion_cycle": -2.4904598896997854
+    },
+    "capital_efficiency": {
+      "invested_capital": 2250558000.0,
+      "roic_pct": 12.265358191168591,
+      "asset_turnover": 0.5068668321235708,
+      "nopat": 276039000.0
+    },
+    "dupont": {
+      "net_profit_margin": 0.17639322970326776,
+      "asset_turnover": 0.5068668321235708,
+      "equity_multiplier": 1.5727614476013243,
+      "roe_3": 14.061726291894654,
+      "tax_burden": 1.4103190251213018,
+      "interest_burden": 1.0,
+      "operating_margin": 0.12507328240012655,
+      "roe_5": 14.061726291894654,
+      "negative_equity_warning": false
+    },
+    "piotroski": {
+      "score": 7,
+      "components": [
+        "ROA>0",
+        "CFO>0",
+        "ROA_increasing",
+        "Accruals(CFO>NI)",
+        "No_dilution",
+        "GM_increasing",
+        "AT_increasing"
+      ]
+    },
+    "altman": {
+      "z_score": 4.4810236003842965,
+      "zone": "Safe",
+      "model": "Z'' (non-manufacturing)",
+      "components": {
+        "A": 0.34970197711061574,
+        "B": -0.021971302273187845,
+        "C": 0.06339549843344891,
+        "D'": 1.7453212633109267
+      }
+    },
+    "beneish": {
+      "m_score": -2.450375013939845,
+      "likely_manipulator": false,
+      "indices": {
+        "DSRI": 0.929768199284582,
+        "GMI": 0.9636451249380374,
+        "AQI": 0.706330667686011,
+        "SGI": 1.337153974721729,
+        "DEPI": 1.0,
+        "SGAI": 0.8154745371886697,
+        "LVGI": 1.1365906550933909,
+        "TATA": -0.011912492804848282
+      }
+    }
+  },
+  "alerts": [
+    "20-F filer: figures may be in a non-USD reporting currency"
+  ]
+}
