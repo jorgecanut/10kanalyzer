@@ -147,65 +147,68 @@
   .muted { color:var(--muted); font-size:13px; }
   .hidden { display:none; }
 
-  /* Simulation: one window, separated inside. */
-  .sim-window { padding:0; overflow:hidden; }
-  .sim-head { display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap;
-              padding:14px 18px; border-bottom:1px solid var(--line); }
-  .sim-block { padding:16px 18px; border-bottom:1px solid var(--line); }
-  .sim-block:last-child { border-bottom:0; }
-  .sim-block h3 { margin:0 0 12px; font-size:13px; color:var(--muted); font-weight:600;
-                  text-transform:uppercase; letter-spacing:.04em; }
+  /* Panels: shared chrome for Run, Recent and Simulation. */
+  .panel { background:var(--surface); border:1px solid var(--line); border-radius:10px;
+           margin-bottom:16px; overflow:hidden; }
+  .panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px;
+                min-height:52px; padding:0 18px; background:var(--bar);
+                border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .panel-title { font-size:14px; font-weight:600; letter-spacing:.02em; }
+  .panel-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .panel-btn { padding:7px 14px; border:1px solid var(--line); border-radius:7px;
+               background:var(--bar); color:var(--muted); font-size:13px; cursor:pointer; }
+  .panel-btn:hover { color:var(--text); border-color:var(--muted); }
+  .panel-body { padding:16px 18px; }
+  .panel-head select { background:var(--bar); }
+  .panel-body > :first-child { margin-top:0; }
+  .panel-body > :last-child { margin-bottom:0; }
+
+  /* Simulation: market data left of the chart, projection underneath. */
+  .sim-row { display:grid; grid-template-columns:250px minmax(0,1fr); gap:20px; align-items:start; }
+  .sim-section h3, .sim-market h3 { margin:0 0 12px; font-size:12px; color:var(--muted); font-weight:600;
+                                    text-transform:uppercase; letter-spacing:.04em; }
   .sim-meta { color:var(--muted); font-size:12px; margin:0 0 10px; }
   .sim-chart svg { display:block; width:100%; height:auto; cursor:crosshair; touch-action:none; }
   .sim-controls { display:flex; gap:6px; flex-wrap:wrap; margin-top:12px; }
-  .sim-controls button { padding:5px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg);
+  .sim-controls button { padding:5px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bar);
                          color:var(--muted); font-size:12px; cursor:pointer; }
   .sim-controls button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
-  .sim-stats, .sim-result { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:0 20px; }
+  .sim-stats { display:block; }
+  .sim-result { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0 20px;
+                margin-top:14px; padding-top:10px; border-top:1px solid var(--line-soft); }
+  .sim-result:empty { display:none; }
   .stat { display:flex; justify-content:space-between; gap:12px; padding:7px 0;
           border-bottom:1px solid var(--line-soft); font-size:13px; }
   .stat:last-child { border-bottom:0; }
   .stat span:first-child { color:var(--muted); }
   .stat b { font-weight:600; }
+  .sim-section { margin-top:20px; padding-top:18px; border-top:1px solid var(--line); }
   .sim-form { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; align-items:end; }
   .sim-form label { display:block; font-size:12px; color:var(--muted); margin:0 0 5px; }
   .sim-form input { width:100%; padding:8px 10px; border:1px solid var(--line);
-                    border-radius:7px; background:var(--bg); color:var(--text); font-size:14px; }
+                    border-radius:7px; background:var(--bar); color:var(--text); font-size:14px; }
   .sim-mode { display:flex; gap:6px; }
   .sim-mode button { flex:1; padding:8px; border:1px solid var(--line); border-radius:7px;
-                     background:var(--bg); color:var(--muted); font-size:12px; cursor:pointer; }
+                     background:var(--bar); color:var(--muted); font-size:12px; cursor:pointer; }
   .sim-mode button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
-  .sim-result { margin-top:14px; padding-top:6px; border-top:1px solid var(--line-soft); }
-  .sim-result:empty { display:none; }
   .sim-note { color:var(--muted); font-size:12px; margin:12px 0 0; }
+  @media (max-width:820px) {
+    .sim-row { grid-template-columns:1fr; }
+  }
   @media (max-width:600px) {
-    .sim-head, .sim-block { padding:12px 14px; }
+    .panel-head { padding:0 14px; }
+    .panel-body { padding:14px; }
+    .sim-form { grid-template-columns:1fr 1fr; }
   }
 
-  /* Terminal: same colour as the page background, retractable. */
-  .terminal { margin:6px 0 24px; background:var(--bg);
-              border:1px solid var(--line); border-radius:8px; overflow:hidden;
-              box-shadow:0 20px 50px rgba(0,0,0,.28); }
-  .term-bar { display:flex; align-items:center; justify-content:space-between; gap:12px;
-              padding:9px 14px; background:var(--bar); border-bottom:1px solid var(--line-soft); }
-  .terminal.collapsed .term-bar { border-bottom:0; }
-  .term-title { font:13px var(--mono);
-                color:var(--muted); letter-spacing:.02em; }
-  .term-toggle { border:1px solid var(--line); background:transparent; color:var(--muted); cursor:pointer;
-                 font:12px var(--mono);
-                 padding:3px 9px; border-radius:5px; }
-  .term-toggle:hover { color:var(--text); border-color:var(--muted); }
-  .term-body { max-height:360px; overflow:auto; padding:16px 18px;
-               font:15px/1.7 var(--mono);
-               color:var(--text); opacity:1;
-               transition:max-height .35s ease, opacity .25s ease, padding .35s ease; }
-  .terminal.collapsed .term-body { max-height:0; opacity:0; padding-top:0; padding-bottom:0; }
+  /* Terminal body: same panel chrome, monospace log. */
+  .term-body { max-height:360px; overflow:auto;
+               font:15px/1.7 var(--mono); color:var(--text); }
   .term-log { margin:0; font:inherit; color:inherit; white-space:pre-wrap; word-break:break-word; }
   .term-dim { color:var(--muted); }
   .term-ok { color:var(--green); }
   @media (max-width:600px) {
-    .term-body { font-size:14px; padding:14px; }
-    .terminal { margin:0 auto 18px; }
+    .term-body { font-size:14px; }
     header { padding:10px 14px; }
     .toolbar { padding:8px 14px; }
     .user-id { max-width:130px; }
@@ -271,13 +274,14 @@
 
   <!-- Run tab -->
   <section id="pane-run">
-    <section class="terminal" id="terminal">
-      <div class="term-bar" id="term-bar">
-        <span class="term-title">stocky@edgar:~</span>
-        <button id="term-toggle" class="term-toggle" onclick="toggleTerminal()"
-                aria-controls="term-body" aria-expanded="true">collapse</button>
+    <section class="panel" id="terminal">
+      <div class="panel-head">
+        <span class="panel-title">Run</span>
+        <span class="panel-actions">
+          <button class="panel-btn" onclick="refreshRun()">refresh</button>
+        </span>
       </div>
-      <div class="term-body" id="term-body">
+      <div class="panel-body term-body" id="term-body">
         <pre id="term-log" class="term-log" role="log" aria-live="polite">stocky 1.0 · SEC 10-K dashboard
 reads EDGAR filings, extracts XBRL, charts the ratios
 ────────────────────────────────────────────────────
@@ -290,73 +294,79 @@ the pipeline log streams into this terminal.</pre>
 
   <!-- Recent tab -->
   <section id="pane-recent" class="hidden">
-    <div class="card">
-      <div class="row" style="justify-content:space-between">
-        <strong>Recent runs</strong>
-        <a href="#" onclick="loadRecent();return false">refresh</a>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">Recent</span>
+        <span class="panel-actions">
+          <button class="panel-btn" onclick="loadRecent()">refresh</button>
+        </span>
       </div>
-      <ul id="recent" class="recent"><li class="muted">Loading…</li></ul>
+      <div class="panel-body">
+        <ul id="recent" class="recent"><li class="muted">Loading…</li></ul>
+      </div>
     </div>
     <div id="results-recent"></div>
   </section>
 
   <!-- Simulation tab -->
   <section id="pane-simulation" class="hidden">
-    <div class="card sim-window">
-      <div class="sim-head">
-        <strong>Simulation</strong>
-        <span class="row">
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">Simulation</span>
+        <span class="panel-actions">
           <select id="sim-run" title="Successful run" onchange="loadSimulation(false)"></select>
-          <a href="#" onclick="initSimulation(true);return false">refresh</a>
+          <button class="panel-btn" onclick="initSimulation(true)">refresh</button>
         </span>
       </div>
-      <div class="sim-block">
+      <div class="panel-body">
         <p class="sim-meta" id="sim-status">Loading…</p>
-        <div class="sim-chart">
-          <svg id="sim-svg" viewBox="0 0 900 430" role="img"
-               aria-label="Stock price history and investment projection"></svg>
-          <div class="sim-controls" id="sim-ranges">
-            <button data-range="1mo">1 month</button>
-            <button data-range="4mo">4 months</button>
-            <button data-range="6mo">6 months</button>
-            <button data-range="1y" class="active">1 year</button>
-            <button data-range="3y">3 years</button>
-            <button data-range="5y">5 years</button>
-            <button data-range="10y">10 years</button>
-            <button data-range="max">max</button>
-          </div>
-        </div>
-      </div>
-      <div class="sim-block">
-        <h3 id="sim-title">Market data</h3>
-        <div id="sim-stats" class="sim-stats"><div class="stat"><span>Loading…</span><b>—</b></div></div>
-      </div>
-      <div class="sim-block">
-        <h3>Your projection</h3>
-        <div class="sim-form">
-          <div>
-            <label for="sim-target">Target price</label>
-            <input id="sim-target" type="number" min="0" step="0.01" oninput="renderSimulation()">
-          </div>
-          <div>
-            <label for="sim-amount">Investment</label>
-            <input id="sim-amount" type="number" min="0" step="100" value="1000" oninput="renderSimulation()">
-          </div>
-          <div>
-            <label for="sim-years">Horizon (years)</label>
-            <input id="sim-years" type="number" min="0.25" step="0.25" value="4" oninput="renderSimulation()">
-          </div>
-          <div>
-            <label>Dividends</label>
-            <div class="sim-mode">
-              <button id="sim-cash" class="active" onclick="setSimMode('cash')">Cash payout</button>
-              <button id="sim-reinvest" onclick="setSimMode('reinvest')">Reinvest</button>
+        <div class="sim-row">
+          <aside class="sim-market">
+            <h3 id="sim-title">Market data</h3>
+            <div id="sim-stats" class="sim-stats"><div class="stat"><span>Loading…</span><b>—</b></div></div>
+          </aside>
+          <div class="sim-chart">
+            <svg id="sim-svg" viewBox="0 0 900 430" role="img"
+                 aria-label="Stock price history and investment projection"></svg>
+            <div class="sim-controls" id="sim-ranges">
+              <button data-range="1mo">1 month</button>
+              <button data-range="4mo">4 months</button>
+              <button data-range="6mo">6 months</button>
+              <button data-range="1y" class="active">1 year</button>
+              <button data-range="3y">3 years</button>
+              <button data-range="5y">5 years</button>
+              <button data-range="10y">10 years</button>
+              <button data-range="max">max</button>
             </div>
           </div>
         </div>
-        <div class="sim-result" id="sim-result"></div>
-        <p class="sim-note">Future dividends use the trailing 12-month rate, paid evenly.
-          Estimates only; no taxes or fees.</p>
+        <div class="sim-section">
+          <h3>Your projection</h3>
+          <div class="sim-form">
+            <div>
+              <label for="sim-target">Target price</label>
+              <input id="sim-target" type="number" min="0" step="0.01" oninput="renderSimulation()">
+            </div>
+            <div>
+              <label for="sim-amount">Investment</label>
+              <input id="sim-amount" type="number" min="0" step="100" value="1000" oninput="renderSimulation()">
+            </div>
+            <div>
+              <label for="sim-years">Horizon (years)</label>
+              <input id="sim-years" type="number" min="0.25" step="0.25" value="4" oninput="renderSimulation()">
+            </div>
+            <div>
+              <label>Dividends</label>
+              <div class="sim-mode">
+                <button id="sim-cash" class="active" onclick="setSimMode('cash')">Cash payout</button>
+                <button id="sim-reinvest" onclick="setSimMode('reinvest')">Reinvest</button>
+              </div>
+            </div>
+          </div>
+          <div class="sim-result" id="sim-result"></div>
+          <p class="sim-note">Future dividends use the trailing 12-month rate, paid evenly.
+            Estimates only; no taxes or fees.</p>
+        </div>
       </div>
     </div>
   </section>
@@ -366,7 +376,6 @@ the pipeline log streams into this terminal.</pre>
 const $ = s => document.querySelector(s);
 let timer = null;
 let identityCache = '';
-let termCollapsed = false;
 
 const WELCOME = `stocky 1.0 · SEC 10-K dashboard
 reads EDGAR filings, extracts XBRL, charts the ratios
@@ -439,21 +448,26 @@ document.addEventListener('click', e => {
 
 /* Terminal ---------------------------------------------------------------- */
 
-function setTerminal(collapsed) {
-  termCollapsed = collapsed;
-  $('#terminal').classList.toggle('collapsed', collapsed);
-  $('#term-toggle').textContent = collapsed ? 'expand' : 'collapse';
-  $('#term-toggle').setAttribute('aria-expanded', String(!collapsed));
-}
-
-function toggleTerminal() { setTerminal(!termCollapsed); }
-
 function setTermLog(text) {
   const log = $('#term-log');
   if (log.textContent === text) return;
   log.textContent = text;
   const body = $('#term-body');
   body.scrollTop = body.scrollHeight;
+}
+
+async function refreshRun() {
+  const ticker = $('#ticker').value.trim().toUpperCase();
+  if (!ticker) return;
+  try {
+    const job = await (await fetch(`/api/status/${ticker}`)).json();
+    setStatus(job.status, job.status);
+    if (job.log) setTermLog(job.log);
+    if (job.status === 'done') loadResults(ticker, '#results-run');
+    if (job.status === 'queued' || job.status === 'running') poll(ticker);
+  } catch {
+    setStatus('error', 'error');
+  }
 }
 
 /* ------------------------------------------------------------------------ */
@@ -480,9 +494,6 @@ async function runTicker() {
   $('#results-run').innerHTML = '';
   setStatus('queued', 'queued');
   showTab('run');
-  // The terminal is the log: open it for the run, stream into it, and fold it
-  // away once the charts land.
-  setTerminal(false);
   setTermLog(`$ stocky run ${ticker} --filings ${filings}\nstarting pipeline…`);
   try {
     const res = await fetch('/api/run', {
@@ -512,14 +523,12 @@ function poll(ticker) {
         loadResults(ticker, '#results-run');
       } else if (job.status === 'error') {
         $('#run-btn').disabled = false;
-        setTerminal(false);
       } else {
         poll(ticker);
       }
     } catch (err) {
       setStatus('error', 'error');
       $('#run-btn').disabled = false;
-      setTerminal(false);
     }
   }, 2000);
 }
@@ -546,8 +555,6 @@ function renderResults(data, target) {
       </div>
     </div>
     <div class="grid">${grid}</div>`;
-  // Charts are visible now: get the terminal out of the way.
-  if (target === '#results-run') setTerminal(true);
 }
 
 async function loadRecent() {
@@ -847,7 +854,6 @@ loadIdentity();
     if (job.status === 'queued' || job.status === 'running') {
       $('#ticker').value = it.ticker;
       $('#run-btn').disabled = true;
-      setTerminal(false);
       poll(it.ticker);
       break;
     }
