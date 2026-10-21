@@ -27,6 +27,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
+import pandas as pd
 from flask import (
     Flask,
     abort,
@@ -144,6 +145,7 @@ YAHOO_UA = "Mozilla/5.0 (X11; Linux x86_64) Stocky/1.0"
 _YAHOO_SESSION = {"opener": None, "crumb": "", "ts": 0.0}
 _YAHOO_LOCK = threading.Lock()
 _SIM_CACHE: dict = {}
+_CURRENT_CACHE: dict = {}
 
 
 def _yahoo_session():
@@ -169,6 +171,54 @@ def _yahoo_session():
             pass
         _YAHOO_SESSION.update(opener=opener, crumb=crumb, ts=time.time())
         return opener, crumb
+
+
+def _csv_records(path: Path) -> list[dict]:
+    """Read a CSV into JSON-safe records (NaN becomes null)."""
+    try:
+        frame = pd.read_csv(path)
+    except (OSError, ValueError, pd.errors.ParserError):
+        return []
+    if frame.empty:
+        return []
+    return json.loads(frame.to_json(orient="records"))
+
+
+def _current_quote(ticker: str) -> dict:
+    """Best-effort Yahoo snapshot (price, currency, trailing PE), cached 300 s."""
+    with _YAHOO_LOCK:
+        cached = _CURRENT_CACHE.get(ticker)
+        if cached and time.time() - cached[0] < 300:
+            return cached[1]
+
+    current = {"price": None, "currency": None, "trailing_pe": None}
+    yahoo_ticker = ticker.replace(".", "-")
+    try:
+        query = urlencode({"range": "1d", "interval": "1d"})
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_ticker}?{query}"
+        with urlopen(Request(url, headers={"User-Agent": YAHOO_UA}), timeout=10) as response:
+            payload = json.load(response)
+        result = ((payload.get("chart") or {}).get("result") or [None])[0] or {}
+        meta = result.get("meta") or {}
+        current["price"] = meta.get("regularMarketPrice")
+        current["currency"] = meta.get("currency")
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, IndexError, AttributeError):
+        pass
+
+    try:
+        opener, crumb = _yahoo_session()
+        quote_url = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/" + yahoo_ticker
+        quote_url += "?" + urlencode({"modules": "summaryDetail", "crumb": crumb})
+        with opener.open(Request(quote_url, headers={"User-Agent": YAHOO_UA}), timeout=10) as response:
+            quote = json.load(response)
+        details = ((quote.get("quoteSummary") or {}).get("result") or [{}])[0]
+        current["trailing_pe"] = ((details.get("summaryDetail") or {}).get("trailingPE") or {}).get("raw")
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, IndexError, AttributeError):
+        pass
+
+    with _YAHOO_LOCK:
+        _CURRENT_CACHE[ticker] = (time.time(), current)
+    return current
 
 
 def _worker(ticker: str, filings: int) -> None:
@@ -440,6 +490,132 @@ def simulation(ticker: str):
     with _YAHOO_LOCK:
         _SIM_CACHE[cache_key] = (time.time(), payload)
     return jsonify(payload)
+
+
+@app.get("/api/evaluation/<ticker>")
+def evaluation(ticker: str):
+    ticker = _normalise_ticker(ticker)
+    path = _ticker_dir(ticker) / "evaluation.csv"
+    if not path.is_file():
+        abort(404, "No evaluation data for that ticker yet.")
+
+    history = _csv_records(path)
+    latest = history[-1] if history else None
+
+    transactions: list = []
+    insider_generated = None
+    insider_path = _ticker_dir(ticker) / "insider.json"
+    if insider_path.is_file():
+        try:
+            insider = json.loads(insider_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            insider = {}
+        transactions = insider.get("transactions") or []
+        insider_generated = insider.get("generated")
+
+    return jsonify(
+        ticker=ticker,
+        latest=latest,
+        history=history,
+        insiders=transactions,
+        insider_generated=insider_generated,
+        current=_current_quote(ticker),
+    )
+
+
+@app.get("/api/fundamentals/<ticker>")
+def fundamentals(ticker: str):
+    ticker = _normalise_ticker(ticker)
+    path = _ticker_dir(ticker) / "financial_data.csv"
+    if not path.is_file():
+        abort(404, "No financial data for that ticker yet.")
+
+    rows = _csv_records(path)
+    years = [row.get("fiscal_year") or row.get("period_of_report") for row in rows]
+    return jsonify(ticker=ticker, years=years, rows=rows)
+
+
+SCREENER_FIELDS = (
+    "fiscal_year",
+    "pe",
+    "ev_ebit",
+    "fcf_yield",
+    "pe_percentile",
+    "f_score",
+    "z_score",
+)
+
+
+@app.get("/api/screener")
+def screener():
+    items = []
+    if GRAPH_DIR.is_dir():
+        for directory in GRAPH_DIR.iterdir():
+            if not directory.is_dir() or not TICKER_RE.match(directory.name):
+                continue
+            path = directory / "evaluation.csv"
+            if not path.is_file():
+                continue
+            rows = _csv_records(path)
+            if not rows:
+                continue
+            latest = rows[-1]
+            item = {"ticker": directory.name}
+            for field in SCREENER_FIELDS:
+                item[field] = latest.get(field)
+            item["modified"] = datetime.fromtimestamp(
+                path.stat().st_mtime, timezone.utc
+            ).isoformat(timespec="seconds")
+            items.append(item)
+    items.sort(key=lambda item: item["ticker"])
+    return jsonify(items=items)
+
+
+@app.post("/api/screener")
+def screener_run():
+    payload = request.get_json(silent=True) or {}
+    raw = payload.get("tickers", [])
+    if isinstance(raw, str):
+        tokens = re.split(r"[,\s]+", raw.strip())
+    elif isinstance(raw, list):
+        tokens = raw
+    else:
+        abort(400, "tickers must be a list or a comma/space separated string.")
+
+    tickers: list[str] = []
+    for token in tokens:
+        if not isinstance(token, str) or not token.strip():
+            continue
+        ticker = _normalise_ticker(token)
+        if ticker not in tickers:
+            tickers.append(ticker)
+    if not tickers:
+        abort(400, "Provide at least one ticker.")
+    if len(tickers) > 25:
+        abort(400, "Too many tickers (max 25).")
+
+    queued: list[str] = []
+    cached: list[str] = []
+    items = []
+    now = time.time()
+    for ticker in tickers:
+        path = _ticker_dir(ticker) / "evaluation.csv"
+        if path.is_file() and now - path.stat().st_mtime < 7 * 86400:
+            cached.append(ticker)
+            items.append({"ticker": ticker, "status": "cached"})
+            continue
+        with JOBS_LOCK:
+            job = JOBS.get(ticker)
+            if job and job["status"] in ("queued", "running"):
+                queued.append(ticker)
+                items.append({"ticker": ticker, "status": job["status"]})
+                continue
+            JOBS[ticker] = {"ticker": ticker, "status": "queued", "queued": _now()}
+        threading.Thread(target=_worker, args=(ticker, 10), daemon=True).start()
+        queued.append(ticker)
+        items.append({"ticker": ticker, "status": "queued"})
+
+    return jsonify(queued=queued, cached=cached, items=items), (202 if queued else 200)
 
 
 @app.get("/files/<ticker>/<path:name>")

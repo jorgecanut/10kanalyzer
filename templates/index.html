@@ -217,6 +217,31 @@
     .toolbar { padding:8px 14px; }
     .user-id { max-width:130px; }
   }
+
+  /* Screener: ticker input plus a sortable results table. */
+  textarea { width:100%; min-height:88px; padding:10px 12px; border:1px solid var(--line);
+             border-radius:8px; background:var(--surface); color:var(--text);
+             font-size:14px; resize:vertical; }
+  textarea::placeholder { color:var(--muted); }
+  textarea:focus { outline:none; border-color:var(--accent); }
+  .screen-actions { margin-top:10px; }
+  .table-wrap { overflow-x:auto; }
+  table.data { width:100%; border-collapse:collapse; font-size:13px; }
+  table.data th, table.data td { padding:8px 10px; text-align:right; white-space:nowrap;
+                                 border-bottom:1px solid var(--line-soft); }
+  table.data th { color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase;
+                  letter-spacing:.03em; cursor:pointer; user-select:none; }
+  table.data th:hover { color:var(--text); }
+  table.data th:first-child, table.data td:first-child { text-align:left; }
+  table.data td { font-variant-numeric:tabular-nums; }
+  table.data tbody tr:last-child td { border-bottom:0; }
+  table.data td.muted { text-align:center; padding:16px 10px; }
+
+  /* Insider trades reuse the stat rows for a compact list. */
+  .insider-list .stat { align-items:center; gap:10px; flex-wrap:wrap; }
+  .insider-list .stat:first-child { padding-top:0; }
+  .insider-list .who { color:var(--muted); }
+  .insider-list .who b { color:var(--text); font-weight:600; }
 </style>
 </head>
 <body>
@@ -273,6 +298,7 @@
   <div class="tabs">
     <button id="tab-run" class="active" onclick="showTab('run')">Run</button>
     <button id="tab-recent" onclick="showTab('recent')">Recent</button>
+    <button id="tab-screener" onclick="showTab('screener')">Screener</button>
     <button id="tab-simulation" onclick="showTab('simulation')">Simulation</button>
   </div>
 
@@ -294,6 +320,15 @@ the pipeline log streams into this terminal.</pre>
       </div>
     </section>
     <div id="results-run"></div>
+    <section class="panel hidden" id="insider-panel">
+      <div class="panel-head">
+        <span class="panel-title">Insider trades (Form 4, 6 months)</span>
+        <span class="panel-actions"><span id="insider-more" class="muted"></span></span>
+      </div>
+      <div class="panel-body">
+        <div id="insider-body" class="insider-list"></div>
+      </div>
+    </section>
   </section>
 
   <!-- Recent tab -->
@@ -310,6 +345,52 @@ the pipeline log streams into this terminal.</pre>
       </div>
     </div>
     <div id="results-recent"></div>
+  </section>
+
+  <!-- Screener tab -->
+  <section id="pane-screener" class="hidden">
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">Screener</span>
+        <span class="panel-actions">
+          <button class="panel-btn" onclick="loadScreener()">refresh</button>
+        </span>
+      </div>
+      <div class="panel-body">
+        <textarea id="screen-input" placeholder="Tickers, comma or newline separated: AAPL, MSFT, BRK.B"></textarea>
+        <div class="row screen-actions">
+          <button class="primary" id="screen-btn" onclick="submitScreen()">Screen</button>
+          <span id="screen-progress" class="muted"></span>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">Results</span>
+      </div>
+      <div class="panel-body">
+        <div class="table-wrap">
+          <table class="data" id="screen-table">
+            <thead>
+              <tr>
+                <th data-key="ticker" data-label="Ticker" onclick="sortScreen('ticker')">Ticker</th>
+                <th data-key="fiscal_year" data-label="FY" onclick="sortScreen('fiscal_year')">FY</th>
+                <th data-key="f_score" data-label="F-score" onclick="sortScreen('f_score')">F-score</th>
+                <th data-key="z_score" data-label="Z-score" onclick="sortScreen('z_score')">Z-score</th>
+                <th data-key="pe" data-label="P/E" onclick="sortScreen('pe')">P/E</th>
+                <th data-key="ev_ebit" data-label="EV/EBIT" onclick="sortScreen('ev_ebit')">EV/EBIT</th>
+                <th data-key="fcf_yield" data-label="FCF yield" onclick="sortScreen('fcf_yield')">FCF yield</th>
+                <th data-key="pe_percentile" data-label="P/E pct" onclick="sortScreen('pe_percentile')">P/E pct</th>
+                <th data-key="modified" data-label="Updated" onclick="sortScreen('modified')">Updated</th>
+              </tr>
+            </thead>
+            <tbody id="screen-body">
+              <tr><td colspan="9" class="muted">No screened tickers yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   </section>
 
   <!-- Simulation tab -->
@@ -368,6 +449,21 @@ the pipeline log streams into this terminal.</pre>
             </div>
           </div>
           <div class="sim-result" id="sim-result"></div>
+          <div class="panel" id="implied-panel">
+            <div class="panel-head">
+              <span class="panel-title">What the market implies</span>
+              <span class="panel-actions"><span class="muted">using market cap as EV proxy</span></span>
+            </div>
+            <div class="panel-body">
+              <div class="sim-form">
+                <div>
+                  <label for="sim-discount">Discount rate %</label>
+                  <input id="sim-discount" type="number" step="0.5" value="9" oninput="renderImplied()">
+                </div>
+              </div>
+              <p class="sim-meta" id="implied-text">implied growth: — · historical FCF CAGR (— y): —</p>
+            </div>
+          </div>
           <p class="sim-note">Future dividends hold the trailing yield, so they grow with the
             projected price. Estimates only; no taxes or fees.</p>
         </div>
@@ -478,12 +574,13 @@ async function refreshRun() {
 /* ------------------------------------------------------------------------ */
 
 function showTab(name) {
-  for (const tab of ['run', 'recent', 'simulation']) {
+  for (const tab of ['run', 'recent', 'screener', 'simulation']) {
     const active = tab === name;
     $(`#pane-${tab}`).classList.toggle('hidden', !active);
     $(`#tab-${tab}`).classList.toggle('active', active);
   }
   if (name === 'recent') loadRecent();
+  if (name === 'screener') loadScreener();
   if (name === 'simulation') initSimulation();
 }
 
@@ -539,6 +636,7 @@ function poll(ticker) {
 }
 
 async function loadResults(ticker, target) {
+  loadInsiders(ticker);
   const res = await fetch(`/api/files/${ticker}`);
   if (!res.ok) return;
   renderResults(await res.json(), target);
@@ -560,6 +658,30 @@ function renderResults(data, target) {
       </div>
     </div>
     <div class="grid">${grid}</div>`;
+}
+
+async function loadInsiders(ticker) {
+  const panel = $('#insider-panel');
+  const body = $('#insider-body');
+  panel.classList.add('hidden');
+  body.innerHTML = '';
+  $('#insider-more').textContent = '';
+  try {
+    const res = await fetch(`/api/evaluation/${encodeURIComponent(ticker)}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const rows = Array.isArray(data.insiders) ? data.insiders : [];
+    if (!rows.length) return;
+    body.innerHTML = rows.slice(0, 15).map(it => {
+      const kind = it.type === 'buy' ? 'done' : 'error';
+      return `<div class="stat">
+        <span class="who"><b>${esc(it.name || '—')}</b>${it.title ? ' · ' + esc(it.title) : ''} · ${it.date ? esc(fmtDate(it.date)) : '—'}</span>
+        <b><span class="badge ${kind}">${esc(it.type || '—')}</span> ${fmtInt(it.shares)} sh · ${fmtMoney(it.value)}</b>
+      </div>`;
+    }).join('');
+    if (rows.length > 15) $('#insider-more').textContent = `+${rows.length - 15} more`;
+    panel.classList.remove('hidden');
+  } catch { /* evaluation unavailable: keep the panel hidden */ }
 }
 
 async function loadRecent() {
@@ -602,6 +724,119 @@ function openRecent(ticker) {
   $('#results-recent').scrollIntoView({ behavior: 'smooth' });
 }
 
+/* Screener ----------------------------------------------------------------- */
+
+const SCREEN = { items: [], sort: { key: 'ticker', dir: 1 }, timer: null };
+
+function submitScreen() {
+  const tickers = $('#screen-input').value
+    .split(/[\s,]+/).map(t => t.trim().toUpperCase()).filter(Boolean);
+  if (!tickers.length) {
+    $('#screen-progress').textContent = 'Enter at least one ticker.';
+    return;
+  }
+  clearTimeout(SCREEN.timer);
+  $('#screen-btn').disabled = true;
+  $('#screen-progress').textContent = 'queuing…';
+  fetch('/api/screener', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tickers }),
+  })
+    .then(async res => {
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Request failed');
+      const queued = Array.isArray(data.queued) ? data.queued : [];
+      if (queued.length) screenPoll(queued, tickers.length);
+      else {
+        $('#screen-progress').textContent = `${tickers.length}/${tickers.length} done`;
+        loadScreener();
+      }
+    })
+    .catch(err => { $('#screen-progress').textContent = `Screen failed: ${err.message}`; })
+    .finally(() => { $('#screen-btn').disabled = false; });
+}
+
+function screenPoll(queue, total) {
+  const pending = new Set(queue);
+  const progress = () => { $('#screen-progress').textContent = `${total - pending.size}/${total} done`; };
+  progress();
+  const tick = async () => {
+    await Promise.all(Array.from(pending).map(async ticker => {
+      try {
+        const job = await (await fetch(`/api/status/${encodeURIComponent(ticker)}`)).json();
+        if (job.status === 'done' || job.status === 'error') pending.delete(ticker);
+      } catch { pending.delete(ticker); }
+    }));
+    progress();
+    if (pending.size) SCREEN.timer = setTimeout(tick, 3000);
+    else { SCREEN.timer = null; loadScreener(); }
+  };
+  SCREEN.timer = setTimeout(tick, 3000);
+}
+
+async function loadScreener() {
+  try {
+    const res = await fetch('/api/screener');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Request failed');
+    SCREEN.items = Array.isArray(data.items) ? data.items : [];
+    renderScreener();
+  } catch {
+    $('#screen-body').innerHTML = '<tr><td colspan="9" class="muted">Could not load screened tickers.</td></tr>';
+  }
+}
+
+function sortScreen(key) {
+  const sort = SCREEN.sort;
+  if (sort.key === key) sort.dir = -sort.dir;
+  else { sort.key = key; sort.dir = 1; }
+  renderScreener();
+}
+
+const scoreCell = (v, hi, lo) => {
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return '—';
+  const n = Number(v);
+  const shown = String(Math.round(n));
+  if (n >= hi) return `<span class="badge done">${shown}</span>`;
+  if (n <= lo) return `<span class="badge error">${shown}</span>`;
+  return shown;
+};
+
+function renderScreener() {
+  const body = $('#screen-body');
+  document.querySelectorAll('#screen-table th[data-key]').forEach(th => {
+    th.textContent = th.dataset.label + (th.dataset.key === SCREEN.sort.key ? (SCREEN.sort.dir > 0 ? ' ▲' : ' ▼') : '');
+  });
+  if (!SCREEN.items.length) {
+    body.innerHTML = '<tr><td colspan="9" class="muted">No screened tickers yet.</td></tr>';
+    return;
+  }
+  const { key, dir } = SCREEN.sort;
+  const missing = v => v === null || v === undefined || v === ''
+    || (key !== 'ticker' && key !== 'modified' && Number.isNaN(Number(v)));
+  const rows = SCREEN.items.slice().sort((a, b) => {
+    const av = a[key], bv = b[key];
+    if (missing(av) && missing(bv)) return 0;
+    if (missing(av)) return 1;
+    if (missing(bv)) return -1;
+    if (key === 'ticker') return String(av).localeCompare(String(bv)) * dir;
+    if (key === 'modified') return (new Date(av) - new Date(bv)) * dir;
+    return (Number(av) - Number(bv)) * dir;
+  });
+  body.innerHTML = rows.map(row => `<tr>
+      <td><strong>${esc(row.ticker)}</strong></td>
+      <td>${esc(row.fiscal_year ?? '—')}</td>
+      <td>${scoreCell(row.f_score, 7, 3)}</td>
+      <td>${scoreCell(row.z_score, 2.99, 1.81)}</td>
+      <td>${fmtNum(row.pe, 1)}</td>
+      <td>${fmtNum(row.ev_ebit, 1)}</td>
+      <td>${fmtPct(row.fcf_yield)}</td>
+      <td>${fmtPctPoints(row.pe_percentile)}</td>
+      <td>${fmtDate(row.modified)}</td>
+    </tr>`).join('');
+}
+
 /* Simulation --------------------------------------------------------------- */
 
 const SIM = { ticker: '', range: '1y', mode: 'cash', data: null };
@@ -613,6 +848,13 @@ const fmtMoney = (v, currency = 'USD') => {
 };
 const fmtNum = (v, digits = 2) =>
   v === null || v === undefined || Number.isNaN(v) ? '—' : Number(v).toFixed(digits);
+const fmtPct = (v, digits = 1) =>
+  v === null || v === undefined || Number.isNaN(v) ? '—'
+    : fmtNum(Math.abs(Number(v)) <= 1 ? Number(v) * 100 : Number(v), digits) + '%';
+const fmtPctPoints = (v, digits = 1) =>
+  v === null || v === undefined || Number.isNaN(v) ? '—' : fmtNum(v, digits) + '%';
+const fmtInt = v =>
+  v === null || v === undefined || Number.isNaN(Number(v)) ? '—' : Number(v).toLocaleString();
 const fmtDate = value => {
   const d = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(d.getTime())) return '—';
@@ -663,6 +905,7 @@ async function loadSimulation(keepTarget = false) {
   const seq = (SIM.seq = (SIM.seq || 0) + 1);
   const changedTicker = ticker !== SIM.ticker;
   SIM.ticker = ticker;
+  loadImplied(ticker);
   $('#sim-status').textContent = `Fetching ${ticker} market data…`;
   try {
     const res = await fetch(`/api/simulation/${ticker}?range=${SIM.range}`);
@@ -871,6 +1114,69 @@ function renderSimulation() {
       ${plan.rows.map(row => `
         <div class="stat"><span>Year ${row.label}</span><b>${fmtMoney(row.value, data.currency)}</b></div>`).join('')}
     </div>`;
+}
+
+/* Implied growth ----------------------------------------------------------- */
+
+const IMPLIED = { ticker: '', latest: null, rows: [] };
+
+function fcfTrend(rows) {
+  const valid = rows
+    .filter(row => Number(row && row.FreeCashFlow) > 0)
+    .slice()
+    .sort((a, b) => Number(a.fiscal_year) - Number(b.fiscal_year));
+  if (valid.length < 2) return null;
+  const first = valid[0], last = valid[valid.length - 1];
+  const span = Number(last.fiscal_year) - Number(first.fiscal_year);
+  const years = span > 0 ? span : valid.length - 1;
+  if (!years) return null;
+  return {
+    rate: Math.pow(Number(last.FreeCashFlow) / Number(first.FreeCashFlow), 1 / years) - 1,
+    years,
+  };
+}
+
+function latestFcf(rows) {
+  const sorted = rows.slice().sort((a, b) => Number(a.fiscal_year) - Number(b.fiscal_year));
+  const row = sorted[sorted.length - 1];
+  const value = row ? Number(row.FreeCashFlow) : NaN;
+  return Number.isFinite(value) ? value : null;
+}
+
+function renderImplied() {
+  const text = $('#implied-text');
+  if (!text) return;
+  const latest = IMPLIED.latest;
+  const discount = Number($('#sim-discount').value);
+  const trend = fcfTrend(IMPLIED.rows);
+  const fcf = latestFcf(IMPLIED.rows);
+  let growth = '—';
+  if (latest && Number.isFinite(discount) && fcf !== null) {
+    // market_cap and FreeCashFlow share the same USD-millions scale.
+    const ev = Number(latest.market_cap);
+    if (ev > 0) growth = fmtNum(discount - (fcf / ev) * 100, 1) + '%';
+  }
+  text.textContent = `implied growth: ${growth} · historical FCF CAGR (${trend ? trend.years : '—'} y): ${trend ? fmtNum(trend.rate * 100, 1) + '%' : '—'}`;
+}
+
+async function loadImplied(ticker) {
+  IMPLIED.ticker = ticker;
+  try {
+    const [evalRes, fundRes] = await Promise.all([
+      fetch(`/api/evaluation/${encodeURIComponent(ticker)}`),
+      fetch(`/api/fundamentals/${encodeURIComponent(ticker)}`),
+    ]);
+    const evaluation = evalRes.ok ? await evalRes.json() : null;
+    const fundamentals = fundRes.ok ? await fundRes.json() : null;
+    if (IMPLIED.ticker !== ticker) return;
+    IMPLIED.latest = evaluation && evaluation.latest ? evaluation.latest : null;
+    IMPLIED.rows = fundamentals && Array.isArray(fundamentals.rows) ? fundamentals.rows : [];
+  } catch {
+    if (IMPLIED.ticker !== ticker) return;
+    IMPLIED.latest = null;
+    IMPLIED.rows = [];
+  }
+  renderImplied();
 }
 
 document.querySelectorAll('#sim-ranges button').forEach(button => {

@@ -49,6 +49,8 @@ one another:
 financial_graphs/
 ├── NFLX/
 │   ├── financial_data.csv   # per-year ratio inputs/outputs
+│   ├── evaluation.csv       # per-year valuation, quality and distress scores
+│   ├── insider.json         # open-market insider buys/sells, last 6 months
 │   ├── statements.csv       # every dimension-free primary-statement line
 │   ├── facts.csv            # every fact for each period, dimensions included
 │   └── notes.csv            # key schedules: debt, segments, EPS, taxes, shares
@@ -59,6 +61,16 @@ financial_graphs/
 `statements.csv` / `facts.csv` / `notes.csv` are the data-first, XBRL-driven
 artifacts: no metric is hard-coded, so a new filer needs no code change.
 `financial_data.csv` holds the derived ratio inputs/outputs.
+
+`evaluation.csv` (from `valuation.py`) adds per-year P/E, P/B, P/FCF, EV/EBIT,
+EV/EBITDA, earnings and FCF yield, the historical P/E median and percentile,
+Piotroski F-score (0–9), Altman Z-score and the accruals ratio. Prices come
+from Yahoo; if Yahoo is unreachable the run still succeeds and valuation is
+skipped with a warning. `insider.json` (from `insider.py`) lists open-market
+Form 4 buys and sells (codes `P` and `S`) for the last 6 months. Both steps are
+fail-soft, and the UI shows the trades as a card on the **Run** tab.
+`charts.py` renders them as `08_valuation.png` — P/E history against its median,
+annotated with the percentile, plus F-score and Z-score bars.
 
 ```bash
 python edgar_dashboard.py --ticker NFLX
@@ -82,17 +94,25 @@ Routes:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/` | The UI (Run / Recent tabs) |
+| `GET` | `/` | The UI (Run / Recent / Screener tabs) |
 | `POST` | `/api/run` | `{"ticker":"NFLX","filings":10}` → queues a run |
 | `GET` | `/api/status/<ticker>` | queued / running / done / error + log tail |
 | `GET` | `/api/identity` | Current SEC identity (name + email) |
 | `POST` | `/api/identity` | `{"identity":"Jane Doe jane@example.com"}` → save it |
 | `GET` | `/api/recent` | Tickers with results, newest first |
 | `GET` | `/api/files/<ticker>` | Chart list for a ticker |
+| `GET` | `/api/evaluation/<ticker>` | `evaluation.csv` rows for one ticker |
+| `GET` | `/api/fundamentals/<ticker>` | Flat metric set behind the screener |
+| `GET` | `/api/screener` | Cached screener results |
+| `POST` | `/api/screener` | `{"tickers":[...]}` (max 25) → scores and ratios |
 | `GET` | `/files/<ticker>/<name>` | View a chart inline |
 | `GET` | `/download/<ticker>` | Whole folder as a `.zip` |
 | `GET` | `/download/<ticker>/<name>` | One file |
 | `GET` | `/healthz` | Health probe |
+
+The **Screener** tab posts up to 25 tickers, shows a sortable table of scores and
+ratios, and caches each ticker's result for 7 days. Tickers with no cached data
+are queued through the same serialized worker as `/api/run`.
 
 ## Auto-deploy on push
 
@@ -289,6 +309,20 @@ All checks pass exactly (e.g. KHC 125/125, the default sample 284/284).
 > values that SEC's `companyconcept` API does not expose, so those specific
 > year-values are skipped rather than compared. Everything the API does expose
 > is matched exactly.
+
+## Finding cheap companies
+
+- Run a watchlist (up to 25 tickers) through the **Screener** tab.
+- Quality: require Piotroski F-score ≥ 7.
+- Safety: require Altman Z-score > 2.99 (below 1.81 is distress).
+- Cheapness: rank by low P/E percentile — cheap against its own history, not
+  the market — and by high FCF yield.
+- Cross-check insider buys (Form 4 code `P`); sells (code `S`) need a reason.
+- Sanity-check the price with the **Simulation** tab's "What the market
+  implies" card: one-stage implied growth is `discount rate − FCF / market cap`.
+  If that sits far above the historical FCF CAGR, the price asks for growth the
+  company has never delivered.
+- These scores are mechanical screens, not recommendations.
 
 ## Security & reliability hardening (2026-10)
 

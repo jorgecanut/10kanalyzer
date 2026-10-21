@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 from typing import Iterable
@@ -600,6 +601,41 @@ def main() -> None:
         print(f"[+] Wrote {len(facts)} facts and {len(notes)} note rows")
 
     print_summary(df)
+
+    # Optional valuation artifacts: price history vs. reported fundamentals.
+    # Entirely best-effort so a data source outage cannot fail the run.
+    try:
+        import valuation
+
+        history = valuation.fetch_price_history(TICKER)
+        evaluation = valuation.build_evaluation(TICKER, df, statements, facts, history)
+        if evaluation.empty:
+            print("[!] valuation skipped: no price history")
+        else:
+            valuation.write_evaluation(TICKER, evaluation, OUTPUT_DIR)
+            print(f"[+] Wrote valuation data ({len(evaluation)} years)")
+    except Exception as exc:  # noqa: BLE001 - optional artifact must never abort
+        print(f"[!] valuation skipped: {type(exc).__name__}: {exc}")
+
+    # Optional insider transactions; failure leaves the rest of the run intact.
+    try:
+        import insider
+
+        insider_path = insider.write_insiders(TICKER, OUTPUT_DIR)
+        if insider_path:
+            trades = None
+            try:
+                with open(insider_path, "r", encoding="utf-8") as fh:
+                    payload = json.load(fh)
+                trades = len(payload) if isinstance(payload, list) else len(payload.get("transactions", []))
+            except Exception:  # noqa: BLE001 - count is cosmetic only
+                trades = None
+            if trades is None:
+                print(f"[+] Wrote insider transactions ({insider_path})")
+            else:
+                print(f"[+] Wrote insider transactions ({trades} trades)")
+    except Exception as exc:  # noqa: BLE001 - optional artifact must never abort
+        print(f"[!] insider data skipped: {type(exc).__name__}: {exc}")
 
     print("[*] Rendering charts")
     rendered = charts.render_all(TICKER, OUTPUT_DIR, df, statements, facts)

@@ -1,0 +1,703 @@
+#!/usr/bin/env python3
+"""Per-fiscal-year valuation ratios, quality scores and history percentiles.
+
+Consumes the artifacts the extraction pipeline already writes
+(``financial_data.csv``, ``statements.csv``, ``facts.csv``) plus a monthly,
+split-adjusted price history from Yahoo Finance, and writes
+``evaluation.csv`` next to them.
+
+Money is in USD millions. Share counts are normalised for stock splits so that
+they line up with Yahoo's split-adjusted closes; without that, a 10:1 split
+would multiply the apparent market cap of every earlier year.
+
+Usage:
+    python valuation.py NFLX
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+import os
+import re
+import sys
+from urllib.parse import quote
+from urllib.request import Request, urlopen
+
+import numpy as np
+import pandas as pd
+
+# --------------------------------------------------------------------------- #
+# Configuration
+# --------------------------------------------------------------------------- #
+
+USD_TO_MILLIONS = 1_000_000
+PRICE_MATCH_DAYS = 10
+MIN_F_SCORE_TESTS = 6
+PRICE_RANGE_YEARS = 10
+PRICE_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) Stocky/1.0"
+BASE_OUTPUT_DIR = "financial_graphs"
+OUTPUT_COLUMNS = [
+    "fiscal_year", "price", "shares", "market_cap", "pe", "pb", "pfcf",
+    "ev_ebit", "ev_ebitda", "earnings_yield", "fcf_yield", "pe_median_hist",
+    "pe_percentile", "f_score", "z_score", "accruals_ratio",
+]
+
+# Candidate standard concepts / labels for the balance-sheet inputs that the
+# ratio dataframe does not carry (total assets and liabilities, retained
+# earnings, cash). The extractor's standard_concept vocabulary differs per
+# filer, so each metric lists every spelling seen in practice.
+TOTAL_ASSETS = (["Assets", "AssetsTotal", "TotalAssets"], ["total assets"])
+TOTAL_LIABILITIES = (
+    ["Liabilities", "LiabilitiesTotal", "TotalLiabilities"],
+    ["total liabilities"],
+)
+RETAINED_EARNINGS = (
+    ["RetainedEarnings", "RetainedEarningsAccumulatedDeficit", "AccumulatedDeficit"],
+    ["retained earnings", "accumulated deficit"],
+)
+CASH = (
+    [
+        "CashAndCashEquivalents", "CashAndCashEquivalentsAtCarryingValue",
+        "CashAndMarketableSecurities",
+        "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+        "CashCashEquivalentsAndShortTermInvestments",
+    ],
+    ["cash and cash equivalents", "cash and cash equivalents and restricted cash"],
+)
+EQUITY = (
+    [
+        "AllEquityBalance", "StockholdersEquity",
+        "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+        "Equity", "CommonEquity",
+    ],
+    ["total stockholders' equity", "total shareholders' equity", "total equity"],
+)
+LONG_TERM_DEBT = (
+    ["LongTermDebt", "LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations"],
+    ["long-term debt"],
+)
+CURRENT_ASSETS = (
+    ["CurrentAssetsTotal", "AssetsCurrent", "CurrentAssets"],
+    ["total current assets"],
+)
+CURRENT_LIABILITIES = (
+    ["CurrentLiabilitiesTotal", "LiabilitiesCurrent", "CurrentLiabilities"],
+    ["total current liabilities"],
+)
+DEPRECIATION = (
+    ["DepreciationExpense", "DepreciationDepletionAndAmortization",
+     "DepreciationAmortizationAndAccretionNet"],
+    ["depreciation and amortization"],
+)
+
+
+# --------------------------------------------------------------------------- #
+# Market data
+# --------------------------------------------------------------------------- #
+
+def _chart(ticker: str, query: str) -> dict:
+    url = (
+        "https://query1.finance.yahoo.com/v8/finance/chart/"
+        f"{quote(ticker)}?{query}"
+    )
+    request = Request(url, headers={
+        "User-Agent": PRICE_USER_AGENT,
+        "Accept": "application/json",
+    })
+    with urlopen(request, timeout=15) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def fetch_price_history(ticker: str, years: int = 10) -> list[dict]:
+    """Monthly split-adjusted closes from Yahoo's v8 chart API.
+
+    Returns ``[{"date": "YYYY-MM-DD", "close": float}]`` ascending by date, or
+    an empty list when the request fails for any reason.
+    """
+    try:
+        span = max(1, int(years))
+        payload = _chart(ticker, f"interval=1mo&range={span}y")
+        result = (payload.get("chart") or {}).get("result") or []
+        if not result:
+            raise ValueError("empty chart result")
+        series = result[0]
+        stamps = series.get("timestamp") or []
+        quotes = ((series.get("indicators") or {}).get("quote") or [{}])[0]
+        closes = quotes.get("close") or []
+        bars: dict[str, float] = {}
+        for stamp, close in zip(stamps, closes):
+            if close is None:
+                continue
+            value = float(close)
+            if not np.isfinite(value):
+                continue
+            day = dt.datetime.fromtimestamp(int(stamp), dt.UTC).date()
+            bars[day.isoformat()] = value
+        return [{"date": day, "close": bars[day]} for day in sorted(bars)]
+    except Exception:  # noqa: BLE001 - market data is best effort
+        print(f"[!] Price history unavailable for {ticker}")
+        return []
+
+
+def fetch_quote(ticker: str) -> dict | None:
+    """Latest price and currency from the chart meta block, or ``None``."""
+    try:
+        payload = _chart(ticker, "interval=1d&range=1d")
+        result = (payload.get("chart") or {}).get("result") or []
+        if not result:
+            return None
+        meta = result[0].get("meta") or {}
+        price = meta.get("regularMarketPrice")
+        if price is None:
+            quotes = ((result[0].get("indicators") or {}).get("quote") or [{}])[0]
+            closes = [c for c in (quotes.get("close") or []) if c is not None]
+            price = closes[-1] if closes else None
+        if price is None:
+            return None
+        return {
+            "price": float(price),
+            "currency": str(meta.get("currency") or "USD"),
+        }
+    except Exception:  # noqa: BLE001 - best effort
+        return None
+
+
+# --------------------------------------------------------------------------- #
+# Small helpers
+# --------------------------------------------------------------------------- #
+
+def _numeric(frame: pd.DataFrame, column: str) -> pd.Series:
+    if frame is None or column not in frame.columns:
+        return pd.Series(np.nan, index=frame.index if frame is not None else None)
+    return pd.to_numeric(frame[column], errors="coerce")
+
+
+def _norm(text) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(text).lower())
+
+
+def _finite(value) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return np.nan
+    return result if np.isfinite(result) else np.nan
+
+
+def _safe_div(numerator, denominator, positive_only: bool = False) -> float:
+    if not np.isfinite(numerator) or not np.isfinite(denominator):
+        return np.nan
+    if denominator == 0 or (positive_only and denominator <= 0):
+        return np.nan
+    return numerator / denominator
+
+
+def _statement_metric(
+    statements: pd.DataFrame,
+    years: list[int],
+    concepts: list[str],
+    labels: list[str],
+) -> pd.Series:
+    """Look a balance-sheet line up per fiscal year, tolerant to tag drift.
+
+    Exact standard_concept matches win, then exact label matches, then a
+    case-insensitive substring match. Values are converted to USD millions.
+    """
+    out = pd.Series(np.nan, index=years, dtype="float64")
+    if statements is None or statements.empty or "value" not in statements.columns:
+        return out
+    frame = statements.copy()
+    if "fiscal_year" not in frame.columns:
+        return out
+    frame["_fy"] = pd.to_numeric(frame["fiscal_year"], errors="coerce")
+    frame = frame[frame["_fy"].isin(years)]
+    frame["_value"] = pd.to_numeric(frame["value"], errors="coerce")
+    frame = frame[frame["_value"].notna()]
+    if frame.empty:
+        return out
+    if "standard_concept" in frame.columns:
+        frame["_std"] = frame["standard_concept"].map(_norm)
+    else:
+        frame["_std"] = ""
+    if "label" in frame.columns:
+        frame["_label"] = frame["label"].map(_norm)
+    else:
+        frame["_label"] = ""
+
+    concept_keys = [_norm(name) for name in concepts]
+    label_keys = [_norm(name) for name in labels]
+
+    for year in years:
+        rows = frame[frame["_fy"] == year]
+        if rows.empty:
+            continue
+        value = np.nan
+        # 1. Exact standard_concept match, in candidate order.
+        for key in concept_keys:
+            hit = rows[rows["_std"] == key]
+            if not hit.empty:
+                value = hit.iloc[0]["_value"]
+                break
+        # 2. Exact label match (e.g. Netflix tags cash as CashAndMarketableSecurities).
+        if pd.isna(value):
+            for key in label_keys:
+                hit = rows[rows["_label"] == key]
+                if not hit.empty:
+                    value = hit.iloc[0]["_value"]
+                    break
+        # 3. Substring fallback on either field.
+        if pd.isna(value):
+            for key in concept_keys + label_keys:
+                if len(key) < 6:
+                    continue
+                hit = rows[
+                    rows["_std"].str.contains(key, regex=False, na=False)
+                    | rows["_label"].str.contains(key, regex=False, na=False)
+                ]
+                if not hit.empty:
+                    value = hit.iloc[0]["_value"]
+                    break
+        out[year] = _finite(value) / USD_TO_MILLIONS
+    return out
+
+
+def _fact_metric(facts: pd.DataFrame, years: list[int], concepts: list[str]) -> pd.Series:
+    """Fallback lookup of a single fact concept per fiscal year (millions)."""
+    out = pd.Series(np.nan, index=years, dtype="float64")
+    if facts is None or facts.empty or "concept" not in facts.columns:
+        return out
+    frame = facts.copy()
+    if "fiscal_year" not in frame.columns or "value" not in frame.columns:
+        return out
+    frame["_fy"] = pd.to_numeric(frame["fiscal_year"], errors="coerce")
+    frame = frame[frame["_fy"].isin(years)]
+    frame["_value"] = pd.to_numeric(frame["value"], errors="coerce")
+    frame = frame[frame["_value"].notna()]
+    if frame.empty:
+        return out
+    names = frame["concept"].astype(str).str.split(":").str[-1]
+    if "is_dimensioned" in frame.columns:
+        frame = frame[~frame["is_dimensioned"].astype(bool)]
+        names = names.loc[frame.index]
+    for year in years:
+        rows = frame[frame["_fy"] == year]
+        year_names = names.loc[rows.index]
+        for concept in concepts:
+            hit = rows[year_names == concept]
+            if not hit.empty:
+                out[year] = _finite(hit.iloc[0]["_value"]) / USD_TO_MILLIONS
+                break
+    return out
+
+
+def _period_dates(data: pd.DataFrame, statements: pd.DataFrame) -> dict[int, pd.Timestamp]:
+    """Fiscal year -> period end date, preferring the statements' report dates."""
+    mapping: dict[int, pd.Timestamp] = {}
+    if statements is not None and not statements.empty:
+        if {"fiscal_year", "period_of_report"} <= set(statements.columns):
+            frame = statements[["fiscal_year", "period_of_report"]].copy()
+            frame["_fy"] = pd.to_numeric(frame["fiscal_year"], errors="coerce")
+            frame["_date"] = pd.to_datetime(frame["period_of_report"], errors="coerce")
+            frame = frame.dropna(subset=["_fy", "_date"])
+            for year, group in frame.groupby("_fy"):
+                mapping[int(year)] = group["_date"].max()
+    if "period_of_report" in data.columns:
+        dates = pd.to_datetime(data["period_of_report"], errors="coerce")
+        for year, date in zip(data["fiscal_year"], dates):
+            if pd.notna(date) and int(year) not in mapping:
+                mapping[int(year)] = date
+    for year in data["fiscal_year"]:
+        mapping.setdefault(int(year), pd.Timestamp(f"{int(year)}-12-31"))
+    return mapping
+
+
+def _close_near(price_history: list[dict], target: pd.Timestamp) -> float:
+    """Close closest to ``target`` within 10 days.
+
+    Monthly bars carry a first-of-month timestamp but represent the whole
+    month, so both the raw timestamp and the month end are considered.
+    """
+    if not price_history or target is None or pd.isna(target):
+        return np.nan
+    best = np.nan
+    best_gap = None
+    for bar in price_history:
+        day = pd.to_datetime(bar.get("date"), errors="coerce")
+        close = _finite(bar.get("close"))
+        if pd.isna(day) or pd.isna(close):
+            continue
+        for candidate in {day, day + pd.offsets.MonthEnd(0)}:
+            gap = abs((candidate - target).days)
+            if gap <= PRICE_MATCH_DAYS and (best_gap is None or gap < best_gap):
+                best, best_gap = close, gap
+    return best
+
+
+def _split_factor(ratio: float) -> float:
+    """Stock-split multiplier for a raw share-count ratio, else 1.0."""
+    if not np.isfinite(ratio) or ratio <= 0:
+        return 1.0
+    if ratio >= 1.5:
+        rounded = round(ratio)
+        if rounded >= 2 and abs(ratio - rounded) / rounded <= 0.10:
+            return float(rounded)
+        return ratio
+    if ratio <= 1 / 1.5:
+        inverse = 1 / ratio
+        rounded = round(inverse)
+        if rounded >= 2 and abs(inverse - rounded) / rounded <= 0.10:
+            return 1 / rounded
+        return ratio
+    return 1.0
+
+
+def _extract_shares(facts: pd.DataFrame, year: int) -> float:
+    """Newest dimension-free share count for one fiscal year, in shares."""
+    if facts is None or facts.empty:
+        return np.nan
+    if not {"concept", "value"} <= set(facts.columns):
+        return np.nan
+    frame = facts
+    if "fiscal_year" in frame.columns:
+        frame = frame[pd.to_numeric(frame["fiscal_year"], errors="coerce") == year]
+    if frame.empty:
+        return np.nan
+    names = frame["concept"].astype(str).str.split(":").str[-1]
+    for concept in ("CommonStockSharesOutstanding",
+                    "EntityCommonStockSharesOutstanding"):
+        rows = frame[names == concept].copy()
+        if rows.empty:
+            continue
+        if "is_dimensioned" in rows.columns:
+            rows = rows[~rows["is_dimensioned"].astype(bool)]
+        rows["_value"] = pd.to_numeric(rows["value"], errors="coerce")
+        rows = rows[rows["_value"] > 0]
+        if rows.empty:
+            continue
+        if "period_instant" in rows.columns:
+            instant = pd.to_datetime(rows["period_instant"], errors="coerce")
+        else:
+            instant = pd.Series(pd.NaT, index=rows.index)
+        if "period_end" in rows.columns:
+            end = pd.to_datetime(rows["period_end"], errors="coerce")
+        else:
+            end = pd.Series(pd.NaT, index=rows.index)
+        rows["_date"] = instant.fillna(end)
+        rows = rows.sort_values("_date", ascending=False, na_position="last")
+        return _finite(rows.iloc[0]["_value"])
+    return np.nan
+
+
+def _normalise_splits(raw: dict[int, float]) -> dict[int, float]:
+    """Scale historical share counts up to the newest split basis.
+
+    Yahoo prices are split-adjusted, so share counts before a split must be
+    multiplied by every later split factor or market cap collapses.
+    """
+    adjusted = dict(raw)
+    years = sorted(year for year, value in raw.items() if np.isfinite(value))
+    cumulative = 1.0
+    for index in range(len(years) - 1, -1, -1):
+        year = years[index]
+        adjusted[year] = raw[year] * cumulative
+        if index == 0:
+            break
+        older, newer = years[index - 1], year
+        if raw[older] > 0:
+            cumulative *= _split_factor(raw[newer] / raw[older])
+    return adjusted
+
+
+def _f_score(
+    year: int,
+    metrics: dict[int, dict],
+    shares: dict[int, float],
+) -> float:
+    """Piotroski F-score from current vs prior year, NaN under 6 tests."""
+    current = metrics[year]
+    prior = metrics.get(current["prior_year"])
+    if prior is None or prior is current:
+        return np.nan
+
+    tests: list[bool] = []
+    ni = current["net_income"]
+    ocf = current["operating_cash_flow"]
+    if np.isfinite(ni):
+        tests.append(ni > 0)
+    if np.isfinite(ocf):
+        tests.append(ocf > 0)
+    roa = _safe_div(ni, current["total_assets"], positive_only=True)
+    roa_prior = _safe_div(prior["net_income"], prior["total_assets"], positive_only=True)
+    if np.isfinite(roa) and np.isfinite(roa_prior):
+        tests.append(roa > roa_prior)
+    if np.isfinite(ni) and np.isfinite(ocf):
+        tests.append(ocf > ni)
+    leverage = _safe_div(current["long_term_debt"], current["total_assets"], positive_only=True)
+    leverage_prior = _safe_div(prior["long_term_debt"], prior["total_assets"], positive_only=True)
+    if np.isfinite(leverage) and np.isfinite(leverage_prior):
+        tests.append(leverage < leverage_prior)
+    if np.isfinite(current["current_ratio"]) and np.isfinite(prior["current_ratio"]):
+        tests.append(current["current_ratio"] > prior["current_ratio"])
+    current_shares = shares.get(year, np.nan)
+    prior_shares = shares.get(metrics[year]["prior_year"], np.nan)
+    if np.isfinite(current_shares) and np.isfinite(prior_shares) and prior_shares > 0:
+        tests.append(current_shares <= prior_shares * 1.02)
+    if np.isfinite(current["gross_margin"]) and np.isfinite(prior["gross_margin"]):
+        tests.append(current["gross_margin"] > prior["gross_margin"])
+    turnover = _safe_div(current["revenue"], current["total_assets"], positive_only=True)
+    turnover_prior = _safe_div(prior["revenue"], prior["total_assets"], positive_only=True)
+    if np.isfinite(turnover) and np.isfinite(turnover_prior):
+        tests.append(turnover > turnover_prior)
+
+    if len(tests) < MIN_F_SCORE_TESTS:
+        return np.nan
+    return float(int(round(sum(1 for passed in tests if passed))))
+
+
+# --------------------------------------------------------------------------- #
+# Evaluation build
+# --------------------------------------------------------------------------- #
+
+def _empty_evaluation() -> pd.DataFrame:
+    return pd.DataFrame({column: pd.Series(dtype="float64") for column in OUTPUT_COLUMNS})
+
+
+def build_evaluation(
+    ticker: str,
+    df: pd.DataFrame,
+    statements: pd.DataFrame,
+    facts: pd.DataFrame,
+    price_history: list[dict],
+) -> pd.DataFrame:
+    """One row per fiscal year with valuation ratios and quality scores."""
+    if df is None or df.empty or "fiscal_year" not in df.columns:
+        return _empty_evaluation()
+
+    data = df.copy()
+    data["fiscal_year"] = pd.to_numeric(data["fiscal_year"], errors="coerce")
+    data = data.dropna(subset=["fiscal_year"]).copy()
+    if data.empty:
+        return _empty_evaluation()
+    data["fiscal_year"] = data["fiscal_year"].astype(int)
+    data = (
+        data.sort_values("fiscal_year")
+        .drop_duplicates("fiscal_year", keep="last")
+        .reset_index(drop=True)
+    )
+    years = [int(year) for year in data["fiscal_year"]]
+
+    statement_metrics = {
+        "total_assets": _statement_metric(statements, years, *TOTAL_ASSETS),
+        "total_liabilities": _statement_metric(statements, years, *TOTAL_LIABILITIES),
+        "retained_earnings": _statement_metric(statements, years, *RETAINED_EARNINGS),
+        "cash": _statement_metric(statements, years, *CASH),
+        "equity": _statement_metric(statements, years, *EQUITY),
+        "long_term_debt": _statement_metric(statements, years, *LONG_TERM_DEBT),
+        "current_assets": _statement_metric(statements, years, *CURRENT_ASSETS),
+        "current_liabilities": _statement_metric(statements, years, *CURRENT_LIABILITIES),
+        "depreciation": _statement_metric(statements, years, *DEPRECIATION),
+    }
+    if statement_metrics["depreciation"].isna().all():
+        statement_metrics["depreciation"] = _fact_metric(
+            facts, years,
+            ["DepreciationDepletionAndAmortization",
+             "DepreciationAmortizationAndAccretionNet",
+             "DepreciationExpense"],
+        )
+
+    # Financial-data columns first; fall back to statements when a filer did
+    # not expose the line through the curated metric list.
+    revenue = _numeric(data, "Revenues")
+    net_income = _numeric(data, "NetIncomeLoss")
+    operating_cash_flow = _numeric(data, "OperatingCashFlow")
+    capex = _numeric(data, "CapEx")
+    if "FreeCashFlow" in data.columns:
+        free_cash_flow = pd.to_numeric(data["FreeCashFlow"], errors="coerce")
+    else:
+        free_cash_flow = operating_cash_flow - capex
+    ebit = _numeric(data, "OperatingIncomeLoss")
+    if "GrossProfit" in data.columns:
+        gross_profit = pd.to_numeric(data["GrossProfit"], errors="coerce")
+    else:
+        gross_profit = revenue - _numeric(data, "CostOfRevenue")
+
+    def by_year(series: pd.Series) -> pd.Series:
+        return data["fiscal_year"].map(series).reset_index(drop=True)
+
+    def pick(primary: pd.Series, fallback: pd.Series) -> pd.Series:
+        return primary.where(primary.notna(), fallback)
+
+    equity = pick(_numeric(data, "StockholdersEquity"), by_year(statement_metrics["equity"]))
+    long_term_debt = pick(
+        _numeric(data, "LongTermDebt"),
+        by_year(statement_metrics["long_term_debt"]),
+    )
+    current_assets = pick(
+        _numeric(data, "AssetsCurrent"),
+        by_year(statement_metrics["current_assets"]),
+    )
+    current_liabilities = pick(
+        _numeric(data, "LiabilitiesCurrent"),
+        by_year(statement_metrics["current_liabilities"]),
+    )
+    total_assets = by_year(statement_metrics["total_assets"])
+    total_liabilities = by_year(statement_metrics["total_liabilities"])
+    retained_earnings = by_year(statement_metrics["retained_earnings"])
+    cash = by_year(statement_metrics["cash"]).fillna(0.0)
+    depreciation = by_year(statement_metrics["depreciation"]).fillna(0.0)
+
+    # Share counts and price history.
+    raw_shares = {year: _extract_shares(facts, year) for year in years}
+    share_counts = _normalise_splits(raw_shares)
+    period_dates = _period_dates(data, statements)
+    prices = {year: _close_near(price_history, period_dates.get(year)) for year in years}
+
+    rows: list[dict] = []
+    metrics: dict[int, dict] = {}
+    for position, year in enumerate(years):
+        price = _finite(prices[year])
+        shares = _finite(share_counts.get(year, np.nan))
+        market_cap = price * shares / USD_TO_MILLIONS if (
+            np.isfinite(price) and np.isfinite(shares)
+        ) else np.nan
+
+        net_income_value = _finite(net_income.iloc[position])
+        revenue_value = _finite(revenue.iloc[position])
+        ocf_value = _finite(operating_cash_flow.iloc[position])
+        fcf_value = _finite(free_cash_flow.iloc[position])
+        ebit_value = _finite(ebit.iloc[position])
+        ebitda_value = ebit_value + _finite(depreciation.iloc[position]) if (
+            np.isfinite(ebit_value)
+        ) else np.nan
+        gross_value = _finite(gross_profit.iloc[position])
+        equity_value = _finite(equity.iloc[position])
+        debt_value = _finite(long_term_debt.iloc[position])
+        assets_value = _finite(total_assets.iloc[position])
+        liabilities_value = _finite(total_liabilities.iloc[position])
+        cash_value = _finite(cash.iloc[position])
+        current_assets_value = _finite(current_assets.iloc[position])
+        current_liabilities_value = _finite(current_liabilities.iloc[position])
+
+        enterprise_value = np.nan
+        if np.isfinite(market_cap):
+            enterprise_value = market_cap + (debt_value if np.isfinite(debt_value) else 0.0) \
+                - (cash_value if np.isfinite(cash_value) else 0.0)
+
+        pe = _safe_div(market_cap, net_income_value, positive_only=True)
+        pb = _safe_div(market_cap, equity_value, positive_only=True)
+        pfcf = _safe_div(market_cap, fcf_value, positive_only=True)
+        ev_ebit = _safe_div(enterprise_value, ebit_value, positive_only=True)
+        ev_ebitda = _safe_div(enterprise_value, ebitda_value, positive_only=True)
+        earnings_yield = _safe_div(ebit_value, enterprise_value, positive_only=True)
+        fcf_yield = _safe_div(fcf_value, enterprise_value, positive_only=True)
+
+        # Altman Z-score (public-manufacturer form).
+        z_score = np.nan
+        retained_value = _finite(retained_earnings.iloc[position])
+        if (
+            np.isfinite(assets_value) and assets_value > 0
+            and np.isfinite(liabilities_value) and liabilities_value > 0
+            and np.isfinite(market_cap)
+            and np.isfinite(retained_value)
+            and np.isfinite(current_assets_value)
+            and np.isfinite(current_liabilities_value)
+            and np.isfinite(ebit_value)
+            and np.isfinite(revenue_value)
+        ):
+            working_capital = current_assets_value - current_liabilities_value
+            z_score = (
+                1.2 * working_capital / assets_value
+                + 1.4 * retained_value / assets_value
+                + 3.3 * ebit_value / assets_value
+                + 0.6 * market_cap / liabilities_value
+                + 1.0 * revenue_value / assets_value
+            )
+
+        accruals_ratio = np.nan
+        if np.isfinite(assets_value) and assets_value > 0:
+            accruals_ratio = _safe_div(
+                net_income_value - ocf_value, assets_value
+            ) if np.isfinite(net_income_value) and np.isfinite(ocf_value) else np.nan
+
+        metrics[year] = {
+            "prior_year": years[position - 1] if position > 0 else year,
+            "net_income": net_income_value,
+            "operating_cash_flow": ocf_value,
+            "total_assets": assets_value,
+            "long_term_debt": debt_value,
+            "current_ratio": _safe_div(
+                current_assets_value, current_liabilities_value, positive_only=True
+            ),
+            "gross_margin": _safe_div(gross_value, revenue_value, positive_only=True),
+            "revenue": revenue_value,
+        }
+
+        rows.append({
+            "fiscal_year": year,
+            "price": price,
+            "shares": shares,
+            "market_cap": market_cap,
+            "pe": pe,
+            "pb": pb,
+            "pfcf": pfcf,
+            "ev_ebit": ev_ebit,
+            "ev_ebitda": ev_ebitda,
+            "earnings_yield": earnings_yield,
+            "fcf_yield": fcf_yield,
+            "pe_median_hist": np.nan,
+            "pe_percentile": np.nan,
+            "f_score": _f_score(year, metrics, share_counts),
+            "z_score": z_score,
+            "accruals_ratio": accruals_ratio,
+        })
+
+    evaluation = pd.DataFrame(rows, columns=OUTPUT_COLUMNS)
+    pe_series = pd.to_numeric(evaluation["pe"], errors="coerce").dropna()
+    if len(pe_series):
+        evaluation["pe_median_hist"] = float(pe_series.median())
+        if len(pe_series) >= 3:
+            for index, value in evaluation["pe"].items():
+                if pd.notna(value):
+                    evaluation.at[index, "pe_percentile"] = (
+                        (pe_series < value).sum() + 0.5 * (pe_series == value).sum()
+                    ) / len(pe_series) * 100.0
+    evaluation["fiscal_year"] = evaluation["fiscal_year"].astype(int)
+    return evaluation.sort_values("fiscal_year").reset_index(drop=True)
+
+
+def write_evaluation(ticker: str, evaluation: pd.DataFrame, output_dir: str) -> str:
+    """Write ``evaluation.csv`` into ``output_dir`` and return its path."""
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, "evaluation.csv")
+    evaluation.to_csv(path, index=False)
+    return path
+
+
+# --------------------------------------------------------------------------- #
+# Manual run
+# --------------------------------------------------------------------------- #
+
+def main() -> None:
+    ticker = (sys.argv[1] if len(sys.argv) > 1 else "NFLX").upper()
+    output_dir = os.path.join(BASE_OUTPUT_DIR, ticker)
+
+    def load(name: str) -> pd.DataFrame:
+        path = os.path.join(output_dir, name)
+        if not os.path.exists(path):
+            print(f"[!] Missing {path}; continuing with empty input")
+            return pd.DataFrame()
+        return pd.read_csv(path)
+
+    df = load("financial_data.csv")
+    statements = load("statements.csv")
+    facts = load("facts.csv")
+    history = fetch_price_history(ticker, PRICE_RANGE_YEARS)
+    evaluation = build_evaluation(ticker, df, statements, facts, history)
+    path = write_evaluation(ticker, evaluation, output_dir)
+    print(evaluation.to_string(index=False))
+    print(f"[+] Wrote {path}")
+
+
+if __name__ == "__main__":
+    main()

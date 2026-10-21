@@ -842,6 +842,177 @@ def chart_returns(
 
 
 # --------------------------------------------------------------------------- #
+# Chart 8: Valuation & quality (P/E history + F-score / Z-score).
+# --------------------------------------------------------------------------- #
+def _valuation_column(frame: pd.DataFrame, col: str) -> pd.Series:
+    if col not in frame.columns:
+        return pd.Series(np.nan, index=frame.index)
+    return pd.to_numeric(frame[col], errors="coerce")
+
+
+def chart_valuation(ticker: str, output_dir: str, years: list[int]) -> list[str]:
+    path = os.path.join(output_dir, "evaluation.csv")
+    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        return []
+    try:
+        data = pd.read_csv(path)
+    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
+        return []
+    if data.empty or "fiscal_year" not in data.columns:
+        return []
+
+    numeric_cols = [
+        "price", "shares", "market_cap", "pe", "pb", "pfcf", "ev_ebit",
+        "ev_ebitda", "earnings_yield", "fcf_yield", "pe_median_hist",
+        "pe_percentile", "f_score", "z_score", "accruals_ratio",
+    ]
+    for col in numeric_cols:
+        data[col] = _valuation_column(data, col)
+    data["fiscal_year"] = pd.to_numeric(data["fiscal_year"], errors="coerce")
+    data = data.dropna(subset=["fiscal_year"]).copy()
+    if data.empty:
+        return []
+    data["fiscal_year"] = data["fiscal_year"].astype(int)
+    data = data.sort_values("fiscal_year").reset_index(drop=True)
+
+    pe = data["pe"]
+    f_score = data["f_score"]
+    z_score = data["z_score"]
+    positions = np.arange(len(data))
+    labels = [str(year) for year in data["fiscal_year"]]
+
+    fig, (ax_pe, ax_q) = plt.subplots(1, 2, figsize=(14, 6.5))
+    fig.suptitle(f"Valuation & Quality — {ticker}", fontsize=14, fontweight="bold")
+
+    # Left: P/E per fiscal year with the historical median as reference.
+    pe_color = COLORS["Revenue"]
+    ax_pe.set_title("P/E by fiscal year", fontsize=11, pad=10)
+    pe_mask = pe.notna()
+    if pe_mask.any():
+        ax_pe.bar(
+            positions[pe_mask.to_numpy()],
+            pe[pe_mask].to_numpy(),
+            width=0.6,
+            color=pe_color,
+            label="P/E",
+        )
+        for x, value in zip(positions[pe_mask.to_numpy()], pe[pe_mask].to_numpy()):
+            ax_pe.text(
+                x, value, f"{value:.1f}x", ha="center", va="bottom", fontsize=7,
+                color="#374151",
+                path_effects=[path_effects.withStroke(linewidth=2, foreground="white")],
+            )
+    else:
+        ax_pe.text(
+            0.5, 0.5, "No P/E data", transform=ax_pe.transAxes,
+            ha="center", va="center", color="#6b7280",
+        )
+
+    medians = data["pe_median_hist"].dropna()
+    if not medians.empty:
+        median_pe = float(medians.iloc[-1])
+        ax_pe.axhline(
+            median_pe, color=COLORS["Interest Expense"], linestyle="--", linewidth=1.6,
+            label="Historical median",
+        )
+        ax_pe.text(
+            positions[-1] if len(positions) else 0,
+            median_pe,
+            f"median {median_pe:.1f}x",
+            ha="right",
+            va="bottom",
+            fontsize=8,
+            color=COLORS["Interest Expense"],
+        )
+
+    percentiles = data["pe_percentile"].dropna()
+    if not percentiles.empty:
+        pct_value = float(percentiles.iloc[-1])
+        if abs(pct_value) <= 1.0:
+            pct_value *= 100
+        pct_year = int(data.loc[percentiles.index[-1], "fiscal_year"])
+        ax_pe.text(
+            0.0, 1.0, f"FY{pct_year} P/E percentile: {pct_value:.0f}%",
+            transform=ax_pe.transAxes, ha="left", va="bottom", fontsize=9,
+            color="#374151",
+        )
+
+    ax_pe.set_xticks(positions)
+    ax_pe.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
+    ax_pe.tick_params(axis="y", labelsize=9)
+    ax_pe.grid(axis="y", alpha=0.3)
+    ax_pe.set_axisbelow(True)
+    ax_pe.axhline(0, color="black", linewidth=0.8)
+    ax_pe.set_ylabel("P/E (x)", fontsize=10)
+    ax_pe.margins(y=0.18)
+
+    # Right: F-score on the left axis, Z-score on a twin right axis. The bars
+    # are offset so both series stay readable at every year.
+    ax_f = ax_q
+    ax_z = ax_f.twinx()
+    f_color = COLORS["Gross Margin"]
+    z_color = COLORS["ROA"]
+    width = 0.36
+    ax_f.set_title("F-Score and Z-Score by fiscal year", fontsize=11, pad=10)
+    f_bars = ax_f.bar(
+        positions - width / 2,
+        f_score.to_numpy(),
+        width,
+        color=f_color,
+        label="F-Score (left)",
+    )
+    z_bars = ax_z.bar(
+        positions + width / 2,
+        z_score.to_numpy(),
+        width,
+        color=z_color,
+        alpha=0.85,
+        label="Z-Score (right)",
+    )
+    for bar, value in zip(f_bars, f_score.to_numpy()):
+        if pd.notna(value):
+            ax_f.text(
+                bar.get_x() + bar.get_width() / 2, value, f"{value:.0f}",
+                ha="center", va="bottom", fontsize=7, color="#374151",
+                path_effects=[path_effects.withStroke(linewidth=2, foreground="white")],
+            )
+    for bar, value in zip(z_bars, z_score.to_numpy()):
+        if pd.notna(value):
+            ax_z.text(
+                bar.get_x() + bar.get_width() / 2, value, f"{value:.1f}",
+                ha="center", va="bottom", fontsize=7, color="#374151",
+                path_effects=[path_effects.withStroke(linewidth=2, foreground="white")],
+            )
+
+    if f_score.dropna().empty and z_score.dropna().empty:
+        ax_f.text(
+            0.5, 0.5, "No quality data", transform=ax_f.transAxes,
+            ha="center", va="center", color="#6b7280",
+        )
+
+    ax_f.set_xticks(positions)
+    ax_f.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
+    ax_f.tick_params(axis="y", labelsize=9)
+    ax_f.grid(axis="y", alpha=0.3)
+    ax_f.set_axisbelow(True)
+    ax_f.axhline(0, color="black", linewidth=0.8)
+    ax_f.set_ylabel("F-Score (0-9)", fontsize=10)
+    ax_f.set_ylim(0, 9.6)
+    ax_z.set_ylabel("Z-Score", fontsize=10)
+    ax_z.tick_params(axis="y", labelsize=9)
+    ax_z.margins(y=0.18)
+
+    handles = [f_bars, z_bars]
+    ax_f.legend(
+        handles, ["F-Score (left)", "Z-Score (right)"],
+        loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=2,
+        fontsize=8, frameon=False,
+    )
+
+    return [_save(fig, os.path.join(output_dir, "08_valuation.png"))]
+
+
+# --------------------------------------------------------------------------- #
 # Generic grouped-bar renderer with 5-year windows.
 # --------------------------------------------------------------------------- #
 def _grouped_bar_windows(
@@ -934,6 +1105,7 @@ def render_all(
         lambda: chart_cashflow_operations(ticker, output_dir, df, statements, years),
         lambda: chart_cashflow_financing(ticker, output_dir, df, statements, years),
         lambda: chart_returns(ticker, output_dir, df, statements, years),
+        lambda: chart_valuation(ticker, output_dir, years),
     ]
     for call in chart_calls:
         try:
