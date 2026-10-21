@@ -113,16 +113,22 @@ def _ticker_dir(ticker: str) -> Path:
 
 def _charts(ticker: str) -> list[str]:
     directory = _ticker_dir(ticker)
-    if not directory.is_dir():
+    try:
+        if not directory.is_dir():
+            return []
+        return sorted(p.name for p in directory.iterdir() if p.suffix.lower() == ".png")
+    except OSError:
         return []
-    return sorted(p.name for p in directory.iterdir() if p.suffix.lower() == ".png")
 
 
 def _results_summary(ticker: str) -> dict | None:
     directory = _ticker_dir(ticker)
-    if not directory.is_dir():
+    try:
+        if not directory.is_dir():
+            return None
+        files = [p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in ALLOWED_FILES]
+    except OSError:
         return None
-    files = [p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in ALLOWED_FILES]
     if not files:
         return None
     modified = max(p.stat().st_mtime for p in files)
@@ -227,8 +233,20 @@ def _worker(ticker: str, filings: int) -> None:
     """Run the dashboard in a subprocess, one at a time."""
     with RUN_LOCK:
         directory = _ticker_dir(ticker)
-        directory.mkdir(parents=True, exist_ok=True)
-        log_path = directory / "run.log"
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            log_path = directory / "run.log"
+        except OSError as exc:
+            # Usually the bind-mounted financial_graphs is not writable by the
+            # container user (uid 10001). Report it instead of leaving the job
+            # stuck on "queued" forever.
+            message = (
+                f"cannot write results dir {directory}: {type(exc).__name__}: {exc} "
+                f"(uid={os.getuid()}; check the financial_graphs bind mount ownership)"
+            )
+            with JOBS_LOCK:
+                JOBS[ticker].update(status="error", finished=_now(), returncode=-1, error=message)
+            return
 
         with JOBS_LOCK:
             JOBS[ticker].update(status="running", started=_now())
@@ -256,7 +274,13 @@ def _worker(ticker: str, filings: int) -> None:
             status = "done" if code == 0 else "error"
         except Exception as exc:  # noqa: BLE001 - surface any launch failure in the UI
             status, code = "error", -1
-            log_path.write_text(f"Failed to launch dashboard: {exc}\n")
+            message = f"Failed to launch dashboard: {type(exc).__name__}: {exc}"
+            try:
+                log_path.write_text(message + "\n")
+            except OSError:
+                pass
+            with JOBS_LOCK:
+                JOBS[ticker]["error"] = message
 
         with JOBS_LOCK:
             JOBS[ticker].update(status=status, finished=_now(), returncode=code)
@@ -313,6 +337,28 @@ def build_info() -> dict:
             info[key] = hashlib.sha1(path.read_bytes()).hexdigest()
         except OSError:
             info[key] = None
+    info["graph"] = graph_diagnostics()
+    return info
+
+
+def graph_diagnostics() -> dict:
+    """Why results may be invisible: the path the app reads, and whether it can.
+
+    A bind mount that is not writable by the container user (uid 10001) is the
+    usual cause of "the run says it wrote charts but nothing appears".
+    """
+    info = {
+        "graph_dir": str(GRAPH_DIR),
+        "exists": GRAPH_DIR.is_dir(),
+        "writable": os.access(GRAPH_DIR, os.W_OK) if GRAPH_DIR.is_dir() else False,
+        "readable": os.access(GRAPH_DIR, os.R_OK) if GRAPH_DIR.is_dir() else False,
+        "uid": os.getuid(),
+    }
+    try:
+        info["tickers"] = sorted(p.name for p in GRAPH_DIR.iterdir() if p.is_dir())
+    except OSError as exc:
+        info["tickers"] = []
+        info["error"] = f"{type(exc).__name__}: {exc}"
     return info
 
 
@@ -372,9 +418,11 @@ def status(ticker: str):
 
 @app.get("/api/recent")
 def recent():
-    if not GRAPH_DIR.is_dir():
-        return jsonify(items=[])
-    items = [s for d in GRAPH_DIR.iterdir() if d.is_dir() for s in [_results_summary(d.name)] if s]
+    try:
+        dirs = [d for d in GRAPH_DIR.iterdir() if d.is_dir()] if GRAPH_DIR.is_dir() else []
+    except OSError:
+        dirs = []
+    items = [s for d in dirs for s in [_results_summary(d.name)] if s]
     items.sort(key=lambda s: s["modified_ts"], reverse=True)
     for item in items:
         item.pop("modified_ts", None)
@@ -408,7 +456,12 @@ def files(ticker: str):
     ticker = _normalise_ticker(ticker)
     summary = _results_summary(ticker)
     if not summary:
-        abort(404, "No results for that ticker yet.")
+        return jsonify(
+            error="No results for that ticker yet.",
+            ticker=ticker,
+            ticker_dir=str(_ticker_dir(ticker)),
+            diagnostics=graph_diagnostics(),
+        ), 404
     return jsonify(summary)
 
 
@@ -573,15 +626,19 @@ SCREENER_FIELDS = (
 @app.get("/api/screener")
 def screener():
     items = []
-    if GRAPH_DIR.is_dir():
-        for directory in GRAPH_DIR.iterdir():
-            if not directory.is_dir() or not TICKER_RE.match(directory.name):
-                continue
+    try:
+        directories = sorted(p for p in GRAPH_DIR.iterdir() if p.is_dir()) if GRAPH_DIR.is_dir() else []
+    except OSError:
+        directories = []
+    for directory in directories:
+        if not TICKER_RE.match(directory.name):
+            continue
+        try:
             path = directory / "evaluation.csv"
             if not path.is_file():
-                # Results exist but the pipeline that produced them wrote no
-                # valuation data (e.g. an older checkout): surface it instead of
-                # silently hiding the ticker from the screener.
+                # Results exist but the pipeline wrote no valuation data (older
+                # image, or Yahoo unreachable): surface it instead of hiding the
+                # ticker from the screener.
                 if (directory / "financial_data.csv").is_file():
                     modified = max(
                         (p.stat().st_mtime for p in directory.iterdir() if p.is_file()),
@@ -604,6 +661,8 @@ def screener():
                 path.stat().st_mtime, timezone.utc
             ).isoformat(timespec="seconds")
             items.append(item)
+        except OSError:
+            continue
     items.sort(key=lambda item: item["ticker"])
     return jsonify(items=items, pipeline=build_info())
 

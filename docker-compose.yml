@@ -10,13 +10,18 @@ services:
     restart: unless-stopped
     environment:
       EDGAR_IDENTITY: "${EDGAR_IDENTITY:-Data Analyst analyst@example.com}"
+      # edgartools writes to ~/.edgar / ~/.edgar_cache by default; set them
+      # explicitly so the bind mounts below match regardless of HOME.
+      EDGAR_LOCAL_DATA_DIR: /home/appuser/.edgar
+      EDGAR_CACHE_DIR: /home/appuser/.edgar_cache
     ports:
       - "${HTTP_PORT:-8053}:8000"
     volumes:
       - /mnt/tanques/stocky/financial_graphs:/app/financial_graphs
-      # Cache SEC downloads so repeat runs are fast.
-      - /mnt/tanques/stocky/edgar_cache:/root/.edgar_cache
-      - /mnt/tanques/stocky/edgar_data:/root/.edgar
+      # Cache SEC downloads so repeat runs are fast. The container runs as
+      # appuser (uid 10001), so these must land in that user's home, not /root.
+      - /mnt/tanques/stocky/edgar_cache:/home/appuser/.edgar_cache
+      - /mnt/tanques/stocky/edgar_data:/home/appuser/.edgar
     mem_limit: 2g
     logging:
       driver: json-file

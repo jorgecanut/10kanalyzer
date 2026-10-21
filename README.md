@@ -206,6 +206,32 @@ docker compose up -d                # start it again
 - If you removed `image:` from the compose file, check the generated name with
   `docker compose images`.
 
+### Container permissions (the container is NOT root)
+
+The image runs as `appuser`, **uid 10001** (since the 2026-10 hardening). Every
+host path bind-mounted into it must be writable by that uid, or the pipeline
+runs, reports success in its own log, and the app still sees nothing:
+
+```bash
+sudo chown -R 10001:10001 /mnt/tanques/stocky/financial_graphs \
+                           /mnt/tanques/stocky/edgar_cache \
+                           /mnt/tanques/stocky/edgar_data
+```
+
+- The SEC cache is written to `~/.edgar` / `~/.edgar_cache`, so the compose file
+  sets `EDGAR_LOCAL_DATA_DIR` / `EDGAR_CACHE_DIR` to `/home/appuser/...` — keep
+  those env values and the mount targets in sync if you move them.
+- Diagnose in one request: `curl -s localhost:8053/healthz` prints a `graph`
+  block — `graph_dir`, `exists`, `readable`, `writable`, `uid`, and the ticker
+  folders the app can actually see. `readable: false` or an `error` there is
+  your answer.
+- The UI does the same: if a run finishes but `/api/files/<ticker>` finds
+  nothing, the results area shows a card with that path, the uid and the visible
+  tickers instead of staying blank. A run that cannot even create its output
+  directory fails immediately with
+  `cannot write results dir <path>: PermissionError … (uid=10001; check the
+  financial_graphs bind mount ownership)` rather than hanging on *queued*.
+
 ### Deploy checklist (read this before adding a module)
 
 **The `Dockerfile` copies every root Python module with `COPY *.py ./`. Do not
@@ -227,11 +253,17 @@ curl -s localhost:8053/healthz
 
 ```json
 {"status":"ok","version":"dev","features":["valuation","insider"],
- "pipeline_sha1":"…","charts_sha1":"…"}
+ "pipeline_sha1":"…","charts_sha1":"…",
+ "graph":{"graph_dir":"/app/financial_graphs","exists":true,"readable":true,
+          "writable":true,"uid":10001,"tickers":["AAPL","NFLX"]}}
 ```
 
 - `features` missing `valuation` → the image was built without that module
   (wrong build context, or a stale/edited Dockerfile).
+- `graph.writable: false`, `graph.readable: false` or a `graph.error` → the bind
+  mount is not usable by uid 10001; fix ownership (§ "Container permissions").
+- `graph.tickers` not containing a ticker you just ran → the app and the
+  pipeline are not looking at the same directory (mount/`build.context`).
 - `pipeline_sha1` / `charts_sha1` must equal
   `sha1sum edgar_dashboard.py charts.py` **in the build context directory**.
   Different hashes → the container is not running the code you pulled.

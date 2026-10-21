@@ -587,7 +587,7 @@ def main() -> None:
     df = clean_and_derive(raw)
 
     df.to_csv(DATA_CSV, index=False)
-    print(f"[+] Wrote ratio data to {DATA_CSV}")
+    print(f"[+] Wrote ratio data to {os.path.abspath(DATA_CSV)}")
 
     # XBRL-driven artifacts: everything the filer stated, not a curated list.
     if not statements.empty:
@@ -641,7 +641,7 @@ def main() -> None:
     rendered = charts.render_all(TICKER, OUTPUT_DIR, df, statements, facts)
     print(f"    [+] {len(rendered)} charts written")
 
-    print(f"\n[+] Done. {len(rendered)} charts and CSV data written to '{OUTPUT_DIR}/'.")
+    print(f"\n[+] Done. {len(rendered)} charts and CSV data written to '{os.path.abspath(OUTPUT_DIR)}/'.")
 
 
 if __name__ == "__main__":

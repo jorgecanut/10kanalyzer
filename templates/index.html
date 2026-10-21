@@ -685,6 +685,7 @@ function poll(ticker) {
         delete LIVE[ticker];
         pickActive();
         $('#run-btn').disabled = false;
+        if (job.error) setTermLog((job.log ? job.log + '\n' : '') + `error: ${job.error}`);
       } else {
         poll(ticker);
       }
@@ -700,8 +701,32 @@ function poll(ticker) {
 async function loadResults(ticker, target) {
   loadInsiders(ticker);
   const res = await fetch(`/api/files/${ticker}`);
-  if (!res.ok) return;
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    renderResultsError(ticker, data, target);
+    return;
+  }
   renderResults(await res.json(), target);
+}
+
+function renderResultsError(ticker, data, target) {
+  const d = data.diagnostics || {};
+  const detail = [
+    d.graph_dir ? `reads: ${esc(d.graph_dir)}` : '',
+    d.exists === false ? 'the results directory does not exist' : '',
+    d.writable === false ? `not writable by uid ${esc(d.uid)} — the bind-mounted financial_graphs is probably root-owned; run: sudo chown -R 10001:10001 <host financial_graphs>` : '',
+    Array.isArray(d.tickers) && d.tickers.length ? `visible tickers: ${esc(d.tickers.join(', '))}` : 'no ticker folders visible',
+    data.ticker_dir ? `expected: ${esc(data.ticker_dir)}` : '',
+  ].filter(Boolean).join(' · ');
+  $(target).innerHTML = `
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <strong>${esc(ticker)} — no results the app can see</strong>
+      </div>
+      <p class="muted">${esc(data.error || 'The run may have finished but its files are not visible to the app.')}</p>
+      ${detail ? `<p class="muted">${detail}</p>` : ''}
+      <p class="muted">Check <a href="/healthz" target="_blank">/healthz</a> for the same diagnostics.</p>
+    </div>`;
 }
 
 function renderResults(data, target) {
