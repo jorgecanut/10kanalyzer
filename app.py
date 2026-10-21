@@ -232,7 +232,7 @@ def _worker(ticker: str, filings: int) -> None:
         with JOBS_LOCK:
             JOBS[ticker].update(status="running", started=_now())
         try:
-            env = {**os.environ, "EDGAR_IDENTITY": _get_identity()}
+            env = {**os.environ, "EDGAR_IDENTITY": _get_identity(), "PYTHONUNBUFFERED": "1"}
             with log_path.open("w") as log:
                 proc = subprocess.Popen(
                     [sys.executable, str(DASHBOARD), "--ticker", ticker, "--filings", str(filings)],
@@ -345,7 +345,7 @@ def status(ticker: str):
     summary = _results_summary(ticker)
     if summary:
         # No in-memory job (e.g. after a restart) but results exist on disk.
-        return jsonify(status="done", ticker=ticker, charts=summary["charts"], log="")
+        return jsonify(status="done", ticker=ticker, charts=summary["charts"], log=_log_tail(ticker))
     return jsonify(status="idle", ticker=ticker)
 
 
