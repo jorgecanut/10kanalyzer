@@ -206,6 +206,44 @@ docker compose up -d                # start it again
 - If you removed `image:` from the compose file, check the generated name with
   `docker compose images`.
 
+### Deploy checklist (read this before adding a module)
+
+**The `Dockerfile` copies every root Python module with `COPY *.py ./`. Do not
+replace that with an explicit file list.** A hard-coded list is how a new module
+(`valuation.py`, `insider.py`) gets left out of the image: the container then
+runs a current `app.py` with a stale pipeline, the pipeline prints
+`[!] valuation skipped: ModuleNotFoundError`, no `evaluation.csv` is written,
+and the screener table stays empty with no obvious error.
+
+After every deploy, confirm what is actually running:
+
+```bash
+sudo git pull                        # then build + up; do NOT chain with && silently
+sudo docker compose build --no-cache && sudo docker compose up -d
+curl -s localhost:8053/healthz
+```
+
+`/healthz` must report the pipeline modules and the exact code hashes:
+
+```json
+{"status":"ok","version":"dev","features":["valuation","insider"],
+ "pipeline_sha1":"…","charts_sha1":"…"}
+```
+
+- `features` missing `valuation` → the image was built without that module
+  (wrong build context, or a stale/edited Dockerfile).
+- `pipeline_sha1` / `charts_sha1` must equal
+  `sha1sum edgar_dashboard.py charts.py` **in the build context directory**.
+  Different hashes → the container is not running the code you pulled.
+
+Two failure modes to watch for, both silent:
+
+- `git pull && docker compose build && docker compose up -d` stops at the first
+  failure — a dirty working tree means no rebuild and the old container keeps
+  serving. Run the steps separately or check the pull output.
+- `docker compose up -d` **without** `build` reuses the existing image; code
+  changes need `up -d --build` (or an explicit `build`).
+
 ## Metrics extracted per fiscal year
 
 | Metric | XBRL concept(s) | Statement |
@@ -385,6 +423,9 @@ this project must not regress them.
 - The dead `edgar_cache` / `edgar_data` named volumes were removed; caches
   are host bind mounts.
 - The image serves Flask via `waitress`, not the dev server.
+- The image copies **every** root module (`COPY *.py ./`). Never use an explicit
+  file list — that is how `valuation.py` was left out of a build and the
+  screener silently produced nothing. See § "Deploy checklist".
 - `requirements.txt` is pinned to exact tested versions (auto-deploy builds
   on every push; unpinned deps were unreviewed supply-chain exposure).
 

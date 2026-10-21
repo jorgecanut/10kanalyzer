@@ -13,8 +13,8 @@ COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
 
-# Application code.
-COPY edgar_dashboard.py xbrl_extract.py verify_facts.py app.py charts.py ./
+# Application code (glob: every root module, so new ones cannot be missed).
+COPY *.py ./
 COPY templates ./templates
 COPY static ./static
 
