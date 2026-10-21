@@ -915,6 +915,7 @@ async function loadScreener() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Request failed');
     SCREEN.items = Array.isArray(data.items) ? data.items : [];
+    SCREEN.pipeline = data.pipeline || null;
     renderScreener();
   } catch {
     $('#screen-body').innerHTML = '<tr><td colspan="9" class="muted">Could not load screened tickers.</td></tr>';
@@ -947,10 +948,18 @@ function renderScreener() {
     return;
   }
   const stale = SCREEN.items.filter(row => row.has_evaluation === false).length;
-  const banner = stale
-    ? `<tr><td colspan="9" class="muted">${stale} ticker(s) have results but no <code>evaluation.csv</code> —
-        the pipeline that produced them wrote no valuation data (usually an older checkout or a failed Yahoo fetch).
-        Re-run them to populate the table.</td></tr>`
+  const stalePipeline = SCREEN.pipeline && Array.isArray(SCREEN.pipeline.features)
+    && !SCREEN.pipeline.features.includes('valuation');
+  const pipelineNote = stalePipeline
+    ? `This deployment's pipeline has no <code>valuation.py</code> (version ${esc(SCREEN.pipeline.version || 'dev')}) —
+        the running container is older than the current repo. Redeploy, then re-run these tickers.`
+    : '';
+  const notes = [];
+  if (pipelineNote) notes.push(pipelineNote);
+  if (stale) notes.push(`${stale} ticker(s) have results but no <code>evaluation.csv</code> — the pipeline that produced
+        them wrote no valuation data. Re-run them to populate the table.`);
+  const banner = notes.length
+    ? `<tr><td colspan="9" class="muted">${notes.join('<br>')}</td></tr>`
     : '';
   const { key, dir } = SCREEN.sort;
   const missing = v => v === null || v === undefined || v === ''

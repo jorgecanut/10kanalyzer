@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -292,7 +293,27 @@ def index():
 
 @app.get("/healthz")
 def healthz():
-    return jsonify(status="ok")
+    return jsonify(status="ok", **build_info())
+
+
+def build_info() -> dict:
+    """What pipeline code this deployment actually has on disk.
+
+    Lets a stale container be identified from one request: compare
+    ``pipeline_sha1`` / ``charts_sha1`` with the repo's
+    ``sha1sum edgar_dashboard.py charts.py``.
+    """
+    info = {"version": os.environ.get("STOCKY_VERSION", "dev"), "features": []}
+    for module in ("valuation", "insider"):
+        if (BASE_DIR / f"{module}.py").is_file():
+            info["features"].append(module)
+    for name, key in (("edgar_dashboard.py", "pipeline_sha1"), ("charts.py", "charts_sha1")):
+        path = BASE_DIR / name
+        try:
+            info[key] = hashlib.sha1(path.read_bytes()).hexdigest()
+        except OSError:
+            info[key] = None
+    return info
 
 
 @app.get("/api/identity")
@@ -584,7 +605,7 @@ def screener():
             ).isoformat(timespec="seconds")
             items.append(item)
     items.sort(key=lambda item: item["ticker"])
-    return jsonify(items=items)
+    return jsonify(items=items, pipeline=build_info())
 
 
 @app.post("/api/screener")
