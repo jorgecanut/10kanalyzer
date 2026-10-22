@@ -1017,8 +1017,12 @@ _NAME_SUFFIX = re.compile(
     r"holdings?|n\.v\.|s\.a\.|ag|se|l\.p\.)$", re.IGNORECASE)
 
 
-def _company_name(ticker: str) -> str:
-    """Company name for news searches, from Yahoo's search; falls back to the ticker."""
+def _company_name(ticker: str) -> tuple[str, str]:
+    """(full name, search name) from Yahoo's search; both fall back to the ticker.
+
+    The search name drops "The" and legal suffixes so news queries match how
+    outlets write it; the full name is for display.
+    """
     try:
         url = "https://query1.finance.yahoo.com/v1/finance/search?" + urlencode(
             {"q": ticker.replace(".", "-"), "quotesCount": 1, "newsCount": 0})
@@ -1027,11 +1031,12 @@ def _company_name(ticker: str) -> str:
         name = quote.get("longname") or quote.get("shortname") or ""
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, IndexError, AttributeError):
         name = ""
-    name = re.sub(r"^the\s+", "", name.strip(), flags=re.IGNORECASE)
+    full = name.strip()
+    name = re.sub(r"^the\s+", "", full, flags=re.IGNORECASE)
     previous = None
     while name and name != previous:      # "Foo Holdings, Inc." -> "Foo"
         previous, name = name, _NAME_SUFFIX.sub("", name).strip()
-    return name or ticker
+    return full or ticker, name or ticker
 
 
 def _google_news(query: str) -> list[dict]:
@@ -1068,12 +1073,12 @@ def news(ticker: str):
         cached = _NEWS_CACHE.get(ticker)
     if cached and time.time() - cached[0] < NEWS_TTL and not request.args.get("fresh"):
         return jsonify(cached[1])
-    company = _company_name(ticker)
+    name, company = _company_name(ticker)
     try:
         articles = _google_news(f'"{company}"' if company != ticker else f"{ticker} stock")
     except (HTTPError, URLError, TimeoutError, ET.ParseError) as exc:
         abort(502, f"Could not reach Google News: {exc}")
-    payload = {"ticker": ticker, "company": company, "days": NEWS_DAYS,
+    payload = {"ticker": ticker, "name": name, "company": company, "days": NEWS_DAYS,
                "fetched": _now(), "articles": articles}
     with _YAHOO_LOCK:
         _NEWS_CACHE[ticker] = (time.time(), payload)
