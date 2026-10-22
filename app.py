@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import json
 import hashlib
+import math
 import os
 import re
 import secrets
@@ -139,6 +140,7 @@ def _results_summary(ticker: str) -> dict | None:
         "ticker": ticker,
         "charts": _charts(ticker),
         "has_csv": (directory / "financial_data.csv").exists(),
+        "has_insider": (directory / "insider.json").is_file(),
         "modified": datetime.fromtimestamp(modified, timezone.utc).isoformat(timespec="seconds"),
         "modified_ts": modified,
     }
@@ -693,6 +695,23 @@ def evaluation(ticker: str):
     )
 
 
+@app.get("/api/insiders/<ticker>")
+def insiders(ticker: str):
+    ticker = _normalise_ticker(ticker)
+    path = _ticker_dir(ticker) / "insider.json"
+    if not path.is_file():
+        abort(404, "No insider data for that ticker yet.")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        payload = {}
+    return jsonify(
+        ticker=ticker,
+        generated=payload.get("generated"),
+        transactions=payload.get("transactions") or [],
+    )
+
+
 @app.get("/api/fundamentals/<ticker>")
 def fundamentals(ticker: str):
     ticker = _normalise_ticker(ticker)
@@ -709,11 +728,81 @@ SCREENER_FIELDS = (
     "fiscal_year",
     "pe",
     "ev_ebit",
+    "earnings_yield",
+    "return_on_capital",
     "fcf_yield",
     "pe_percentile",
     "f_score",
     "z_score",
 )
+
+
+def _number(value):
+    """Finite float or None, for ranking mixed JSON values."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _greenblatt_ranks(items: list[dict]) -> None:
+    """Attach Magic Formula ranks: EY rank + return-on-capital rank.
+
+    Lower combined rank is better. Items missing either input keep no rank.
+    """
+    eligible = [
+        item for item in items
+        if item.get("has_evaluation")
+        and _number(item.get("earnings_yield")) is not None
+        and _number(item.get("return_on_capital")) is not None
+    ]
+    for field in ("earnings_yield", "return_on_capital"):
+        ranked = sorted(eligible, key=lambda item: _number(item[field]), reverse=True)
+        for rank, item in enumerate(ranked, 1):
+            item[f"_rank_{field}"] = rank
+    for item in eligible:
+        item["greenblatt_rank"] = (
+            item.pop("_rank_earnings_yield") + item.pop("_rank_return_on_capital")
+        )
+    for item in items:
+        item.pop("_rank_earnings_yield", None)
+        item.pop("_rank_return_on_capital", None)
+
+
+def _roc_fallback(directory: Path, fiscal_year) -> float | None:
+    """ROC for an evaluation.csv written before the column existed.
+
+    Older runs have ``earnings_yield`` but no ``return_on_capital``. Rebuild it
+    from the artifacts already on disk instead of forcing a full re-run.
+    """
+    try:
+        financial = _csv_records(directory / "financial_data.csv")
+        statements = _csv_records(directory / "statements.csv")
+    except OSError:
+        return None
+    row = next((item for item in financial if item.get("fiscal_year") == fiscal_year), None)
+    if row is None:
+        return None
+    ebit = _number(row.get("OperatingIncomeLoss"))
+    current_liabilities = _number(row.get("LiabilitiesCurrent"))
+    total_assets = None
+    for statement in statements:
+        if statement.get("fiscal_year") != fiscal_year:
+            continue
+        concept = statement.get("standard_concept")
+        label = str(statement.get("label") or "").strip().lower()
+        if concept in ("Assets", "AssetsTotal", "TotalAssets") or label == "total assets":
+            total_assets = _number(statement.get("value"))
+            if total_assets is not None:
+                total_assets /= 1_000_000  # statements are raw USD
+                break
+    if ebit is None or current_liabilities is None or total_assets is None:
+        return None
+    invested = total_assets - current_liabilities
+    if invested <= 0 or ebit <= 0:
+        return None
+    return ebit / invested
 
 
 @app.get("/api/screener")
@@ -750,6 +839,8 @@ def screener():
             item = {"ticker": directory.name, "has_evaluation": True}
             for field in SCREENER_FIELDS:
                 item[field] = latest.get(field)
+            if item.get("return_on_capital") is None:
+                item["return_on_capital"] = _roc_fallback(directory, latest.get("fiscal_year"))
             item["modified"] = datetime.fromtimestamp(
                 path.stat().st_mtime, timezone.utc
             ).isoformat(timespec="seconds")
@@ -757,6 +848,7 @@ def screener():
         except OSError:
             continue
     items.sort(key=lambda item: item["ticker"])
+    _greenblatt_ranks(items)
     return jsonify(items=items, pipeline=build_info())
 
 
