@@ -133,9 +133,9 @@ dividends received that year, portfolio value, gain in that year, and the
 running total gain. Clicking a future point or **reset** returns to projection.
 Estimates only; no taxes or fees.
 
-The header **cancel** button stops every queued/running pipeline job, aborts
-in-flight browser requests, and resets the interface to its initial state. It
-never deletes generated files; run logs and partial results stay in
+The red-X **cancel** button beside **Run** stops every queued/running pipeline
+job, aborts in-flight browser requests, and resets the interface to its initial
+state. It never deletes generated files; run logs and partial results stay in
 `financial_graphs/`.
 
 ## Deploy on push (direct, no GitHub)

@@ -81,8 +81,12 @@
                border:1px solid var(--line); background:var(--surface); color:var(--muted);
                font:inherit; font-size:13px; cursor:pointer; }
   .theme-btn:hover { color:var(--text); border-color:var(--muted); }
-  #cancel-btn:hover { color:var(--badge-error-fg); border-color:var(--badge-error-fg); }
-  #cancel-btn[disabled] { opacity:.5; cursor:not-allowed; }
+  .btn-cancel { display:flex; align-items:center; justify-content:center; width:40px; height:40px;
+                padding:0; border:1px solid var(--line); border-radius:8px;
+                background:var(--surface); color:var(--badge-error-fg); cursor:pointer; }
+  .btn-cancel:hover { border-color:var(--badge-error-fg); background:var(--badge-error-bg); }
+  .btn-cancel svg { width:18px; height:18px; display:block; }
+  .btn-cancel[disabled] { opacity:.5; cursor:not-allowed; }
   .theme-btn svg { width:18px; height:18px; display:block; }
   .theme-btn .icon-moon { display:none; }
   [data-theme="light"] .theme-btn .icon-sun { display:none; }
@@ -110,16 +114,19 @@
                          font-size:14px; background:var(--surface); color:var(--text); cursor:pointer; }
 
   /* Ticker bar: always visible under the title bar. */
-  .toolbar { padding:10px 20px; border-top:1px solid var(--line-soft); background:var(--bg); }
-  .toolbar-inner { max-width:1100px; margin:0 auto; display:flex; gap:10px; flex-wrap:wrap;
+  .toolbar { padding:8px 20px; border-top:1px solid var(--line-soft); background:var(--bg); }
+  .toolbar-inner { max-width:1100px; margin:0 auto; display:flex; gap:8px; flex-wrap:wrap;
                    align-items:center; }
-  .toolbar .status { margin:0; font-size:14px; }
+  .head-actions .status { font-size:13px; }
+  #ticker { flex:0 1 360px; width:360px; min-width:240px; }
 
   main { max-width:1100px; margin:0 auto; padding:18px 20px 40px; }
   .tabs { display:flex; gap:6px; margin-bottom:16px; }
   .tabs button { border:1px solid var(--line); background:var(--surface); padding:8px 16px; border-radius:8px;
                  cursor:pointer; font-size:14px; color:var(--muted); }
   .tabs button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
+  .tabs button.tab-icon { margin-left:auto; display:flex; align-items:center; justify-content:center; padding:8px 11px; }
+  .tabs button.tab-icon svg { width:18px; height:18px; display:block; }
   .card { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:18px; margin-bottom:16px; }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
   input[type=text] { flex:1; min-width:160px; padding:10px 12px; border:1px solid var(--line);
@@ -232,6 +239,7 @@
     .term-body { font-size:14px; }
     header { padding:10px 14px; }
     .toolbar { padding:8px 14px; }
+    #ticker { flex:1 1 100%; width:auto; }
     .user-id { max-width:130px; }
   }
 
@@ -275,16 +283,7 @@
         <h1>Stocky</h1>
       </div>
       <div class="head-actions">
-        <button id="cancel-btn" class="theme-btn" onclick="cancelAll()"
-                title="Cancel running work and reset the interface — no files are deleted"
-                aria-label="Cancel running work and reset the interface">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.6">
-              <path d="M6 6l12 12M18 6L6 18" />
-            </g>
-          </svg>
-          <span>cancel</span>
-        </button>
+        <span id="status" class="status"><span class="badge idle">idle</span></span>
         <button id="theme-btn" class="theme-btn" onclick="toggleTheme()" title="Switch colour theme" aria-label="Switch colour theme">
           <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true">
             <g fill="none">
@@ -326,7 +325,7 @@
 
   <div class="toolbar">
     <div class="toolbar-inner">
-      <input id="ticker" type="text" placeholder="Ticker, or several: AAPL, MSFT, DOW" maxlength="120"
+      <input id="ticker" type="text" placeholder="AAPL, MSFT, NVDA, AMZN, GOOG" maxlength="120"
              oninput="updateMode()" onkeydown="if(event.key==='Enter')handlePrimary()">
       <select id="filings" title="Number of 10-K filings">
         <option value="3">3 filings</option>
@@ -335,7 +334,15 @@
         <option value="20" selected>20 filings</option>
       </select>
       <button id="run-btn" class="primary" onclick="handlePrimary()">Run</button>
-      <span id="status" class="status"><span class="badge idle">idle</span></span>
+      <button id="cancel-btn" class="btn-cancel" onclick="cancelAll()"
+              title="Cancel running work and reset the interface — no files are deleted"
+              aria-label="Cancel running work and reset the interface">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8">
+            <path d="M6 6l12 12M18 6L6 18" />
+          </g>
+        </svg>
+      </button>
     </div>
   </div>
 </div>
@@ -343,9 +350,17 @@
 <main>
   <div class="tabs">
     <button id="tab-run" class="active" onclick="showTab('run')">Run</button>
-    <button id="tab-recent" onclick="showTab('recent')">Recent</button>
     <button id="tab-screener" onclick="showTab('screener')">Screener</button>
     <button id="tab-simulation" onclick="showTab('simulation')">Simulation</button>
+    <button id="tab-recent" class="tab-icon" onclick="showTab('recent')"
+            title="Recent runs" aria-label="Recent runs">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 7v5l3 2" />
+        </g>
+      </svg>
+    </button>
   </div>
 
   <!-- Run tab -->
@@ -395,22 +410,13 @@ the pipeline log streams into this terminal.</pre>
 
   <!-- Screener tab -->
   <section id="pane-screener" class="hidden">
-    <section class="panel" id="screen-terminal">
+    <div class="panel">
       <div class="panel-head">
-        <span class="panel-title">Screener log</span>
+        <span class="panel-title">Results</span>
         <span class="panel-actions">
           <span class="muted" id="screen-progress"></span>
           <button class="panel-btn" onclick="loadScreener()">refresh</button>
         </span>
-      </div>
-      <div class="panel-body term-body" id="screen-term-body">
-        <pre id="screen-term-log" class="term-log" role="log" aria-live="polite">ready. type several tickers in the bar above — the button turns into Screen —
-each run's pipeline log streams here.</pre>
-      </div>
-    </section>
-    <div class="panel">
-      <div class="panel-head">
-        <span class="panel-title">Results</span>
       </div>
       <div class="panel-body">
         <div class="table-wrap">
@@ -554,9 +560,6 @@ reads EDGAR filings, extracts XBRL, charts the ratios
 ready. enter a ticker above and press Run.
 the pipeline log streams into this terminal.`;
 
-const SCREEN_WELCOME = `ready. type several tickers in the bar above — the button turns into Screen —
-each run's pipeline log streams here.`;
-
 /* Cancel + full interface reset -------------------------------------------- */
 
 function cancelAll() {
@@ -595,11 +598,8 @@ function resetUi() {
   $('#insider-more').textContent = '';
   $('#recent').innerHTML = '';
   $('#results-recent').innerHTML = '';
-  setScreenLog(SCREEN_WELCOME);
   $('#screen-progress').textContent = '';
   SCREEN.items = [];
-  SCREEN.order = [];
-  SCREEN.logs = {};
   SCREEN.status = {};
   SCREEN.total = 0;
   SCREEN.mode = 'run';
@@ -959,7 +959,7 @@ function openRecent(ticker) {
 
 const SCREEN = {
   items: [], sort: { key: 'ticker', dir: 1 }, timer: null,
-  order: [], logs: {}, status: {}, total: 0, mode: 'run',
+  status: {}, total: 0, mode: 'run',
 };
 
 function parseTickers(raw) {
@@ -985,42 +985,6 @@ function handlePrimary() {
   else runTicker(tickers[0]);
 }
 
-function setScreenLog(text) {
-  const log = $('#screen-term-log');
-  if (log.textContent === text) return;
-  log.textContent = text;
-  const body = $('#screen-term-body');
-  body.scrollTop = body.scrollHeight;
-}
-
-function renderScreenLog() {
-  const done = SCREEN.order.filter(t => SCREEN.status[t] === 'done' || SCREEN.status[t] === 'error').length;
-  const lines = [`$ stocky screen ${SCREEN.order.join(' ')}`];
-  if (SCREEN.total) lines.push(`${done}/${SCREEN.total} done`);
-  for (const ticker of SCREEN.order) {
-    const status = SCREEN.status[ticker] || 'queued';
-    const tail = (SCREEN.logs[ticker] || '').trim();
-    lines.push(`── ${ticker} · ${status} ──`);
-    if (status === 'queued') lines.push('queued — waiting for the serialized worker…');
-    else if (tail) lines.push(tail);
-    else if (status === 'cached') lines.push('cached — reusing existing results (no log for this run)');
-    else if (status === 'done' || status === 'error') lines.push('no log on disk for this run');
-    else lines.push('waiting for pipeline output…');
-  }
-  setScreenLog(lines.join('\n'));
-}
-
-async function refreshScreenLogs(tickers) {
-  await Promise.all(tickers.map(async ticker => {
-    try {
-      const job = await (await fetch(`/api/status/${encodeURIComponent(ticker)}`)).json();
-      if (job.log) SCREEN.logs[ticker] = job.log;
-      if (job.status) SCREEN.status[ticker] = job.status;
-    } catch { /* keep last known log */ }
-  }));
-  renderScreenLog();
-}
-
 function submitScreen(tickers) {
   tickers = tickers || parseTickers($('#ticker').value);
   if (tickers.length < 2) return;
@@ -1028,11 +992,9 @@ function submitScreen(tickers) {
   clearTimeout(SCREEN.timer);
   $('#run-btn').disabled = true;
   $('#screen-progress').textContent = 'queuing…';
-  SCREEN.order = tickers;
-  SCREEN.logs = {};
   SCREEN.status = Object.fromEntries(tickers.map(t => [t, 'queued']));
   SCREEN.total = tickers.length;
-  renderScreenLog();
+  screenProgress();
   fetch('/api/screener', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1045,9 +1007,8 @@ function submitScreen(tickers) {
       for (const item of (Array.isArray(data.items) ? data.items : [])) {
         if (item && item.ticker) SCREEN.status[item.ticker] = item.status;
       }
-      renderScreenLog();
-      refreshScreenLogs(tickers);
-      if (queued.length) screenPoll(queued, tickers.length);
+      screenProgress();
+      if (queued.length) screenPoll(queued);
       else {
         $('#screen-progress').textContent = `${tickers.length}/${tickers.length} done`;
         loadScreener();
@@ -1055,23 +1016,31 @@ function submitScreen(tickers) {
     })
     .catch(err => {
       $('#screen-progress').textContent = `Screen failed: ${err.message}`;
-      SCREEN.logs[SCREEN.order[0]] = `error: ${err.message}`;
-      renderScreenLog();
     })
     .finally(() => { $('#run-btn').disabled = false; });
 }
 
-function screenPoll(queue, total) {
+function screenProgress() {
+  const finished = ['done', 'error', 'cancelled', 'cached', 'idle'];
+  const done = Object.values(SCREEN.status).filter(status => finished.includes(status)).length;
+  $('#screen-progress').textContent = SCREEN.total ? `${done}/${SCREEN.total} done` : '';
+}
+
+function screenPoll(queue) {
   const pending = new Set(queue);
-  const progress = () => { $('#screen-progress').textContent = `${total - pending.size}/${total} done`; };
-  progress();
+  screenProgress();
   const tick = async () => {
-    await refreshScreenLogs(Array.from(pending));
+    await Promise.all(Array.from(pending).map(async ticker => {
+      try {
+        const job = await (await fetch(`/api/status/${encodeURIComponent(ticker)}`)).json();
+        if (job.status) SCREEN.status[ticker] = job.status;
+      } catch { /* keep polling */ }
+    }));
     for (const ticker of Array.from(pending)) {
       const status = SCREEN.status[ticker];
-      if (status === 'done' || status === 'error' || status === 'idle') pending.delete(ticker);
+      if (['done', 'error', 'cancelled', 'idle'].includes(status)) pending.delete(ticker);
     }
-    progress();
+    screenProgress();
     if (pending.size) SCREEN.timer = setTimeout(tick, 3000);
     else { SCREEN.timer = null; loadScreener(); }
   };
