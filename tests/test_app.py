@@ -4,6 +4,7 @@ Run from the repo root:  python -m unittest discover tests
 """
 
 import io
+import json
 import shutil
 import sys
 import tempfile
@@ -11,6 +12,7 @@ import textwrap
 import threading
 import time
 import unittest
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -181,6 +183,96 @@ class ProfileTests(AppTestCase):
         path = app._avatar_path(self.uid())
         self.client.delete("/api/account", json={"confirm": "DELETE", "password": PASSWORD})
         self.assertFalse(path.exists())
+
+
+class FakeNews:
+    """Stands in for Google News: records each query and returns numbered articles."""
+
+    def __init__(self, fail=False):
+        self.calls, self.fail = [], fail
+
+    def __call__(self, query, days, limit):
+        self.calls.append((query, days, limit))
+        if self.fail:
+            raise app.URLError("offline")
+        return [{"title": f"Story {i}", "source": "Wire", "link": f"https://example.com/{i}",
+                 "published": "2026-10-01T00:00:00+00:00"} for i in range(limit)]
+
+
+class FakeNewsCase(AppTestCase):
+    def setUp(self):
+        super().setUp()
+        self._news = (app._google_news, app._company_name)
+        self.fake = FakeNews()
+        app._google_news, app._company_name = self.fake, lambda ticker: ("Acme Inc", "Acme")
+        app._NEWS_CACHE.clear()
+
+    def tearDown(self):
+        app._google_news, app._company_name = self._news
+        app._NEWS_CACHE.clear()
+        super().tearDown()
+
+
+class NewsTests(FakeNewsCase):
+    def test_defaults_to_20_articles_from_14_days(self):
+        data = self.client.get("/api/news/AAA").get_json()
+        self.assertEqual((data["days"], data["limit"], len(data["articles"])), (14, 20, 20))
+        self.assertEqual(self.fake.calls, [('"Acme"', 14, 20)])
+
+    def test_limit_and_days_are_chosen_and_cached_apart(self):
+        data = self.client.get("/api/news/AAA?limit=50&days=30").get_json()
+        self.assertEqual((data["days"], data["limit"], len(data["articles"])), (30, 50, 50))
+        self.client.get("/api/news/AAA?limit=50&days=30")
+        self.client.get("/api/news/AAA?limit=30&days=1")
+        self.assertEqual(self.fake.calls, [('"Acme"', 30, 50), ('"Acme"', 1, 30)])
+
+    def test_rejects_other_limits_and_periods(self):
+        self.assertEqual(self.client.get("/api/news/AAA?limit=99").status_code, 400)
+        self.assertEqual(self.client.get("/api/news/AAA?days=5").status_code, 400)
+        self.assertEqual(self.fake.calls, [])
+
+
+class DownloadAllTests(FakeNewsCase):
+    def make_results(self):
+        self.client.post("/api/run", json={"ticker": "AAA", "filings": 3})
+        self.wait_idle("AAA")
+        folder = app._ticker_dir("AAA", self.uid())
+        (folder / "dark").mkdir(exist_ok=True)
+        (folder / "dark" / "01_fake.png").write_bytes(b"png")
+        (folder / "evaluation.csv").write_text("fiscal_year,pe,f_score\n2025,12.5,7\n")
+        (folder / "insider.json").write_text(json.dumps({"generated": "2026-10-01", "transactions": [
+            {"date": "2026-09-01", "name": "Jane Doe", "type": "buy", "shares": 10, "value": 100.0},
+            {"date": "2020-01-01", "name": "Old Trade", "type": "sell", "shares": 5, "value": 50.0},
+        ]}))
+
+    def zip_names(self, url):
+        res = self.client.get(url)
+        self.assertEqual(res.status_code, 200, res.data[:200])
+        bundle = zipfile.ZipFile(io.BytesIO(res.data))
+        return bundle, set(bundle.namelist())
+
+    def test_zip_holds_every_file_plus_insiders_news_and_screener(self):
+        self.make_results()
+        bundle, names = self.zip_names("/download/AAA/all?months=12&news_limit=30&news_days=7")
+        for name in ("01_fake.png", "dark/01_fake.png", "insider.json", "evaluation.csv",
+                     "insiders.csv", "news.csv", "screener.csv"):
+            self.assertIn(f"AAA/{name}", names)
+        insiders = bundle.read("AAA/insiders.csv").decode()
+        self.assertIn("Jane Doe", insiders)
+        self.assertNotIn("Old Trade", insiders)      # outside the chosen 12 months
+        self.assertEqual(bundle.read("AAA/news.csv").decode().count("example.com"), 30)
+        self.assertEqual(self.fake.calls, [('"Acme"', 7, 30)])
+        self.assertIn("12.5", bundle.read("AAA/screener.csv").decode())
+
+    def test_zip_skips_news_when_google_is_unreachable(self):
+        self.make_results()
+        self.fake.fail = True
+        _, names = self.zip_names("/download/AAA/all")
+        self.assertNotIn("AAA/news.csv", names)
+        self.assertIn("AAA/insiders.csv", names)
+
+    def test_zip_needs_results(self):
+        self.assertEqual(self.client.get("/download/ZZZ/all").status_code, 404)
 
 
 class RouteTests(AppTestCase):
