@@ -382,6 +382,11 @@
 
   /* Insider trades reuse the stat rows for a compact list. */
   .insider-list .stat { align-items:center; gap:10px; flex-wrap:wrap; }
+  .news-list { list-style:none; margin:0; padding:0; }
+  .news-list li { padding:11px 0; border-bottom:1px solid var(--line-soft); }
+  .news-list li:last-child { border-bottom:0; }
+  .news-list a { color:var(--text); font-weight:600; line-height:1.4; }
+  .news-meta { color:var(--muted); font-size:12px; margin-top:3px; }
   .insider-list .stat:first-child { padding-top:0; }
   .insider-list .who { color:var(--muted); }
   .insider-list .who b { color:var(--text); font-weight:600; }
@@ -471,6 +476,7 @@
     <button id="tab-insiders" onclick="showTab('insiders')">Insiders</button>
     <button id="tab-screener" onclick="showTab('screener')">Screener</button>
     <button id="tab-simulation" onclick="showTab('simulation')">Simulation</button>
+    <button id="tab-news" onclick="showTab('news')">News</button>
     <button id="tab-recent" class="tab-icon" onclick="showTab('recent')"
             title="Recent runs" aria-label="Recent runs">
       <svg viewBox="0 0 2048 2048" aria-hidden="true">
@@ -553,6 +559,23 @@
       <div class="panel-body">
         <p class="sim-meta" id="insider-status"></p>
         <div id="insider-body" class="insider-list"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- News tab: recent articles about the company, newest coverage first by relevance. -->
+  <section id="pane-news" class="hidden">
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title" id="news-title">News</span>
+        <span class="panel-actions">
+          <select id="news-run" title="Ticker" aria-label="Ticker" onchange="loadNews()"></select>
+          <button class="panel-btn" onclick="loadNews(true)">refresh</button>
+        </span>
+      </div>
+      <div class="panel-body">
+        <p class="sim-meta" id="news-status"></p>
+        <ol id="news-list" class="news-list"></ol>
       </div>
     </div>
   </section>
@@ -1407,7 +1430,7 @@ function syncTabFades() {
 }
 
 function showTab(name) {
-  for (const tab of ['graph', 'insiders', 'recent', 'screener', 'simulation']) {
+  for (const tab of ['graph', 'insiders', 'recent', 'screener', 'simulation', 'news']) {
     const active = tab === name;
     $(`#pane-${tab}`).classList.toggle('hidden', !active);
     $(`#tab-${tab}`).classList.toggle('active', active);
@@ -1422,6 +1445,7 @@ function showTab(name) {
   if (name === 'insiders') initInsiders();
   if (name === 'screener') loadScreener();
   if (name === 'simulation') initSimulation();
+  if (name === 'news') initNews();
 }
 
 // "done" shows for 10 s, then the badge settles back to idle.
@@ -1657,6 +1681,65 @@ function pickRun(select, runs, current) {
   if ((pinChanged || !has(current)) && has(GRAPH.ticker)) return GRAPH.ticker;
   return has(current) ? current : runs[0].ticker;
 }
+
+/* News -------------------------------------------------------------------- */
+
+const fmtAgo = iso => {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return '';
+  const hours = Math.max(0, (Date.now() - then) / 3600000);
+  if (hours < 1) return 'just now';
+  if (hours < 24) return `${Math.floor(hours)} h ago`;
+  const days = Math.floor(hours / 24);
+  return days === 1 ? 'yesterday' : `${days} days ago`;
+};
+
+async function initNews() {
+  const select = $('#news-run');
+  try {
+    const { items } = await (await fetch('/api/recent')).json();
+    if (!items.length) {
+      select.innerHTML = '';
+      $('#news-status').textContent = 'No tickers yet. Run a ticker first.';
+      $('#news-list').innerHTML = '';
+      return;
+    }
+    const current = select.value;
+    select.innerHTML = items.map(item => `<option value="${esc(item.ticker)}">${esc(item.ticker)}</option>`).join('');
+    select.value = pickRun(select, items, current);
+  } catch {
+    $('#news-status').textContent = 'Could not load runs.';
+    return;
+  }
+  if (select.value) await loadNews();
+}
+
+async function loadNews(fresh = false) {
+  const ticker = $('#news-run').value;
+  const list = $('#news-list');
+  list.innerHTML = '';
+  $('#news-title').textContent = ticker ? `News · ${ticker}` : 'News';
+  if (!ticker) { $('#news-status').textContent = ''; return; }
+  $('#news-status').textContent = `Looking for ${ticker} articles…`;
+  try {
+    const res = await fetch(`/api/news/${encodeURIComponent(ticker)}${fresh ? '?fresh=1' : ''}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || data.message || 'News unavailable.');
+    if (ticker !== $('#news-run').value) return;
+    const articles = Array.isArray(data.articles) ? data.articles : [];
+    $('#news-status').textContent = articles.length
+      ? `Top articles about ${data.company} from the last ${data.days} days (Google News).`
+      : `No articles about ${data.company} in the last ${data.days} days.`;
+    list.innerHTML = articles.map(a => `<li>
+        <a href="${esc(a.link)}" target="_blank" rel="noopener noreferrer">${esc(a.title)}</a>
+        <div class="news-meta">${esc([a.source, fmtAgo(a.published)].filter(Boolean).join(' · '))}</div>
+      </li>`).join('');
+  } catch (err) {
+    if (ticker === $('#news-run').value) $('#news-status').textContent = err.message;
+  }
+}
+
+/* Insiders ----------------------------------------------------------------- */
 
 async function initInsiders() {
   const select = $('#insider-run');

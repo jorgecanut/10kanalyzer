@@ -112,7 +112,7 @@ Routes:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/` | The UI (Graph / Insiders / Screener / Simulation tabs); redirects to `/login` when signed out |
+| `GET` | `/` | The UI (Graph / Insiders / Screener / Simulation / News tabs); redirects to `/login` when signed out |
 | `GET` | `/login` | Sign-in / create-account page |
 | `POST` | `/api/signup` | `{"name","email","password"}` → creates the account and signs in |
 | `POST` | `/api/login` | `{"email","password"}` → signs in |
@@ -130,6 +130,7 @@ Routes:
 | `GET` | `/api/files/<ticker>` | Chart list for a ticker |
 | `GET` | `/api/evaluation/<ticker>` | `evaluation.csv` rows for one ticker |
 | `GET` | `/api/insiders/<ticker>` | `insider.json` trades for one ticker |
+| `GET` | `/api/news/<ticker>` | Recent articles (title, source, date, link) from Google News; `?fresh=1` skips the 30-min cache |
 | `GET` | `/api/simulation/<ticker>` | Yahoo price history + dividends (`?range=1y`) |
 | `GET` | `/api/fundamentals/<ticker>` | Flat metric set behind the screener |
 | `GET` | `/api/screener` | Cached screener results, Greenblatt ranks |
@@ -190,6 +191,13 @@ The **Insiders** tab lists every open-market Form 4 buy/sell in the last 6
 months, newest first, in the same journal format used before, with a selector
 for successful runs. `insider.py` no longer caps transactions (it stops only at
 the 6-month window, with a 500-filing safety valve).
+
+The **News** tab lists up to 25 articles about the company from the last 14
+days: headline, outlet and date, each linking to the original. The company name
+comes from Yahoo's search and the articles from the Google News RSS feed, in
+Google's ranking order (its "top stories", the closest free signal to
+popularity). Results are cached for 30 minutes and shared by every user;
+**refresh** fetches them again. Nothing else is derived from them.
 
 ### Tests
 
