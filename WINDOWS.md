@@ -105,8 +105,8 @@ You should see `docker-compose.yml`, `Dockerfile`, `app.py`, etc.
 
 ## Step 5 — Create your settings file
 
-The SEC requires that requests identify a real contact, so set your name and
-email.
+The settings file only holds the port. (The SEC contact comes from the name
+and email you give when you create your account in the app.)
 
 ```powershell
 Copy-Item .env.example .env
@@ -139,8 +139,8 @@ minutes and a few hundred MB. When it finishes, open:
 **<http://localhost:8053>**
 
 Type a ticker (e.g. `AAPL`), press **Run**, and wait. The first run for a ticker
-takes ~1–3 minutes; the **Recent** tab lists everything you've run and lets you
-view or download the charts as a ZIP.
+takes ~1–3 minutes; the clock icon (**Recent**) lists everything you've run and
+lets you view or download the charts as a ZIP.
 
 ---
 
@@ -151,15 +151,15 @@ docker compose ps          # is it running?
 docker compose logs -f     # watch output (Ctrl+C to stop watching)
 docker compose stop        # stop (keeps data)
 docker compose start       # start again
-docker compose down        # stop and remove the container
-docker compose down -v     # ALSO delete the SEC cache volumes
+docker compose down        # stop and remove the container (keeps data)
 ```
 
 To **update** after getting new project files: replace the folder contents, then
 `docker compose up -d --build` again.
 
 Your account and charts live on your PC under `data\` in the project folder,
-next to the compose file. Delete that folder and they are gone.
+next to the compose file. Delete that folder and they are gone. The SEC
+downloads are cached in `edgar_cache\` and `edgar_data\` next to it.
 
 ---
 
@@ -208,10 +208,10 @@ downloadable from the web UI.
 **How do I change the port?** Set `HTTP_PORT` in `.env` and run
 `docker compose up -d`.
 
-**How do I free disk space?** `docker compose down -v` removes the cached SEC
-downloads; `docker system prune -a` removes unused images (you'd rebuild next
-time).
+**How do I free disk space?** Stop it (`docker compose down`) and delete the
+`edgar_cache\` and `edgar_data\` folders to drop the cached SEC downloads;
+`docker system prune -a` removes unused images (you'd rebuild next time).
 
-**Is it safe?** It has no login, but it's only reachable from your own PC at
-`localhost`. Don't expose it to the internet without a reverse proxy and a
-password.
+**Is it safe?** It has local accounts (passwords are stored hashed in
+`data\`), and it's only reachable from your own PC at `localhost`. Don't expose
+it to the internet without a reverse proxy and HTTPS.
