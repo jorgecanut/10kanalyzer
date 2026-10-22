@@ -1,5 +1,12 @@
 # SEC EDGAR 10-K Data Extractor
 
+> **Disclaimer — this project is absolutely vibecoded.** It was built for fun,
+> largely with AI assistance, and is provided **as is**, with no warranty of any
+> kind. I am not responsible for how you use it or for any result of using it.
+> Nothing it produces is financial or investment advice: the numbers can be
+> wrong, incomplete or stale, so check the original SEC filings before relying
+> on anything.
+
 Connect to SEC EDGAR, download the last ten 10-K filings for a company,
 extract the XBRL financial data, and write it as CSV into `financial_graphs/`.
 The run form accepts 3, 5, 10 or 20 filings; the API accepts any value 1–20.
@@ -516,3 +523,12 @@ this project must not regress them.
 
 Known remaining exposure: the app has no auth and no request-rate limiting of
 its own — keep it behind nginx `auth_basic` and never expose it directly.
+
+## License
+
+Copyright 2026 Jorge Canut. Licensed under the
+[Apache License 2.0](LICENSE): free to use, modify and share, including
+commercially, **as long as you give credit**. Keep the [`NOTICE`](NOTICE) file
+and its attribution (to Jorge Canut, with a link to this repository) in any
+copy or derivative you distribute, in your documentation or in an about screen.
+The License's warranty disclaimer and limitation of liability apply in full.
