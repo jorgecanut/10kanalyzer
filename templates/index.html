@@ -98,7 +98,9 @@
     --hover:rgba(0,0,0,.045);
   }
   * { box-sizing: border-box; }
-  html { scroll-padding-top:130px; }
+  /* Room for the scrollbar is always kept, so panels never shift sideways
+     between a short tab and a long one. */
+  html { scroll-padding-top:130px; scrollbar-gutter:stable; }
   body { margin:0; font:calc(var(--fs) * 17)/1.55 var(--mono);
          background:var(--bg); color:var(--text); }
   button, input, select, textarea { font-family: var(--mono); }
@@ -279,7 +281,9 @@
   .panel-btn { padding:6px 12px; border:1px solid var(--line); border-radius:var(--radius);
                background:none; color:var(--muted); font-size:calc(var(--fs) * 15); cursor:pointer; }
   .panel-btn:hover { color:var(--text); background:var(--hover); }
-  .panel-btn.icon-btn { display:flex; align-items:center; justify-content:center; padding:6px 8px; border-color:transparent; }
+  /* Panel heads: every icon button is a 32px square, the selectors' height. */
+  .panel-btn.icon-btn { display:flex; align-items:center; justify-content:center; width:32px; height:32px;
+                        padding:0; border-color:transparent; }
   .panel-btn.icon-btn svg { width:18px; height:18px; display:block; }
   .panel-btn.icon-btn[aria-pressed="true"] { color:var(--text); background:var(--accent-soft); }
   .panel-body { padding:12px 18px 18px; }
@@ -487,7 +491,7 @@
   @keyframes drain { to { transform:scaleX(0); } }
 
   /* Home: the latest search at a glance. */
-  .home-title { display:flex; align-items:baseline; gap:4px 12px; flex-wrap:wrap; min-width:0; padding:12px 0; }
+  .home-title { display:flex; align-items:baseline; gap:4px 12px; flex-wrap:wrap; min-width:0; }
   .home-grid { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr); gap:0; }
   /* A vertical rule between the key numbers and the ranking. */
   .home-grid > .home-block:first-child { padding-right:28px; }
@@ -743,15 +747,6 @@
           </span>
           <span class="head-sep" id="view-sep" hidden></span>
           <span id="graph-state"></span>
-          <button class="panel-btn icon-btn" id="graph-download-btn" hidden onclick="downloadGraph()"
-                  title="Download all charts and data (.zip)" aria-label="Download all charts and data">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
-                <path d="M4 15.5v2A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5v-2H4" fill="currentColor" opacity=".2" stroke="none" />
-                <path d="M4 15.5v2A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5v-2M12 4v11m-4.5-4.5L12 15l4.5-4.5" />
-              </g>
-            </svg>
-          </button>
           <button class="panel-btn icon-btn" id="graph-log-btn" hidden onclick="toggleLog()"
                   title="Show log" aria-label="Show log" aria-pressed="false">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -759,6 +754,15 @@
                 <rect x="3" y="4.5" width="18" height="15" rx="2.5" fill="currentColor" opacity=".2" stroke="none" />
                 <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
                 <path d="M7 9.5l3 2.5l-3 2.5M12.5 15H17" />
+              </g>
+            </svg>
+          </button>
+          <button class="panel-btn icon-btn" id="graph-download-btn" hidden onclick="downloadGraph()"
+                  title="Download all charts and data (.zip)" aria-label="Download all charts and data">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
+                <path d="M4 15.5v2A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5v-2H4" fill="currentColor" opacity=".2" stroke="none" />
+                <path d="M4 15.5v2A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5v-2M12 4v11m-4.5-4.5L12 15l4.5-4.5" />
               </g>
             </svg>
           </button>
@@ -1072,13 +1076,6 @@
             <ol id="pref-order" class="opt-order"></ol>
             <button class="panel-btn" onclick="setPref('tabOrder', PREF_DEFAULTS.tabOrder.slice())">Reset order</button>
           </div>
-          <div class="opt-row" data-search="filings 10-k number years default run">
-            <label for="pref-filings">Default number of 10-K filings</label>
-            <select id="pref-filings" class="opt-select" onchange="setPref('filings', this.value)">
-              <option value="3">3</option><option value="5">5</option>
-              <option value="10">10</option><option value="20">20</option>
-            </select>
-          </div>
         </section>
         <section class="opt-pane" data-pane="appearance">
           <h2>Appearance</h2>
@@ -1117,6 +1114,13 @@
         </section>
         <section class="opt-pane" data-pane="defaults">
           <h2>Defaults</h2>
+          <div class="opt-row" data-search="filings 10-k number years default run">
+            <label for="pref-filings">Run: number of 10-K filings</label>
+            <select id="pref-filings" class="opt-select" onchange="setPref('filings', this.value)">
+              <option value="3">3</option><option value="5">5</option>
+              <option value="10">10</option><option value="20">20</option>
+            </select>
+          </div>
           <div class="opt-row" data-search="insiders insider trades period since months years form 4">
             <label for="pref-insider">Insiders: show trades from the last</label>
             <select id="pref-insider" class="opt-select" onchange="setPref('insiderMonths', Number(this.value))">

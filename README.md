@@ -213,13 +213,13 @@ all tabs. Clicking your name in the header opens it on the **Account** tab.
   to any browser; **Delete all results** keeps them, deleting the account
   removes them.
 - **General**: tab shown on open (Home by default), tab order (up/down
-  arrows, **Reset order**; Recent stays beside the ticker box), default number of
-  10-K filings (also used after cancel).
+  arrows, **Reset order**; Recent stays beside the ticker box).
 - **Appearance**: dark or light theme; text size (Small / Normal / Large /
   Larger: every font scales through the `--fs` CSS variable); date format
   (31/12/2026, 12/31/2026 or 2026-12-31); number format (1,234.5 / 1.234,5 /
   1 234,5).
-- **Defaults**: News articles and period (20 from 14 days unless changed);
+- **Defaults**: number of 10-K filings per run (also used after cancel);
+  News articles and period (20 from 14 days unless changed);
   Insiders period (the tab's own picker changes it for that
   visit only); Simulation investment, horizon, dividends (cash or reinvest)
   and price range.
