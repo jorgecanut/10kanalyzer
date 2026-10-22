@@ -738,6 +738,11 @@
       <div class="panel-head">
         <span class="panel-title">Insiders</span>
         <span class="panel-actions">
+          <select id="insider-type" title="Buys, sells or both" aria-label="Trade type" onchange="setInsiderType()">
+            <option value="">Buys and sells</option>
+            <option value="buy">Buys only</option>
+            <option value="sell">Sells only</option>
+          </select>
           <select id="insider-months" title="Show trades since" aria-label="Show trades since" onchange="setInsiderMonths()">
             <option value="1">1 month</option>
             <option value="3">3 months</option>
@@ -1380,6 +1385,8 @@ function resetUi() {
   $('#filings').value = PREFS.filings;
   INSIDER.months = PREFS.insiderMonths;
   $('#insider-months').value = String(INSIDER.months);
+  INSIDER.type = '';
+  $('#insider-type').value = '';
   $('#run-btn').disabled = false;
   setStatus('idle', 'idle');
   $('#insider-status').textContent = '';
@@ -2419,11 +2426,17 @@ async function initInsiders() {
 
 // How far back the Insiders tab looks: the Options default (1 year) unless
 // changed for this visit (runs collect up to 3 years).
-const INSIDER = { ticker: '', data: null, months: PREFS.insiderMonths };
+const INSIDER = { ticker: '', data: null, months: PREFS.insiderMonths, type: '' };
 $('#insider-months').value = String(INSIDER.months);
 
 function setInsiderMonths() {
   INSIDER.months = Number($('#insider-months').value) || PREFS.insiderMonths;
+  renderInsiders();
+}
+
+// '' shows both; 'buy' or 'sell' keeps one side (the download follows it).
+function setInsiderType() {
+  INSIDER.type = $('#insider-type').value;
   renderInsiders();
 }
 
@@ -2461,8 +2474,10 @@ function renderInsiders() {
   const cutoff = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - months, now.getUTCDate()))
     .toISOString().slice(0, 10);
   const rows = (Array.isArray(data.transactions) ? data.transactions : [])
-    .filter(it => !it.date || it.date >= cutoff);
+    .filter(it => !it.date || it.date >= cutoff)
+    .filter(it => !INSIDER.type || it.type === INSIDER.type);
   const period = $('#insider-months').selectedOptions[0].textContent;
+  const kind = { buy: 'buy(s)', sell: 'sell(s)' }[INSIDER.type] || 'trade(s)';
   // Runs made before the 3-year window collected 6 months only.
   const since = data.since || '';
   const short = since > cutoff || (!since && (data.months || 6) < months)
@@ -2472,12 +2487,13 @@ function renderInsiders() {
   if (!rows.length) {
     INSIDER.rows = [];
     $('#insider-body').innerHTML = '';
-    $('#insider-status').textContent = `${collected} · no open-market insider trades in the last ${period}${short}`;
+    const none = { buy: 'buys', sell: 'sells' }[INSIDER.type] || 'trades';
+    $('#insider-status').textContent = `${collected} · no open-market insider ${none} in the last ${period}${short}`;
     return;
   }
   INSIDER.rows = rows;
   $('#insider-body').innerHTML = rows.map(insiderRow).join('');
-  $('#insider-status').textContent = `${collected} · ${rows.length} trade(s) in the last ${period} · newest first${short}`;
+  $('#insider-status').textContent = `${collected} · ${rows.length} ${kind} in the last ${period} · newest first${short}`;
 }
 
 async function loadRecent() {
@@ -2741,7 +2757,8 @@ function downloadHome() {
 }
 
 function downloadInsiders() {
-  saveCsv(INSIDER.rows, `${INSIDER.ticker}_insiders_${INSIDER.months}m_${today()}.csv`,
+  const side = INSIDER.type ? `${INSIDER.type}s_` : '';
+  saveCsv(INSIDER.rows, `${INSIDER.ticker}_insiders_${side}${INSIDER.months}m_${today()}.csv`,
           ['date', 'name', 'title', 'type', 'shares', 'value']);
 }
 
