@@ -13,6 +13,8 @@ Run locally:   python app.py            (http://localhost:8053)
 
 from __future__ import annotations
 
+import calendar
+import csv
 import io
 import json
 import hashlib
@@ -264,8 +266,11 @@ _SIM_CACHE: dict = {}
 _CURRENT_CACHE: dict = {}
 _NEWS_CACHE: dict = {}
 NEWS_TTL = 1800          # seconds; news is shared by every user
-NEWS_DAYS = 14
-NEWS_LIMIT = 25
+NEWS_DAYS = 14             # defaults; the News tab offers the choices below
+NEWS_LIMIT = 20
+NEWS_DAY_CHOICES = (1, 7, 14, 30)
+NEWS_LIMIT_CHOICES = (20, 30, 40, 50)
+INSIDER_MONTH_CHOICES = (1, 3, 6, 12, 24, 36)
 
 
 def _yahoo_session():
@@ -1106,10 +1111,10 @@ def _company_name(ticker: str) -> tuple[str, str]:
     return full or ticker, name or ticker
 
 
-def _google_news(query: str) -> list[dict]:
-    """Top Google News stories for ``query``, in Google's ranking order."""
+def _google_news(query: str, days: int, limit: int) -> list[dict]:
+    """Top Google News stories for ``query`` from the last ``days``, in Google's ranking order."""
     url = "https://news.google.com/rss/search?" + urlencode(
-        {"q": f"{query} when:{NEWS_DAYS}d", "hl": "en-US", "gl": "US", "ceid": "US:en"})
+        {"q": f"{query} when:{days}d", "hl": "en-US", "gl": "US", "ceid": "US:en"})
     with urlopen(Request(url, headers={"User-Agent": YAHOO_UA}), timeout=10) as response:
         root = ET.fromstring(response.read())
     articles, seen = [], set()
@@ -1127,29 +1132,57 @@ def _google_news(query: str) -> list[dict]:
         except (TypeError, ValueError):
             published = None
         articles.append({"title": title, "source": source, "link": link, "published": published})
-        if len(articles) >= NEWS_LIMIT:
+        if len(articles) >= limit:
             break
     return articles
+
+
+def _choice(name: str, choices: tuple[int, ...], default: int) -> int:
+    """An integer query parameter that must be one of ``choices``."""
+    raw = request.args.get(name)
+    if raw in (None, ""):
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        value = None
+    if value not in choices:
+        abort(400, f"{name} must be one of {', '.join(map(str, choices))}.")
+    return value
+
+
+def _news_payload(ticker: str, days: int, limit: int, fresh: bool = False) -> dict:
+    """Articles for one ticker and choice of period/count; cached per combination.
+
+    Raises the network error when Google News is unreachable.
+    """
+    key = (ticker, days, limit)
+    with _YAHOO_LOCK:
+        cached = _NEWS_CACHE.get(key)
+    if cached and time.time() - cached[0] < NEWS_TTL and not fresh:
+        return cached[1]
+    name, company = _company_name(ticker)
+    articles = _google_news(f'"{company}"' if company != ticker else f"{ticker} stock", days, limit)
+    payload = {"ticker": ticker, "name": name, "company": company, "days": days, "limit": limit,
+               "fetched": _now(), "articles": articles}
+    with _YAHOO_LOCK:
+        _NEWS_CACHE[key] = (time.time(), payload)
+    return payload
+
+
+NEWS_ERRORS = (HTTPError, URLError, TimeoutError, ET.ParseError)
 
 
 @app.get("/api/news/<ticker>")
 def news(ticker: str):
     """Recent articles about the company: headline, outlet, date and link only."""
     ticker = _normalise_ticker(ticker)
-    with _YAHOO_LOCK:
-        cached = _NEWS_CACHE.get(ticker)
-    if cached and time.time() - cached[0] < NEWS_TTL and not request.args.get("fresh"):
-        return jsonify(cached[1])
-    name, company = _company_name(ticker)
+    days = _choice("days", NEWS_DAY_CHOICES, NEWS_DAYS)
+    limit = _choice("limit", NEWS_LIMIT_CHOICES, NEWS_LIMIT)
     try:
-        articles = _google_news(f'"{company}"' if company != ticker else f"{ticker} stock")
-    except (HTTPError, URLError, TimeoutError, ET.ParseError) as exc:
+        return jsonify(_news_payload(ticker, days, limit, fresh=bool(request.args.get("fresh"))))
+    except NEWS_ERRORS as exc:
         abort(502, f"Could not reach Google News: {exc}")
-    payload = {"ticker": ticker, "name": name, "company": company, "days": NEWS_DAYS,
-               "fetched": _now(), "articles": articles}
-    with _YAHOO_LOCK:
-        _NEWS_CACHE[ticker] = (time.time(), payload)
-    return jsonify(payload)
 
 
 @app.get("/api/insiders/<ticker>")
@@ -1265,8 +1298,8 @@ def _roc_fallback(directory: Path, fiscal_year) -> float | None:
     return ebit / invested
 
 
-@app.get("/api/screener")
-def screener():
+def _screener_items() -> list[dict]:
+    """The latest evaluation row of each of the user's tickers, with Greenblatt ranks."""
     items = []
     try:
         root = _user_dir()
@@ -1310,7 +1343,12 @@ def screener():
             continue
     items.sort(key=lambda item: item["ticker"])
     _greenblatt_ranks(items)
-    return jsonify(items=items, pipeline=build_info())
+    return items
+
+
+@app.get("/api/screener")
+def screener():
+    return jsonify(items=_screener_items(), pipeline=build_info())
 
 
 @app.post("/api/screener")
@@ -1398,6 +1436,66 @@ def download_ticker(ticker: str):
         as_attachment=True,
         download_name=f"{ticker}_dashboard.zip",
     )
+
+
+def _csv_text(rows: list[dict]) -> str:
+    """Rows as CSV; the columns are every key, in first-seen order."""
+    columns = list(dict.fromkeys(key for row in rows for key in row))
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=columns, lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(rows)
+    return out.getvalue()
+
+
+def _months_ago(months: int) -> str:
+    """The ISO date ``months`` before today (UTC); same cut-off as the Insiders tab."""
+    today = datetime.now(timezone.utc).date()
+    year, month = divmod(today.year * 12 + today.month - 1 - months, 12)
+    day = min(today.day, calendar.monthrange(year, month + 1)[1])
+    return f"{year:04d}-{month + 1:02d}-{day:02d}"
+
+
+@app.get("/download/<ticker>/all")
+def download_all(ticker: str):
+    """Home's download: every file of the run plus insiders, news and screener as CSV.
+
+    Insiders and news follow the options passed (``months``, ``news_limit``,
+    ``news_days``). News is left out when Google News is unreachable.
+    """
+    ticker = _normalise_ticker(ticker)
+    folder = _ticker_dir(ticker)
+    if not folder.is_dir():
+        abort(404, "No results for that ticker yet.")
+    months = _choice("months", INSIDER_MONTH_CHOICES, 12)
+    news_days = _choice("news_days", NEWS_DAY_CHOICES, NEWS_DAYS)
+    news_limit = _choice("news_limit", NEWS_LIMIT_CHOICES, NEWS_LIMIT)
+
+    extra: dict[str, str] = {}
+    try:
+        trades = json.loads((folder / "insider.json").read_text(encoding="utf-8")).get("transactions") or []
+        cutoff = _months_ago(months)
+        extra["insiders.csv"] = _csv_text([t for t in trades if not t.get("date") or t["date"] >= cutoff])
+    except (OSError, ValueError, AttributeError):
+        pass
+    try:
+        extra["news.csv"] = _csv_text(_news_payload(ticker, news_days, news_limit)["articles"])
+    except NEWS_ERRORS:
+        pass
+    row = next((item for item in _screener_items() if item["ticker"] == ticker), None)
+    if row:
+        extra["screener.csv"] = _csv_text([row])
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for path in sorted(folder.rglob("*")):
+            if path.is_file() and path.suffix.lower() in ALLOWED_FILES | {".json"}:
+                bundle.write(path, arcname=f"{ticker}/{path.relative_to(folder).as_posix()}")
+        for name, text in extra.items():
+            bundle.writestr(f"{ticker}/{name}", text)
+    buffer.seek(0)
+    return send_file(buffer, mimetype="application/zip", as_attachment=True,
+                     download_name=f"{ticker}_everything.zip")
 
 
 @app.get("/download/<ticker>/<path:name>")

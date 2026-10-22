@@ -133,13 +133,14 @@ Routes:
 | `GET` | `/api/files/<ticker>` | Chart list for a ticker |
 | `GET` | `/api/evaluation/<ticker>` | `evaluation.csv` rows for one ticker |
 | `GET` | `/api/insiders/<ticker>` | `insider.json` trades for one ticker |
-| `GET` | `/api/news/<ticker>` | Recent articles (title, source, date, link) from Google News; `?fresh=1` skips the 30-min cache |
+| `GET` | `/api/news/<ticker>` | Recent articles (title, source, date, link) from Google News; `?limit=20\|30\|40\|50` (default 20), `?days=1\|7\|14\|30` (default 14), `?fresh=1` skips the 30-min cache |
 | `GET` | `/api/simulation/<ticker>` | Yahoo price history + dividends (`?range=1y`) |
 | `GET` | `/api/fundamentals/<ticker>` | Flat metric set behind the screener |
 | `GET` | `/api/screener` | Cached screener results, Greenblatt ranks |
 | `POST` | `/api/screener` | `{"tickers":[...],"filings":10}` (max 25) → data only, no charts |
 | `GET` | `/files/<ticker>/<name>` | View a chart inline |
 | `GET` | `/download/<ticker>` | Whole folder as a `.zip` |
+| `GET` | `/download/<ticker>/all` | Home's download: every file (dark charts too) plus `insiders.csv`, `news.csv` and `screener.csv`; `?months=`, `?news_limit=`, `?news_days=` follow the tabs' options |
 | `GET` | `/download/<ticker>/<name>` | One file |
 | `GET` | `/healthz` | Health probe |
 
@@ -149,22 +150,35 @@ only place outside the Screener with stats), its spot in the screener's Magic
 Formula ranking with the two tickers above and below (names only, click one to
 switch to it), the top five headlines, the five latest insider trades (with a
 link to the Insiders tab), and one small thumbnail per chart type
-(the most recent year window) that opens in the Charts tab. Running a single ticker switches to Home and shows
-the run's progress there.
+(the most recent year window) that opens in the Charts tab. Running a single
+ticker switches to Home; the run's progress and log are in the Charts tab.
+
+**Downloads.** Every tab has a download icon and downloads what it shows, with
+the options chosen there: **Home** a zip with everything for the ticker
+(`/download/<ticker>/all`), **Charts** the run's folder as a zip (each chart
+also has its own download icon), **Insiders** a CSV of the trades in the
+chosen period, **Screener** a CSV with every field of every ticker in the
+current sort order, **News** a CSV of the listed articles (headline, outlet,
+date, link; no article text), **Simulation** a PNG of the price chart with the
+projection's settings and results under it.
 
 The ticker bar decides the mode. **One ticker** runs the full pipeline: charts
 plus screener data. It is pinned to the **Charts** tab and stays there until you
-press **remove** (clears the view only, never files) or run/open another
-ticker; the pin survives page reloads and cancel. Its scores and ratios live in
-the **Screener** tab only. The Charts tab is empty until then, and the pipeline
-log is hidden behind a **log** button. The chart index sits inside the Charts
+run/open another ticker; the pin survives page reloads and cancel. Its scores
+and ratios live in the **Screener** tab only. The Charts tab is empty until
+then. The pipeline log opens above the chart index, set apart by its own
+background and a rule, while the run is queued or running and closes when it
+ends (it stays open after an error); the **log** button toggles it. The chart index sits inside the Charts
 panel, one line per chart (year windows side by side); the layout switch
 (full width or grid) is the joined pair of buttons left of the other actions. **Several tickers** switch to screener mode:
 data only, no charts (`--no-charts`), and the pinned graph is left as is.
 Running a single ticker that is queued as a screener job upgrades it to a graph
-run; if it is already running, a graph run is queued after it. The **Insiders**
-and **Simulation** selectors switch to the pinned ticker whenever the pin
-changes. A reloaded page resumes the pinned run, other graph runs and the
+run; if it is already running, a graph run is queued after it. The **Insiders**,
+**Simulation** and **News** selectors switch to the pinned ticker whenever the
+pin changes. Clicking a ticker in the **Screener** opens it on Home and pins
+it, so every tab shows it. **News** lets you pick 20, 30, 40 or 50 articles
+from the last 24 hours, 7, 14 or 30 days. The cancel button (✕ beside Run)
+only shows while a chart run or a screener batch is queued or running. A reloaded page resumes the pinned run, other graph runs and the
 screener batch's progress (`/api/jobs`).
 
 **Same-day cache.** Asking for graphs a ticker already got today, with the same
@@ -198,7 +212,8 @@ all tabs. Clicking your name in the header opens it on the **Account** tab.
   Larger: every font scales through the `--fs` CSS variable); date format
   (31/12/2026, 12/31/2026 or 2026-12-31); number format (1,234.5 / 1.234,5 /
   1 234,5).
-- **Defaults**: Insiders period (the tab's own picker changes it for that
+- **Defaults**: News articles and period (20 from 14 days unless changed);
+  Insiders period (the tab's own picker changes it for that
   visit only); Simulation investment, horizon, dividends (cash or reinvest)
   and price range.
 
