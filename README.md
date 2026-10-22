@@ -112,7 +112,7 @@ Routes:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/` | The UI (Charts / Insiders / Screener / Simulation / News tabs); redirects to `/login` when signed out |
+| `GET` | `/` | The UI (Home / Charts / Insiders / Screener / Simulation / News tabs); redirects to `/login` when signed out |
 | `GET` | `/login` | Sign-in / create-account page |
 | `POST` | `/api/signup` | `{"name","email","password"}` → creates the account and signs in |
 | `POST` | `/api/login` | `{"email","password"}` → signs in |
@@ -139,6 +139,14 @@ Routes:
 | `GET` | `/download/<ticker>` | Whole folder as a `.zip` |
 | `GET` | `/download/<ticker>/<name>` | One file |
 | `GET` | `/healthz` | Health probe |
+
+**Home** (the house icon, far left) is the default tab: an overview of the
+latest search (the pinned ticker). It shows that company's key numbers (the
+only place outside the Screener with stats), its spot in the screener's Magic
+Formula ranking with the two tickers above and below (names only, click one to
+switch to it), the top five headlines, and every chart as a small thumbnail
+that opens in the Charts tab. Running a single ticker switches to Home and shows
+the run's progress there.
 
 The ticker bar decides the mode. **One ticker** runs the full pipeline: charts
 plus screener data. It is pinned to the **Charts** tab and stays there until you
