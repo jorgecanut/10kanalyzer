@@ -159,7 +159,7 @@ ticker switches to Home; the run's progress and log are in the Charts tab.
 the options chosen there: **Home** a zip with everything for the ticker
 (`/download/<ticker>/all`), **Charts** the run's folder as a zip (each chart
 also has its own download icon), **Insiders** a CSV of the trades in the
-chosen period, **Screener** a CSV with every field of every ticker in the
+chosen period and side (buys, sells or both), **Screener** a CSV with every field of every ticker in the
 current sort order, **News** a CSV of the listed articles (headline, outlet,
 date, link; no article text), **Simulation** a PNG of the price chart with the
 projection's settings and results under it.
@@ -177,7 +177,7 @@ data only, no charts (`--no-charts`), and the pinned graph is left as is.
 Running a single ticker that is queued as a screener job upgrades it to a graph
 run; if it is already running, a graph run is queued after it. The **Insiders**,
 **Simulation** and **News** selectors switch to the pinned ticker whenever the
-pin changes. Clicking a ticker in the **Screener** opens it on Home and pins
+pin changes. The **Insiders** tab filters buys, sells or both, as well as the period. Clicking a ticker in the **Screener** opens it on Home and pins
 it, so every tab shows it. **News** lets you pick 20, 30, 40 or 50 articles
 from the last 24 hours, 7, 14 or 30 days. The cancel button (✕ beside Run)
 only shows while a chart run or a screener batch is queued or running. A reloaded page resumes the pinned run, other graph runs and the
