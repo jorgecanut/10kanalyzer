@@ -7,3 +7,7 @@ This product includes software developed by Jorge Canut
 Licensed under the Apache License, Version 2.0. Anyone who redistributes this
 software or a derivative of it, commercially or not, must keep this NOTICE and
 display its attribution as described in Section 4(d) of the License.
+
+This product bundles "Ubuntu Mono derivative Stocky" (static/fonts), the
+Regular and Bold instances of Ubuntu Mono, Copyright 2010-2022 Canonical Ltd.,
+used under the Ubuntu Font Licence 1.0 (static/fonts/LICENCE.txt).

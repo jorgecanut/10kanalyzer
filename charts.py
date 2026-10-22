@@ -17,6 +17,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as path_effects
+from matplotlib import font_manager
 import matplotlib.ticker as mticker
 from matplotlib.transforms import blended_transform_factory
 import numpy as np
@@ -26,30 +27,69 @@ import seaborn as sns
 USD_TO_MILLIONS = 1_000_000
 CHART_WINDOW = 5
 
-sns.set_theme(style="whitegrid", context="talk")
-plt.rcParams["figure.autolayout"] = False
+# --------------------------------------------------------------------------- #
+# Font: the web app's own monospace, bundled in static/fonts so the charts match
+# the page on every machine (Docker has no fonts installed).
+# --------------------------------------------------------------------------- #
+FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "fonts")
+FONT_FAMILY = "Ubuntu Mono derivative Stocky"
+for _font_file in ("UbuntuMono-Regular.ttf", "UbuntuMono-Bold.ttf"):
+    _font_path = os.path.join(FONT_DIR, _font_file)
+    if os.path.isfile(_font_path):
+        font_manager.fontManager.addfont(_font_path)
 
 # --------------------------------------------------------------------------- #
 # Themes: every chart is drawn twice, light into the ticker folder and dark into
-# its ``dark/`` sub-folder, so the web app can match the page theme.
+# its ``dark/`` sub-folder, so the web app can match the page theme. The
+# colours are the app's own surface, text and line tokens. Sleek by default:
+# no frame, no ticks, no vertical grid; only faint horizontal lines.
 # --------------------------------------------------------------------------- #
 DARK_SUBDIR = "dark"
-LIGHT_INK = {"ink": "black", "label": "#374151", "muted": "#6b7280", "halo": "white", "strong": "#111827"}
-DARK_INK = {"ink": "#d1d5db", "label": "#e5e7eb", "muted": "#9ca3af", "halo": "#2c2d31", "strong": "#f3f4f6"}
-DARK_RC = {
-    "figure.facecolor": "#2c2d31",
-    "axes.facecolor": "#2c2d31",
-    "savefig.facecolor": "#2c2d31",
-    "savefig.edgecolor": "#2c2d31",
-    "axes.edgecolor": "#4a4c52",
-    "grid.color": "#3a3c41",
-    "patch.edgecolor": "#2c2d31",
-    "axes.labelcolor": "#e5e7eb",
-    "text.color": "#e5e7eb",
-    "xtick.color": "#e5e7eb",
-    "ytick.color": "#e5e7eb",
-    "legend.edgecolor": "#4a4c52",
-}
+LIGHT_INK = {"ink": "#8d919a", "label": "#1b1c1f", "muted": "#646770", "halo": "#ffffff", "strong": "#1b1c1f"}
+DARK_INK = {"ink": "#8d919a", "label": "#ffffff", "muted": "#cfd2d8", "halo": "#2c2d31", "strong": "#ffffff"}
+
+
+def _theme_rc(ink: dict, grid: str) -> dict:
+    surface, text, muted = ink["halo"], ink["strong"], ink["muted"]
+    return {
+        "font.family": [FONT_FAMILY, "DejaVu Sans Mono", "monospace"],
+        "font.size": 10,
+        "figure.autolayout": False,
+        "figure.facecolor": surface,
+        "axes.facecolor": surface,
+        "savefig.facecolor": surface,
+        "savefig.edgecolor": surface,
+        "patch.edgecolor": surface,
+        "axes.spines.left": False,
+        "axes.spines.right": False,
+        "axes.spines.top": False,
+        "axes.spines.bottom": False,
+        "axes.grid": True,
+        "axes.grid.axis": "y",
+        "axes.axisbelow": True,
+        "grid.color": grid,
+        "grid.linewidth": 0.8,
+        "grid.linestyle": "-",
+        "axes.labelcolor": muted,
+        "axes.titlelocation": "left",
+        "axes.titlecolor": text,
+        "text.color": text,
+        "xtick.color": muted,
+        "ytick.color": muted,
+        "xtick.major.size": 0,
+        "ytick.major.size": 0,
+        "xtick.major.pad": 6,
+        "ytick.major.pad": 6,
+        "legend.frameon": False,
+        "lines.linewidth": 2,
+        "lines.solid_capstyle": "round",
+        "lines.solid_joinstyle": "round",
+    }
+
+
+LIGHT_RC = _theme_rc(LIGHT_INK, grid="#e7e8ec")
+DARK_RC = _theme_rc(DARK_INK, grid="#3a3c41")
+plt.rcParams.update(LIGHT_RC)
 _INK = LIGHT_INK
 _DARK = False
 
@@ -72,7 +112,7 @@ COLORS: dict[str, str] = {
     "Interest Expense": "#ccb974",
     "Goodwill Impairment": "#64b5cd",
     "Asset Writedown": "#8c8c8c",
-    "Net Income": "#e377c2",
+    "Net Income": "#e07b39",   # orange: the old pink sat next to Operating Income's
     # Balance sheet
     "Total Assets": "#4c72b0",
     "Net PP&E": "#dd8452",
@@ -143,23 +183,51 @@ def _write_quality_csv(output_dir: str) -> None:
 # --------------------------------------------------------------------------- #
 # Formatting helpers.
 # --------------------------------------------------------------------------- #
-def _fmt_mm(value: float) -> str:
-    """Abbreviate a USD-millions value as XX,XX + unit."""
+def _compact(value: float, prefix: str = "", decimals: int = 2, strip: bool = False) -> str:
+    """A millions value as $29,70B / −$765,62M (decimal comma, true minus)."""
     magnitude = abs(value)
     if magnitude >= 1_000_000:
-        return f"{value / 1_000_000:.2f}".replace(".", ",") + "T"
-    if magnitude >= 1000:
-        return f"{value / 1000:.2f}".replace(".", ",") + "B"
-    return f"{value:.2f}".replace(".", ",") + "MM"
+        number, unit = magnitude / 1_000_000, "T"
+    elif magnitude >= 1000:
+        number, unit = magnitude / 1000, "B"
+    else:
+        number, unit = magnitude, "M"
+    text = f"{number:.{decimals}f}"
+    if strip and "." in text:
+        text = text.rstrip("0").rstrip(".")
+    sign = "\u2212" if value < 0 else ""
+    return f"{sign}{prefix}{text.replace('.', ',')}{unit}"
+
+
+def _fmt_mm(value: float) -> str:
+    """Abbreviate a USD-millions value as $XX,XXB."""
+    return _compact(value, "$")
 
 
 def _fmt_pct(value: float) -> str:
-    return f"{value * 100:.2f}".replace(".", ",") + "%"
+    return f"{value * 100:.2f}".replace(".", ",").replace("-", "\u2212") + "%"
 
 
 def _fmt_shares(value: float) -> str:
     """Shares are passed in millions of shares."""
-    return _fmt_mm(value).replace("MM", "M").replace("B", "B").replace("T", "T")
+    return _compact(value)
+
+
+def _axis_money(value: float, _pos=None) -> str:
+    """Y-axis ticks for USD millions: $10B, $2,5B, 0."""
+    return "0" if value == 0 else _compact(value, "$", decimals=1, strip=True)
+
+
+def _axis_shares(value: float, _pos=None) -> str:
+    return "0" if value == 0 else _compact(value, decimals=1, strip=True)
+
+
+def _axis_pct(value: float, _pos=None) -> str:
+    return f"{value * 100:.0f}%".replace("-", "\u2212")
+
+
+def _span(years: list[int]) -> str:
+    return f"{years[0]}\u2013{years[-1]}" if years else ""
 
 
 def _color_for(label: str) -> str:
@@ -292,12 +360,42 @@ def _window_suffix(window_years: list[int]) -> str:
 # Matplotlib helpers.
 # --------------------------------------------------------------------------- #
 def _new_figure(title: str, subtitle: str | None = None) -> tuple[plt.Figure, plt.Axes]:
+    """A figure whose title, subtitle and legend are drawn by ``_legend``."""
     fig, ax = plt.subplots(figsize=(11, 6.5))
-    full_title = title
-    if subtitle:
-        full_title += f"\n{subtitle}"
-    ax.set_title(full_title, fontsize=14, fontweight="bold", pad=16)
+    ax._stocky_header = (title, subtitle)
     return fig, ax
+
+
+def _header(
+    ax: plt.Axes,
+    title: str,
+    subtitle: str | None,
+    handles: list | None = None,
+    labels: list[str] | None = None,
+    title_size: float = 16,
+) -> None:
+    """Left-aligned title, muted subtitle, then the legend in rows above the plot."""
+    legend_h = 0.0
+    if handles:
+        # Columns that fit the axes width; Ubuntu Mono is ~0.5 em per character.
+        width_pt = ax.get_position().width * ax.figure.get_figwidth() * 72
+        item_pt = max(len(label) for label in labels) * 0.5 * 10 + 34
+        columns = max(1, min(len(labels), int(width_pt // item_pt)))
+        rows = -(-len(labels) // columns)
+        ax.legend(
+            handles, labels, loc="lower left", bbox_to_anchor=(0, 1.0), borderaxespad=0.6,
+            ncol=columns, fontsize=10, handlelength=1.0, handleheight=0.8, handletextpad=0.5,
+            columnspacing=1.6, labelcolor=_c("label"),
+        )
+        legend_h = rows * 17 + 10
+    y = legend_h + 10
+    if subtitle:
+        ax.annotate(subtitle, xy=(0, 1), xycoords="axes fraction", xytext=(0, y),
+                    textcoords="offset points", ha="left", va="bottom", fontsize=11, color=_c("muted"))
+        y += 18
+    ax.annotate(title, xy=(0, 1), xycoords="axes fraction", xytext=(0, y),
+                textcoords="offset points", ha="left", va="bottom", fontsize=title_size,
+                fontweight="bold", color=_c("strong"))
 
 
 def _save(fig: plt.Figure, path: str) -> str:
@@ -311,13 +409,25 @@ def _save(fig: plt.Figure, path: str) -> str:
     return path
 
 
-def _style_axes(ax: plt.Axes, years: list[int]) -> None:
+def _style_axes(ax: plt.Axes, years: list[int], yfmt=_axis_money) -> None:
     ax.set_xticks(range(len(years)))
-    ax.set_xticklabels([str(y) for y in years], rotation=45, ha="right", fontsize=9)
-    ax.tick_params(axis="y", labelsize=9)
-    ax.grid(axis="y", alpha=0.3)
-    ax.set_axisbelow(True)
-    ax.axhline(0, color=_c("ink"), linewidth=0.8)
+    ax.set_xticklabels([str(y) for y in years], fontsize=10)
+    ax.tick_params(axis="y", labelsize=10)
+    ax.grid(axis="x", visible=False)
+    if yfmt is not None:
+        ax.yaxis.set_major_formatter(mticker.FuncFormatter(yfmt))
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(5))
+    ax.axhline(0, color=_c("ink"), linewidth=1)
+
+
+def _bar_style() -> dict:
+    """A thin surface-coloured gap between touching bars instead of a border."""
+    return {"edgecolor": _c("halo"), "linewidth": 1.2}
+
+
+def _line_style() -> dict:
+    return {"linewidth": 2, "marker": "o", "markersize": 6,
+            "markeredgecolor": _c("halo"), "markeredgewidth": 1.5}
 
 
 def _collect_label(
@@ -342,7 +452,7 @@ def _collect_label(
 def _declutter(
     ax: plt.Axes,
     candidates: list[tuple[float, float, str, int]],
-    fontsize: int = 5,
+    fontsize: float = 7,
     color: str | None = None,
     draw_ax: plt.Axes | None = None,
     draw_transform=None,
@@ -361,7 +471,8 @@ def _declutter(
     x0, x1 = ax.get_xlim()
     y_range = (y1 - y0) or 1.0
     x_range = (x1 - x0) or 1.0
-    y_half = 0.018 * y_range
+    # Measured for a 7 pt monospace label on the standard 11-inch figure.
+    y_half = 0.017 * y_range * fontsize / 7
     placed: list[tuple[float, float, float]] = []
     # ``draw_ax`` may differ from ``ax`` so labels can be painted on a
     # foreground axes while their positions are measured on a twin axis.
@@ -369,7 +480,7 @@ def _declutter(
     trans = draw_transform or ax.transData
 
     for x, y, text, prefer in candidates:
-        width = 0.0042 * x_range * max(len(text), 3)
+        width = 0.0060 * x_range * max(len(text), 3) * fontsize / 7
         centre = None
         # Step 0 is deliberately skipped: a label centred on its own anchor sits
         # on the marker or the bar edge. Always leave at least one step of room.
@@ -394,27 +505,20 @@ def _declutter(
             fontsize=fontsize, color=color, transform=trans,
             # A white halo keeps the number readable when it lands on
             # a bar or a line; it does not hide the data underneath.
-            path_effects=[path_effects.withStroke(linewidth=2, foreground=_c("halo"))],
+            path_effects=[path_effects.withStroke(linewidth=2.5, foreground=_c("halo"))],
         )
 
 
-def _legend(ax: plt.Axes, derived_labels: set[str]) -> None:
+def _legend(ax: plt.Axes, derived_labels: set[str], extra: list | None = None) -> None:
+    """Title, subtitle and legend (``extra`` adds handles from a twin axis)."""
     handles, labels = ax.get_legend_handles_labels()
+    for other in extra or []:
+        more_handles, more_labels = other.get_legend_handles_labels()
+        handles, labels = handles + more_handles, labels + more_labels
     if derived_labels:
         labels = [f"{lab} *" if lab in derived_labels else lab for lab in labels]
-    if not handles:
-        return
-    columns = min(len(labels), 5)
-    rows = -(-len(labels) // columns)  # ceil, so the anchor clears every row
-    ax.legend(
-        handles,
-        labels,
-        loc="upper center",
-        bbox_to_anchor=(0.5, -0.16 - 0.055 * (rows - 1)),
-        ncol=columns,
-        fontsize=8,
-        frameon=False,
-    )
+    title, subtitle = getattr(ax, "_stocky_header", ("", None))
+    _header(ax, title, subtitle, handles, labels)
 
 
 # --------------------------------------------------------------------------- #
@@ -461,9 +565,7 @@ def chart_income_statement(
         ),
         ("Net Income", _df_series(df, "NetIncomeLoss", years), "reported"),
     ]
-    return _grouped_bar_windows(
-        ticker, output_dir, "01_income_statement", metrics, years, ylabel="USD millions"
-    )
+    return _grouped_bar_windows(ticker, output_dir, "01_income_statement", "Income statement", metrics, years)
 
 
 # --------------------------------------------------------------------------- #
@@ -479,15 +581,13 @@ def chart_margins(
     ]
     for label, series, source in metrics:
         _record_quality(label, series, source)
-    fig, ax = _new_figure(f"{ticker} - Margins", "Gross / Operating / Net margin")
+    fig, ax = _new_figure(f"{ticker} \u00b7 Margins", f"Fiscal years {_span(years)} \u00b7 gross, operating and net")
     candidates: list[tuple[float, float, str, int]] = []
     for label, series, _source in metrics:
-        ax.plot(range(len(years)), series.to_numpy(), marker="o", label=label, color=_color_for(label))
+        ax.plot(range(len(years)), series.to_numpy(), label=label, color=_color_for(label), **_line_style())
         for x, v in enumerate(series.to_numpy()):
             _collect_label(candidates, x, v, v, "pct")
-    _style_axes(ax, years)
-    ax.set_ylabel("Margin (%)", fontsize=10)
-    ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
+    _style_axes(ax, years, _axis_pct)
     ax.margins(y=0.18)
     _declutter(ax, candidates)
     _legend(ax, set())
@@ -563,7 +663,7 @@ def chart_balance(
     for window in _year_windows(years):
         suffix = _window_suffix(window)
         fig, ax = _new_figure(
-            f"{ticker} - Balance Sheet", f"Fiscal years {suffix}"
+            f"{ticker} \u00b7 Balance sheet", f"Fiscal years {_span(window)} \u00b7 USD, shares on the right axis"
         )
         positions = np.arange(len(window))
         fig.set_size_inches(11, max(6.5, 5.2 + 0.42 * len(usd_metrics)))
@@ -585,6 +685,7 @@ def chart_balance(
                 width,
                 label=label,
                 color=_color_for(label),
+                **_bar_style(),
             )
             for bar, v in zip(bars, series.to_numpy()):
                 _collect_label(
@@ -606,22 +707,29 @@ def chart_balance(
                 share_values,
                 color=share_color,
                 linewidth=2,
-                label="Total Shares Outstanding",
+                marker="o",
+                markersize=6,
+                label="Shares outstanding",
             )
             ax.plot(
                 positions,
                 share_values,
                 linestyle="none",
-                marker="s",
+                marker="o",
                 markersize=6,
+                markeredgecolor=_c("halo"),
+                markeredgewidth=1.5,
                 color=share_color,
                 transform=share_trans,
             )
             share_candidates: list[tuple[float, float, str, int]] = []
             for x, v in enumerate(share_values):
                 _collect_label(share_candidates, x, v, v, "shares")
-            ax2.set_ylabel("Shares outstanding (millions)", fontsize=10)
-            ax2.tick_params(axis="y", labelsize=8)
+            # The second axis keeps its numbers only: no grid, so its lines
+            # never cross the main axis's.
+            ax2.grid(False)
+            ax2.tick_params(axis="y", labelsize=10)
+            ax2.yaxis.set_major_formatter(mticker.FuncFormatter(_axis_shares))
             ax2.margins(y=0.20)
             _declutter(
                 ax2,
@@ -632,10 +740,9 @@ def chart_balance(
             )
 
         _style_axes(ax, window)
-        ax.set_ylabel("USD millions", fontsize=10)
         ax.margins(y=0.16)
         _declutter(ax, candidates)
-        _legend(ax, derived_labels)
+        _legend(ax, derived_labels, extra=[a for a in fig.axes if a is not ax])
         paths.append(_save(fig, os.path.join(output_dir, f"03_balance_{suffix}.png")))
     return paths
 
@@ -722,9 +829,7 @@ def chart_debt(
         ("Cash & Equivalents", cash, "reported"),
         ("Net Debt", net_debt, "derived"),
     ]
-    return _grouped_bar_windows(
-        ticker, output_dir, "04_debt", metrics, years, ylabel="USD millions", note=note
-    )
+    return _grouped_bar_windows(ticker, output_dir, "04_debt", "Debt and cash", metrics, years, note=note)
 
 
 # --------------------------------------------------------------------------- #
@@ -761,7 +866,7 @@ def chart_cashflow_operations(
         ("Free Cash Flow", _df_series(df, "FreeCashFlow", years), "derived"),
     ]
     return _grouped_bar_windows(
-        ticker, output_dir, "05_cashflow_operations", metrics, years, ylabel="USD millions"
+        ticker, output_dir, "05_cashflow_operations", "Operating cash flow", metrics, years
     )
 
 
@@ -827,7 +932,7 @@ def chart_cashflow_financing(
         ("Stock-Based Compensation", sbc, "reported"),
     ]
     return _grouped_bar_windows(
-        ticker, output_dir, "06_cashflow_financing", metrics, years, ylabel="USD millions"
+        ticker, output_dir, "06_cashflow_financing", "Financing cash flow", metrics, years
     )
 
 
@@ -859,16 +964,13 @@ def chart_returns(
     ]
     for label, series, source in metrics:
         _record_quality(label, series, source)
-    fig, ax = _new_figure(f"{ticker} - Returns", "ROE / ROA / ROIC")
+    fig, ax = _new_figure(f"{ticker} \u00b7 Returns", f"Fiscal years {_span(years)} \u00b7 ROE, ROA and ROIC")
     candidates: list[tuple[float, float, str, int]] = []
     for label, series, _source in metrics:
-        ax.plot(range(len(years)), series.to_numpy(), marker="o", label=label, color=_color_for(label))
+        ax.plot(range(len(years)), series.to_numpy(), label=label, color=_color_for(label), **_line_style())
         for x, v in enumerate(series.to_numpy()):
             _collect_label(candidates, x, v, v, "pct")
-    _style_axes(ax, years)
-    ax.set_ylabel("Return (%)", fontsize=10)
-    ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
-    ax.axhline(0, color=_c("ink"), linewidth=0.8)
+    _style_axes(ax, years, _axis_pct)
     ax.margins(y=0.18)
     _declutter(ax, candidates)
     _legend(ax, set())
@@ -917,11 +1019,10 @@ def chart_valuation(ticker: str, output_dir: str, years: list[int]) -> list[str]
     labels = [str(year) for year in data["fiscal_year"]]
 
     fig, (ax_pe, ax_q) = plt.subplots(1, 2, figsize=(14, 6.5))
-    fig.suptitle(f"Valuation & Quality — {ticker}", fontsize=14, fontweight="bold")
+    fig.subplots_adjust(wspace=0.28)
 
     # Left: P/E per fiscal year with the historical median as reference.
     pe_color = COLORS["Revenue"]
-    ax_pe.set_title("P/E by fiscal year", fontsize=11, pad=10)
     pe_mask = pe.notna()
     if pe_mask.any():
         ax_pe.bar(
@@ -930,12 +1031,13 @@ def chart_valuation(ticker: str, output_dir: str, years: list[int]) -> list[str]
             width=0.6,
             color=pe_color,
             label="P/E",
+            **_bar_style(),
         )
         for x, value in zip(positions[pe_mask.to_numpy()], pe[pe_mask].to_numpy()):
             ax_pe.text(
-                x, value, f"{value:.1f}x", ha="center", va="bottom", fontsize=7,
+                x, value, f" {value:.1f}x".replace(".", ","), ha="center", va="bottom", fontsize=8,
                 color=_c("label"),
-                path_effects=[path_effects.withStroke(linewidth=2, foreground=_c("halo"))],
+                path_effects=[path_effects.withStroke(linewidth=2.5, foreground=_c("halo"))],
             )
     else:
         ax_pe.text(
@@ -947,39 +1049,33 @@ def chart_valuation(ticker: str, output_dir: str, years: list[int]) -> list[str]
     if not medians.empty:
         median_pe = float(medians.iloc[-1])
         ax_pe.axhline(
-            median_pe, color=COLORS["Interest Expense"], linestyle="--", linewidth=1.6,
+            median_pe, color=COLORS["Interest Expense"], linestyle="--", linewidth=1.5,
             label="Historical median",
         )
         ax_pe.text(
             positions[-1] if len(positions) else 0,
             median_pe,
-            f"median {median_pe:.1f}x",
+            f"median {median_pe:.1f}x".replace(".", ","),
             ha="right",
             va="bottom",
-            fontsize=8,
-            color=COLORS["Interest Expense"],
+            fontsize=9,
+            color=_c("label"),
+            path_effects=[path_effects.withStroke(linewidth=2.5, foreground=_c("halo"))],
         )
 
+    pe_subtitle = "with the historical median"
     percentiles = data["pe_percentile"].dropna()
     if not percentiles.empty:
         pct_value = float(percentiles.iloc[-1])
         if abs(pct_value) <= 1.0:
             pct_value *= 100
         pct_year = int(data.loc[percentiles.index[-1], "fiscal_year"])
-        ax_pe.text(
-            0.0, 1.0, f"FY{pct_year} P/E percentile: {pct_value:.0f}%",
-            transform=ax_pe.transAxes, ha="left", va="bottom", fontsize=9,
-            color=_c("label"),
-        )
+        pe_subtitle = f"FY{pct_year} at the {pct_value:.0f}th percentile \u00b7 " + pe_subtitle
 
-    ax_pe.set_xticks(positions)
-    ax_pe.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
-    ax_pe.tick_params(axis="y", labelsize=9)
-    ax_pe.grid(axis="y", alpha=0.3)
-    ax_pe.set_axisbelow(True)
-    ax_pe.axhline(0, color=_c("ink"), linewidth=0.8)
-    ax_pe.set_ylabel("P/E (x)", fontsize=10)
+    _style_axes(ax_pe, labels, lambda v, _pos=None: f"{v:.0f}x")
     ax_pe.margins(y=0.18)
+    # Its own legend row too, so both panel titles line up.
+    _header(ax_pe, f"{ticker} \u00b7 P/E by fiscal year", pe_subtitle, *ax_pe.get_legend_handles_labels())
 
     # Right: F-score on the left axis, Z-score on a twin right axis. The bars
     # are offset so both series stay readable at every year.
@@ -988,35 +1084,35 @@ def chart_valuation(ticker: str, output_dir: str, years: list[int]) -> list[str]
     f_color = COLORS["Gross Margin"]
     z_color = COLORS["ROA"]
     width = 0.36
-    ax_f.set_title("F-Score and Z-Score by fiscal year", fontsize=11, pad=10)
     f_bars = ax_f.bar(
         positions - width / 2,
         f_score.to_numpy(),
         width,
         color=f_color,
-        label="F-Score (left)",
+        label="F-score (left)",
+        **_bar_style(),
     )
     z_bars = ax_z.bar(
         positions + width / 2,
         z_score.to_numpy(),
         width,
         color=z_color,
-        alpha=0.85,
-        label="Z-Score (right)",
+        label="Z-score (right)",
+        **_bar_style(),
     )
     for bar, value in zip(f_bars, f_score.to_numpy()):
         if pd.notna(value):
             ax_f.text(
                 bar.get_x() + bar.get_width() / 2, value, f"{value:.0f}",
-                ha="center", va="bottom", fontsize=7, color=_c("label"),
-                path_effects=[path_effects.withStroke(linewidth=2, foreground=_c("halo"))],
+                ha="center", va="bottom", fontsize=8, color=_c("label"),
+                path_effects=[path_effects.withStroke(linewidth=2.5, foreground=_c("halo"))],
             )
     for bar, value in zip(z_bars, z_score.to_numpy()):
         if pd.notna(value):
             ax_z.text(
-                bar.get_x() + bar.get_width() / 2, value, f"{value:.1f}",
-                ha="center", va="bottom", fontsize=7, color=_c("label"),
-                path_effects=[path_effects.withStroke(linewidth=2, foreground=_c("halo"))],
+                bar.get_x() + bar.get_width() / 2, value, f"{value:.1f}".replace(".", ","),
+                ha="center", va="bottom", fontsize=8, color=_c("label"),
+                path_effects=[path_effects.withStroke(linewidth=2.5, foreground=_c("halo"))],
             )
 
     if f_score.dropna().empty and z_score.dropna().empty:
@@ -1025,24 +1121,18 @@ def chart_valuation(ticker: str, output_dir: str, years: list[int]) -> list[str]
             ha="center", va="center", color=_c("muted"),
         )
 
-    ax_f.set_xticks(positions)
-    ax_f.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
-    ax_f.tick_params(axis="y", labelsize=9)
-    ax_f.grid(axis="y", alpha=0.3)
-    ax_f.set_axisbelow(True)
-    ax_f.axhline(0, color=_c("ink"), linewidth=0.8)
-    ax_f.set_ylabel("F-Score (0-9)", fontsize=10)
+    _style_axes(ax_f, labels, None)
+    ax_f.set_ylabel("F-score (0\u20139)", fontsize=10)
     ax_f.set_ylim(0, 9.6)
-    ax_z.set_ylabel("Z-Score", fontsize=10)
-    ax_z.tick_params(axis="y", labelsize=9)
+    ax_f.yaxis.set_major_locator(mticker.MultipleLocator(3))
+    # The Z-score axis keeps its numbers only: no grid, so its lines never
+    # cross the F-score's.
+    ax_z.grid(False)
+    ax_z.set_ylabel("Z-score", fontsize=10)
+    ax_z.tick_params(axis="y", labelsize=10)
     ax_z.margins(y=0.18)
-
-    handles = [f_bars, z_bars]
-    ax_f.legend(
-        handles, ["F-Score (left)", "Z-Score (right)"],
-        loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=2,
-        fontsize=8, frameon=False,
-    )
+    _header(ax_f, "F-score and Z-score", "quality (0\u20139) and distress risk",
+            [f_bars, z_bars], ["F-score (left)", "Z-score (right)"])
 
     return [_save(fig, os.path.join(output_dir, "08_valuation.png"))]
 
@@ -1054,15 +1144,15 @@ def _grouped_bar_windows(
     ticker: str,
     output_dir: str,
     filename_prefix: str,
+    title: str,
     metrics: list[tuple[str, pd.Series, str]],
     years: list[int],
-    ylabel: str,
     note: str | None = None,
 ) -> list[str]:
     paths: list[str] = []
     for window in _year_windows(years):
         suffix = _window_suffix(window)
-        fig, ax = _new_figure(f"{ticker} - {filename_prefix.replace('_', ' ').title()}", f"Fiscal years {suffix}")
+        fig, ax = _new_figure(f"{ticker} \u00b7 {title}", f"Fiscal years {_span(window)} \u00b7 USD")
         positions = np.arange(len(window))
         # Only use metrics that have at least one value in this window.
         active = [
@@ -1086,6 +1176,7 @@ def _grouped_bar_windows(
                 width,
                 label=label,
                 color=_color_for(label),
+                **_bar_style(),
             )
             for bar, v in zip(bars, series.to_numpy()):
                 _collect_label(
@@ -1093,12 +1184,10 @@ def _grouped_bar_windows(
                 )
 
         _style_axes(ax, window)
-        ax.set_ylabel(ylabel, fontsize=10)
         ax.margins(y=0.14)
         _declutter(ax, candidates)
-        if active:
-            _legend(ax, derived_labels)
-        else:
+        _legend(ax, derived_labels)
+        if not active:
             ax.text(
                 0.5,
                 0.5,
@@ -1109,7 +1198,7 @@ def _grouped_bar_windows(
                 color=_c("muted"),
             )
         if note:
-            fig.text(0.5, 0.015, note, ha="center", va="bottom", fontsize=9, color=_c("muted"))
+            fig.text(0.5, 0.015, note, ha="center", va="bottom", fontsize=10, color=_c("muted"))
         paths.append(
             _save(fig, os.path.join(output_dir, f"{filename_prefix}_{suffix}.png"))
         )

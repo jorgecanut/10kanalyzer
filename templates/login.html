@@ -17,10 +17,16 @@
   } catch {}
 </script>
 <style>
+  /* The app's font, bundled (static/fonts) so the page and the charts match
+     on every machine. */
+  @font-face { font-family:"Stocky Mono"; font-weight:400; font-display:swap;
+               src:url("{{ url_for('static', filename='fonts/UbuntuMono-Regular.ttf') }}") format("truetype"); }
+  @font-face { font-family:"Stocky Mono"; font-weight:700; font-display:swap;
+               src:url("{{ url_for('static', filename='fonts/UbuntuMono-Bold.ttf') }}") format("truetype"); }
   :root {
     --fs:1px;               /* text size: Options → Appearance */
     color-scheme: dark;
-    --mono:"UbuntuMono Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "FiraCode Nerd Font Mono",
+    --mono:"Stocky Mono", "UbuntuMono Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "FiraCode Nerd Font Mono",
            "Noto Sans Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "DejaVu Sans Mono", monospace;
     --bg:#252629; --surface:#2c2d31; --bar:#1d1e21; --line:#3e4045; --line-soft:#323338;
     --muted:#cfd2d8; --text:#ffffff; --accent:#ffffff; --on-accent:#212226;
