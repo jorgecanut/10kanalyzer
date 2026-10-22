@@ -144,8 +144,8 @@ Routes:
 latest search (the pinned ticker). It shows that company's key numbers (the
 only place outside the Screener with stats), its spot in the screener's Magic
 Formula ranking with the two tickers above and below (names only, click one to
-switch to it), the top five headlines, and every chart as a small thumbnail
-that opens in the Charts tab. Running a single ticker switches to Home and shows
+switch to it), the top five headlines, and one small thumbnail per chart type
+(the most recent year window) that opens in the Charts tab. Running a single ticker switches to Home and shows
 the run's progress there.
 
 The ticker bar decides the mode. **One ticker** runs the full pipeline: charts
