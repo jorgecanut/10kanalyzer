@@ -146,7 +146,9 @@ Routes:
 | `GET` | `/download/<ticker>/<name>` | One file |
 | `GET` | `/healthz` | Health probe |
 
-**Home** (the house icon, far left) is the default tab: an overview of the
+The tabs sit on the right of the ticker bar's row (on narrow screens, on a row
+of their own below it); the **Recent** clock icon sits left of the ticker box.
+**Home** (the house icon, first tab) is the default tab: an overview of the
 latest search (the pinned ticker). It shows that company's key numbers (the
 only place outside the Screener with stats), its spot in the screener's Magic
 Formula ranking with the two tickers above and below (names only, click one to
@@ -208,7 +210,7 @@ all tabs. Clicking your name in the header opens it on the **Account** tab.
   to any browser; **Delete all results** keeps them, deleting the account
   removes them.
 - **General**: tab shown on open (Home by default), tab order (up/down
-  arrows, **Reset order**; Recent stays at the far right), default number of
+  arrows, **Reset order**; Recent stays beside the ticker box), default number of
   10-K filings (also used after cancel).
 - **Appearance**: dark or light theme; text size (Small / Normal / Large /
   Larger: every font scales through the `--fs` CSS variable); date format
