@@ -1827,15 +1827,27 @@ function renderHome() {
       <div class="news-meta">${esc([a.source, fmtAgo(a.published)].filter(Boolean).join(' · '))}</div>
     </li>`).join('');
 
-  // Charts: small thumbnails; a click opens that chart in the Charts tab.
+  // Charts: one small thumbnail per chart type (its most recent year window);
+  // a click opens that chart in the Charts tab.
   const data = GRAPH.results && GRAPH.results.ticker === ticker ? GRAPH.results : null;
   const live = GRAPH.state === 'queued' || GRAPH.state === 'running';
   $('#home-charts').innerHTML = data
-    ? data.charts.map(name => `<figure onclick="openChart('${esc(chartId(name))}')" title="Open in the Charts tab">
+    ? latestCharts(data.charts).map(name => `<figure onclick="openChart('${esc(chartId(name))}')" title="Open in the Charts tab">
         <img src="${chartSrc(data, name)}" alt="${esc(name)}" loading="lazy">
         <figcaption><span>${esc(chartLabel(name))}</span></figcaption>
       </figure>`).join('')
     : `<p class="muted">${live ? 'Charts appear when the run finishes.' : 'No charts for this ticker yet.'}</p>`;
+}
+
+// Chart files are NN_name[_YYYY_YYYY].png: keep the window ending latest per NN.
+function latestCharts(charts) {
+  const best = new Map();
+  for (const name of charts) {
+    const key = name.split('_')[0];
+    const end = Number((name.match(/_(\d{4})\.png$/) || [])[1] || 0);
+    if (!best.has(key) || end > best.get(key).end) best.set(key, { name, end });
+  }
+  return [...best.values()].map(item => item.name);
 }
 
 function openHome(ticker) {
