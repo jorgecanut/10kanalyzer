@@ -225,8 +225,8 @@
   .view-seg button[aria-checked="true"] { background:var(--accent-soft); color:var(--text); }
   .view-seg svg { width:18px; height:18px; display:block; }
   .head-sep { width:1px; height:22px; margin:0 4px; background:var(--line); }
-  .charts-full { display:flex; flex-direction:column; gap:16px; position:relative; left:50%;
-                 width:min(calc(100vw - 40px), 1600px); transform:translateX(-50%); }
+  /* One chart per row, as wide as the middle column. */
+  .charts-full { display:flex; flex-direction:column; gap:16px; }
   .charts-full figure, .grid figure { scroll-margin-top:150px; }
   figcaption { display:flex; justify-content:space-between; font-size:calc(var(--fs) * 14); color:var(--muted);
                margin-top:8px; }
@@ -677,7 +677,7 @@
         <span class="panel-title">Charts</span>
         <span class="panel-actions">
           <span class="view-seg" id="view-seg" role="radiogroup" aria-label="Chart layout" hidden>
-            <button data-view="full" role="radio" onclick="setChartView('full')" title="Full-width charts" aria-label="Full-width charts">
+            <button data-view="full" role="radio" onclick="setChartView('full')" title="One chart per row" aria-label="One chart per row">
               <svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
                 <rect x="3.5" y="4" width="17" height="7" rx="1.5" fill="currentColor" fill-opacity=".2" /><rect x="3.5" y="13" width="17" height="7" rx="1.5" /></g></svg>
             </button>

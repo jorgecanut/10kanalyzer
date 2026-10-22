@@ -172,7 +172,7 @@ then. The pipeline log opens above the chart index, set apart by its own
 background and a rule, while the run is queued or running and closes when it
 ends (it stays open after an error); the **log** button toggles it. The chart index sits inside the Charts
 panel, one line per chart (year windows side by side); the layout switch
-(full width or grid) is the joined pair of buttons left of the other actions. **Several tickers** switch to screener mode:
+(one chart per row, as wide as the page column, or a grid) is the joined pair of buttons left of the other actions. **Several tickers** switch to screener mode:
 data only, no charts (`--no-charts`), and the pinned graph is left as is.
 Running a single ticker that is queued as a screener job upgrades it to a graph
 run; if it is already running, a graph run is queued after it. The **Insiders**,
