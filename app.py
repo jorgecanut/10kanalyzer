@@ -28,8 +28,10 @@ import threading
 import time
 import uuid
 import zipfile
+import xml.etree.ElementTree as ET
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from http.cookiejar import CookieJar
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -244,6 +246,10 @@ _YAHOO_SESSION = {"opener": None, "crumb": "", "ts": 0.0}
 _YAHOO_LOCK = threading.Lock()
 _SIM_CACHE: dict = {}
 _CURRENT_CACHE: dict = {}
+_NEWS_CACHE: dict = {}
+NEWS_TTL = 1800          # seconds; news is shared by every user
+NEWS_DAYS = 14
+NEWS_LIMIT = 25
 
 
 def _yahoo_session():
@@ -1004,6 +1010,74 @@ def evaluation(ticker: str):
         insider_generated=insider_generated,
         current=_current_quote(ticker),
     )
+
+
+_NAME_SUFFIX = re.compile(
+    r"[,\s]+(inc\.?|incorporated|corp\.?|corporation|company|co\.?|ltd\.?|limited|plc|"
+    r"holdings?|n\.v\.|s\.a\.|ag|se|l\.p\.)$", re.IGNORECASE)
+
+
+def _company_name(ticker: str) -> str:
+    """Company name for news searches, from Yahoo's search; falls back to the ticker."""
+    try:
+        url = "https://query1.finance.yahoo.com/v1/finance/search?" + urlencode(
+            {"q": ticker.replace(".", "-"), "quotesCount": 1, "newsCount": 0})
+        with urlopen(Request(url, headers={"User-Agent": YAHOO_UA}), timeout=10) as response:
+            quote = (json.load(response).get("quotes") or [{}])[0]
+        name = quote.get("longname") or quote.get("shortname") or ""
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, IndexError, AttributeError):
+        name = ""
+    name = re.sub(r"^the\s+", "", name.strip(), flags=re.IGNORECASE)
+    previous = None
+    while name and name != previous:      # "Foo Holdings, Inc." -> "Foo"
+        previous, name = name, _NAME_SUFFIX.sub("", name).strip()
+    return name or ticker
+
+
+def _google_news(query: str) -> list[dict]:
+    """Top Google News stories for ``query``, in Google's ranking order."""
+    url = "https://news.google.com/rss/search?" + urlencode(
+        {"q": f"{query} when:{NEWS_DAYS}d", "hl": "en-US", "gl": "US", "ceid": "US:en"})
+    with urlopen(Request(url, headers={"User-Agent": YAHOO_UA}), timeout=10) as response:
+        root = ET.fromstring(response.read())
+    articles, seen = [], set()
+    for item in root.iter("item"):
+        title = (item.findtext("title") or "").strip()
+        source = (item.findtext("source") or "").strip()
+        if source and title.endswith(f" - {source}"):
+            title = title[: -len(source) - 3].strip()
+        link = (item.findtext("link") or "").strip()
+        if not title or not link.startswith("https://") or title.lower() in seen:
+            continue
+        seen.add(title.lower())
+        try:
+            published = parsedate_to_datetime(item.findtext("pubDate") or "").isoformat()
+        except (TypeError, ValueError):
+            published = None
+        articles.append({"title": title, "source": source, "link": link, "published": published})
+        if len(articles) >= NEWS_LIMIT:
+            break
+    return articles
+
+
+@app.get("/api/news/<ticker>")
+def news(ticker: str):
+    """Recent articles about the company: headline, outlet, date and link only."""
+    ticker = _normalise_ticker(ticker)
+    with _YAHOO_LOCK:
+        cached = _NEWS_CACHE.get(ticker)
+    if cached and time.time() - cached[0] < NEWS_TTL and not request.args.get("fresh"):
+        return jsonify(cached[1])
+    company = _company_name(ticker)
+    try:
+        articles = _google_news(f'"{company}"' if company != ticker else f"{ticker} stock")
+    except (HTTPError, URLError, TimeoutError, ET.ParseError) as exc:
+        abort(502, f"Could not reach Google News: {exc}")
+    payload = {"ticker": ticker, "company": company, "days": NEWS_DAYS,
+               "fetched": _now(), "articles": articles}
+    with _YAHOO_LOCK:
+        _NEWS_CACHE[ticker] = (time.time(), payload)
+    return jsonify(payload)
 
 
 @app.get("/api/insiders/<ticker>")
