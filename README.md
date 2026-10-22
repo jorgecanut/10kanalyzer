@@ -118,7 +118,10 @@ Routes:
 | `POST` | `/api/login` | `{"email","password"}` → signs in |
 | `POST` | `/api/logout` | Signs out |
 | `GET` | `/api/account` | The signed-in user's name, email and SEC identity (never the id) |
-| `PATCH` | `/api/account` | Change `name` / `email` / `new_password` (email and password need `current_password`) |
+| `PATCH` | `/api/account` | Change `name` / `email` / `new_password` (email and password need `current_password`) or `color` (a preset name) |
+| `GET` | `/api/account/avatar` | The profile picture (256×256 PNG), 404 if none |
+| `PUT` | `/api/account/avatar` | Raw image body (PNG, JPEG or WebP, max 5 MB) → cropped to a square and stored |
+| `DELETE` | `/api/account/avatar` | Removes the profile picture |
 | `DELETE` | `/api/account` | `{"confirm":"DELETE","password"}` → deletes the account and all its data |
 | `DELETE` | `/api/data` | `{"confirm":"DELETE"}` → deletes all of the user's results; the account stays |
 | `POST` | `/api/run` | `{"ticker":"NFLX","filings":10,"fresh":false}` → queues a run, or `status: "cached"` |
@@ -180,7 +183,14 @@ and their sections on the right. Searching shows every matching option across
 all tabs. Clicking your name in the header opens it on the **Account** tab.
 
 - **Account**: change name, email or password (email and password need the
-  current password), see the SEC identity, sign out, delete the account.
+  current password); profile colour and picture; see the SEC identity, sign
+  out, delete the account. The profile colour (orange by default; eight
+  presets, each with a dark- and a light-theme shade of at least 6:1 contrast)
+  colours every panel title, section heading and link, and fills the avatar
+  behind your initial, or rings your picture. Colour and picture belong to the
+  account (stored in `data/stocky.db` and `data/avatars/`), so they follow you
+  to any browser; **Delete all results** keeps them, deleting the account
+  removes them.
 - **General**: tab shown on open (Home by default), tab order (up/down
   arrows, **Reset order**; Recent stays at the far right), default number of
   10-K filings (also used after cancel).

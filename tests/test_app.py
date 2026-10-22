@@ -3,6 +3,7 @@
 Run from the repo root:  python -m unittest discover tests
 """
 
+import io
 import shutil
 import sys
 import tempfile
@@ -113,7 +114,8 @@ class AuthTests(AppTestCase):
     def test_account_never_exposes_the_id(self):
         user = self.client.get("/api/account").get_json()["user"]
         self.assertEqual(user, {"name": "Ada Lovelace", "email": "ada@example.com",
-                                "identity": "Ada Lovelace ada@example.com"})
+                                "identity": "Ada Lovelace ada@example.com",
+                                "color": "orange", "avatar": False})
 
     def test_email_and_password_changes_need_current_password(self):
         res = self.client.patch("/api/account", json={"email": "new@example.com"})
@@ -126,6 +128,59 @@ class AuthTests(AppTestCase):
         client = app.app.test_client()
         ok = client.post("/api/login", json={"email": "new@example.com", "password": "another pass"})
         self.assertEqual(ok.status_code, 200)
+
+
+def png_bytes(size=(400, 200), color=(200, 30, 30)):
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", size, color).save(buf, "PNG")
+    return buf.getvalue()
+
+
+class ProfileTests(AppTestCase):
+    def put_avatar(self, data, client=None):
+        return (client or self.client).put("/api/account/avatar", data=data,
+                                          headers={"Content-Type": "application/octet-stream"})
+
+    def test_colour_defaults_to_orange_and_only_accepts_presets(self):
+        self.assertEqual(self.client.get("/api/account").get_json()["user"]["color"], "orange")
+        res = self.client.patch("/api/account", json={"color": "teal"})
+        self.assertEqual(res.get_json()["user"]["color"], "teal")
+        self.assertEqual(self.client.patch("/api/account", json={"color": "#123456"}).status_code, 400)
+        self.assertEqual(self.client.get("/api/account").get_json()["user"]["color"], "teal")
+
+    def test_avatar_upload_is_squared_and_can_be_removed(self):
+        from PIL import Image
+        self.assertEqual(self.client.get("/api/account/avatar").status_code, 404)
+        res = self.put_avatar(png_bytes())
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertTrue(res.get_json()["user"]["avatar"])
+        with self.client.get("/api/account/avatar") as got:
+            self.assertEqual(got.mimetype, "image/png")
+            self.assertEqual(Image.open(io.BytesIO(got.data)).size, (app.AVATAR_SIZE, app.AVATAR_SIZE))
+        res = self.client.delete("/api/account/avatar")
+        self.assertFalse(res.get_json()["user"]["avatar"])
+        self.assertEqual(self.client.get("/api/account/avatar").status_code, 404)
+
+    def test_avatar_rejects_non_images_and_big_files(self):
+        self.assertEqual(self.put_avatar(b"not an image").status_code, 400)
+        big = b"\0" * (app.AVATAR_MAX_BYTES + 1)
+        self.assertEqual(self.put_avatar(big).status_code, 413)
+        self.assertFalse(self.client.get("/api/account").get_json()["user"]["avatar"])
+
+    def test_avatars_are_per_user(self):
+        bob = self.signup("Bob", "bob@example.com")
+        self.put_avatar(png_bytes())
+        self.assertEqual(bob.get("/api/account/avatar").status_code, 404)
+
+    def test_wipe_keeps_avatar_and_account_delete_removes_it(self):
+        self.put_avatar(png_bytes())
+        self.client.delete("/api/data", json={"confirm": "DELETE"})
+        with self.client.get("/api/account/avatar") as got:
+            self.assertEqual(got.status_code, 200)
+        path = app._avatar_path(self.uid())
+        self.client.delete("/api/account", json={"confirm": "DELETE", "password": PASSWORD})
+        self.assertFalse(path.exists())
 
 
 class RouteTests(AppTestCase):
