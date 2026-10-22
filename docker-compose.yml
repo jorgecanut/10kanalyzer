@@ -1,15 +1,17 @@
-# Single-service stack: publishes one HTTP port, which you front with your own
-# nginx. Drop it into Dockge and deploy.
+# Single-service stack: publishes one HTTP port. Drop it into Dockge (or run
+# `docker compose up -d --build`) and deploy.
 #
-#   .env   -> EDGAR_IDENTITY (SEC contact) and optional HTTP_PORT
+#   .env   -> optional HTTP_PORT and host folders (see .env.example)
 #   build  -> expects the Dockerfile/app next to this file (or set build.context)
+#
+# No SEC identity here: every user signs up in the app with a name and email,
+# and that account is what is sent to the SEC.
 services:
   dashboard:
     build: .
     image: edgar-dashboard
     restart: unless-stopped
     environment:
-      EDGAR_IDENTITY: "${EDGAR_IDENTITY:-Data Analyst analyst@example.com}"
       # edgartools writes to ~/.edgar / ~/.edgar_cache by default; set them
       # explicitly so the bind mounts below match regardless of HOME.
       EDGAR_LOCAL_DATA_DIR: /home/appuser/.edgar
@@ -17,11 +19,12 @@ services:
     ports:
       - "${HTTP_PORT:-8053}:8000"
     volumes:
-      - /mnt/tanques/stocky/financial_graphs:/app/financial_graphs
-      # Cache SEC downloads so repeat runs are fast. The container runs as
-      # appuser (uid 10001), so these must land in that user's home, not /root.
-      - /mnt/tanques/stocky/edgar_cache:/home/appuser/.edgar_cache
-      - /mnt/tanques/stocky/edgar_data:/home/appuser/.edgar
+      # Accounts, sessions and every user's results. The container runs as
+      # appuser (uid 10001), so these host folders must be writable by it.
+      - ${STOCKY_DATA:-./data}:/app/data
+      # Cache SEC downloads so repeat runs are fast.
+      - ${EDGAR_CACHE:-./edgar_cache}:/home/appuser/.edgar_cache
+      - ${EDGAR_DATA:-./edgar_data}:/home/appuser/.edgar
     mem_limit: 2g
     logging:
       driver: json-file

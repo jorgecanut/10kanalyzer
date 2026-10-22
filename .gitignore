@@ -2,6 +2,9 @@
 __pycache__/
 *.pyc
 financial_graphs/
+data/
+edgar_cache/
+edgar_data/
 .env
 images/
 nginx/htpasswd

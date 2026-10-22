@@ -46,7 +46,7 @@ laptop ──git push nas main──► /mnt/tanques/stocky/10kanalyzer.git (bar
 
 - The server checkout is a **deploy target**: never edit files there. The hook
   runs `git reset --hard`, so local edits are discarded. Runtime state lives in
-  bind mounts (`financial_graphs`, `edgar_cache`, `edgar_data`) and `.env`,
+  bind mounts (`data`, `edgar_cache`, `edgar_data`) and `.env`,
   all untracked.
 - Only `main` triggers a deploy. Other branches can be pushed without a rebuild.
 - GitHub stays as a backup: `git push origin main` still works, but it no longer

@@ -81,7 +81,7 @@ HOOK
 chmod +x "$BARE/hooks/post-receive"
 
 echo "== checks"
-[ -f "$WORK/.env" ] || echo "[!] $WORK/.env missing (EDGAR_IDENTITY falls back to a placeholder)"
+[ -f "$WORK/.env" ] || echo "[!] $WORK/.env missing (data falls back to ./data, ./edgar_cache, ./edgar_data)"
 command -v curl >/dev/null || echo "[!] curl missing; the hook cannot verify /healthz"
 if docker info >/dev/null 2>&1; then
   echo "docker: direct access ok"
