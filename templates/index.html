@@ -29,6 +29,7 @@
     --surface-2:#333438;
     --bar:#1d1e21;
     --line:#3e4045;
+    --line-strong:#8d919a;   /* borders of the main controls */
     --line-soft:#323338;
     --muted:#cfd2d8;          /* light grey: secondary but still easy to read */
     --text:#ffffff;
@@ -49,6 +50,7 @@
     --surface-2:#ffffff;
     --bar:#e9eaed;
     --line:#d7d9de;
+    --line-strong:#8d919a;
     --line-soft:#e7e8ec;
     --muted:#646770;
     --text:#1b1c1f;
@@ -108,7 +110,13 @@
   .toolbar-inner { max-width:1100px; margin:0 auto; display:flex; gap:8px; flex-wrap:wrap;
                    align-items:center; justify-content:center; }
   .head-actions .status { font-size:13px; }
-  #ticker { flex:0 1 360px; width:360px; min-width:240px; }
+  #ticker { flex:0 1 360px; width:360px; min-width:240px; height:44px; border-color:var(--line-strong); }
+  /* The filings count is secondary: smaller and quieter, label kept. */
+  #filings { height:32px; padding:4px 8px; font-size:12px; color:var(--muted); }
+  #run-btn { height:44px; min-width:96px; padding:0 22px; font-size:15px; }
+  #cancel-btn { width:44px; height:44px; border-color:var(--line-strong); }
+  #ticker:focus { border-color:var(--accent); }
+  #cancel-btn:hover { border-color:var(--badge-error-fg); }
 
   main { max-width:1100px; margin:0 auto; padding:18px 20px 40px; }
   .tabs { display:flex; gap:6px; margin-bottom:16px; }
