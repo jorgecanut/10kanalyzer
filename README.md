@@ -247,6 +247,8 @@ python -m unittest discover tests
 
 Queue and route tests for `app.py`; the pipeline is replaced by a fake script,
 so they need no network and finish in a few seconds.
+GitHub Actions runs them on every push and pull request
+(`.github/workflows/tests.yml`, Python 3.12 like the Dockerfile).
 
 ### Simulation tab
 
