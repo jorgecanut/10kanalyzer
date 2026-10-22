@@ -42,9 +42,10 @@ except Exception as exc:  # pragma: no cover - only when edgar is missing/broken
     _EDGAR_ERROR = exc
 
 # Cap the amount of SEC work per run: each ``filing.obj()`` parses a full XML
-# document, so a busy ticker can have thousands of Form 4s.
-MAX_FILINGS = 20
-MAX_TRANSACTIONS = 100
+# document. The window (6 months by default) is the real limit; this is only a
+# safety valve for pathological filing counts. All trades inside the window are
+# returned — there is no per-transaction cap.
+MAX_FILINGS = 500
 OUTPUT_FILENAME = "insider.json"
 
 
@@ -219,7 +220,7 @@ def collect_insiders(ticker: str, months: int = 6) -> list[dict]:
                 continue
 
         transactions.sort(key=lambda item: item["date"], reverse=True)
-        return transactions[:MAX_TRANSACTIONS]
+        return transactions
     except Exception as exc:
         _warn(f"failed to collect insiders for {ticker}: {exc}")
         return []

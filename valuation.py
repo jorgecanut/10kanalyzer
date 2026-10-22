@@ -39,8 +39,8 @@ PRICE_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) Stocky/1.0"
 BASE_OUTPUT_DIR = "financial_graphs"
 OUTPUT_COLUMNS = [
     "fiscal_year", "price", "shares", "market_cap", "pe", "pb", "pfcf",
-    "ev_ebit", "ev_ebitda", "earnings_yield", "fcf_yield", "pe_median_hist",
-    "pe_percentile", "f_score", "z_score", "accruals_ratio",
+    "ev_ebit", "ev_ebitda", "earnings_yield", "return_on_capital", "fcf_yield",
+    "pe_median_hist", "pe_percentile", "f_score", "z_score", "accruals_ratio",
 ]
 
 # Candidate standard concepts / labels for the balance-sheet inputs that the
@@ -590,6 +590,15 @@ def build_evaluation(
         ev_ebit = _safe_div(enterprise_value, ebit_value, positive_only=True)
         ev_ebitda = _safe_div(enterprise_value, ebitda_value, positive_only=True)
         earnings_yield = _safe_div(ebit_value, enterprise_value, positive_only=True)
+        # Greenblatt return on capital: EBIT / (net working capital + net fixed
+        # assets). Assets minus current liabilities is the standard practical
+        # proxy when PP&E is not broken out.
+        invested_capital = (
+            assets_value - current_liabilities_value
+            if np.isfinite(assets_value) and np.isfinite(current_liabilities_value)
+            else np.nan
+        )
+        return_on_capital = _safe_div(ebit_value, invested_capital, positive_only=True)
         fcf_yield = _safe_div(fcf_value, enterprise_value, positive_only=True)
 
         # Altman Z-score (public-manufacturer form).
@@ -644,6 +653,7 @@ def build_evaluation(
             "ev_ebit": ev_ebit,
             "ev_ebitda": ev_ebitda,
             "earnings_yield": earnings_yield,
+            "return_on_capital": return_on_capital,
             "fcf_yield": fcf_yield,
             "pe_median_hist": np.nan,
             "pe_percentile": np.nan,

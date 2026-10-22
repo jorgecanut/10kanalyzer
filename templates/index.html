@@ -116,7 +116,7 @@
   /* Ticker bar: always visible under the title bar. */
   .toolbar { padding:8px 20px; border-top:1px solid var(--line-soft); background:var(--bg); }
   .toolbar-inner { max-width:1100px; margin:0 auto; display:flex; gap:8px; flex-wrap:wrap;
-                   align-items:center; }
+                   align-items:center; justify-content:center; }
   .head-actions .status { font-size:13px; }
   #ticker { flex:0 1 360px; width:360px; min-width:240px; }
 
@@ -261,6 +261,10 @@
   table.data td { font-variant-numeric:tabular-nums; }
   table.data tbody tr:last-child td { border-bottom:0; }
   table.data td.muted { text-align:center; padding:16px 10px; }
+  #screen-table th, #screen-table td { padding:6px 8px; }
+  .screen-notes { color:var(--muted); font-size:12px; line-height:1.6; margin:0 0 10px; }
+  .screen-notes:empty { display:none; }
+  .row-btn { padding:3px 8px; font-size:12px; }
 
   /* Insider trades reuse the stat rows for a compact list. */
   .insider-list .stat { align-items:center; gap:10px; flex-wrap:wrap; }
@@ -350,6 +354,7 @@
 <main>
   <div class="tabs">
     <button id="tab-run" class="active" onclick="showTab('run')">Run</button>
+    <button id="tab-insiders" onclick="showTab('insiders')">Insiders</button>
     <button id="tab-screener" onclick="showTab('screener')">Screener</button>
     <button id="tab-simulation" onclick="showTab('simulation')">Simulation</button>
     <button id="tab-recent" class="tab-icon" onclick="showTab('recent')"
@@ -378,15 +383,24 @@ the pipeline log streams into this terminal.</pre>
       </div>
     </section>
     <div id="results-run"></div>
-    <section class="panel hidden" id="insider-panel">
+  </section>
+
+  <!-- Insiders tab -->
+  <section id="pane-insiders" class="hidden">
+    <div class="panel">
       <div class="panel-head">
         <span class="panel-title">Insider trades (Form 4, 6 months)</span>
-        <span class="panel-actions"><span id="insider-more" class="muted"></span></span>
+        <span class="panel-actions">
+          <span id="insider-more" class="muted"></span>
+          <select id="insider-run" title="Successful run" onchange="loadInsiderTicker()"></select>
+          <button class="panel-btn" onclick="initInsiders(true)">refresh</button>
+        </span>
       </div>
       <div class="panel-body">
+        <p class="sim-meta" id="insider-status"></p>
         <div id="insider-body" class="insider-list"></div>
       </div>
-    </section>
+    </div>
   </section>
 
   <!-- Recent tab -->
@@ -416,6 +430,7 @@ the pipeline log streams into this terminal.</pre>
         </span>
       </div>
       <div class="panel-body">
+        <div id="screen-notes" class="screen-notes"></div>
         <div class="table-wrap">
           <table class="data" id="screen-table">
             <thead>
@@ -426,13 +441,17 @@ the pipeline log streams into this terminal.</pre>
                 <th data-key="z_score" data-label="Z-score" onclick="sortScreen('z_score')">Z-score</th>
                 <th data-key="pe" data-label="P/E" onclick="sortScreen('pe')">P/E</th>
                 <th data-key="ev_ebit" data-label="EV/EBIT" onclick="sortScreen('ev_ebit')">EV/EBIT</th>
+                <th data-key="earnings_yield" data-label="EY" title="Greenblatt earnings yield: EBIT / enterprise value" onclick="sortScreen('earnings_yield')">EY</th>
+                <th data-key="return_on_capital" data-label="ROC" title="Greenblatt return on capital: EBIT / (total assets − current liabilities)" onclick="sortScreen('return_on_capital')">ROC</th>
+                <th data-key="greenblatt_rank" data-label="Magic" title="Greenblatt Magic Formula rank: EY rank + ROC rank (lower is better)" onclick="sortScreen('greenblatt_rank')">Magic</th>
                 <th data-key="fcf_yield" data-label="FCF yield" onclick="sortScreen('fcf_yield')">FCF yield</th>
                 <th data-key="pe_percentile" data-label="P/E pct" onclick="sortScreen('pe_percentile')">P/E pct</th>
                 <th data-key="modified" data-label="Updated" onclick="sortScreen('modified')">Updated</th>
+                <th>Charts</th>
               </tr>
             </thead>
             <tbody id="screen-body">
-              <tr><td colspan="9" class="muted">No screened tickers yet.</td></tr>
+              <tr><td colspan="13" class="muted">No screened tickers yet.</td></tr>
             </tbody>
           </table>
         </div>
@@ -590,17 +609,21 @@ function resetUi() {
   setStatus('idle', 'idle');
   setTermLog(WELCOME);
   $('#results-run').innerHTML = '';
-  $('#insider-panel').classList.add('hidden');
+  $('#insider-status').textContent = '';
   $('#insider-body').innerHTML = '';
   $('#insider-more').textContent = '';
+  const insiderSelect = $('#insider-run');
+  insiderSelect.innerHTML = '';
+  delete insiderSelect.dataset.loaded;
   $('#recent').innerHTML = '';
   $('#results-recent').innerHTML = '';
   $('#screen-progress').textContent = '';
+  $('#screen-notes').innerHTML = '';
   SCREEN.items = [];
   SCREEN.status = {};
   SCREEN.total = 0;
   SCREEN.mode = 'run';
-  SCREEN.sort = { key: 'ticker', dir: 1 };
+  SCREEN.sort = { key: 'greenblatt_rank', dir: 1 };
   SCREEN.pipeline = null;
   renderScreener();
   resetSimulation();
@@ -740,12 +763,13 @@ async function refreshRun() {
 /* ------------------------------------------------------------------------ */
 
 function showTab(name) {
-  for (const tab of ['run', 'recent', 'screener', 'simulation']) {
+  for (const tab of ['run', 'insiders', 'recent', 'screener', 'simulation']) {
     const active = tab === name;
     $(`#pane-${tab}`).classList.toggle('hidden', !active);
     $(`#tab-${tab}`).classList.toggle('active', active);
   }
   if (name === 'recent') loadRecent();
+  if (name === 'insiders') initInsiders();
   if (name === 'screener') loadScreener();
   if (name === 'simulation') initSimulation();
 }
@@ -840,7 +864,6 @@ function poll(ticker) {
 }
 
 async function loadResults(ticker, target) {
-  loadInsiders(ticker);
   const res = await fetch(`/api/files/${ticker}`);
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
@@ -888,28 +911,64 @@ function renderResults(data, target) {
     <div class="grid">${grid}</div>`;
 }
 
-async function loadInsiders(ticker) {
-  const panel = $('#insider-panel');
+async function initInsiders() {
+  const select = $('#insider-run');
+  try {
+    const { items } = await (await fetch('/api/recent')).json();
+    const runs = items.filter(item => item.has_insider);
+    if (!runs.length) {
+      select.innerHTML = '';
+      $('#insider-status').textContent = 'No insider data yet. Run a ticker first.';
+      $('#insider-body').innerHTML = '';
+      $('#insider-more').textContent = '';
+      return;
+    }
+    const current = select.value;
+    select.innerHTML = runs.map(item =>
+      `<option value="${esc(item.ticker)}">${esc(item.ticker)} · ${fmtDate(item.modified)}</option>`
+    ).join('');
+    select.value = runs.some(item => item.ticker === current) ? current : runs[0].ticker;
+  } catch {
+    $('#insider-status').textContent = 'Could not load runs.';
+    return;
+  }
+  if (!select.value) return;
+  await loadInsiderTicker();
+}
+
+async function loadInsiderTicker() {
+  const ticker = $('#insider-run').value;
   const body = $('#insider-body');
-  panel.classList.add('hidden');
   body.innerHTML = '';
   $('#insider-more').textContent = '';
+  if (!ticker) { $('#insider-status').textContent = ''; return; }
+  $('#insider-status').textContent = `Loading ${ticker} insider trades…`;
   try {
-    const res = await fetch(`/api/evaluation/${encodeURIComponent(ticker)}`);
-    if (!res.ok) return;
+    const res = await fetch(`/api/insiders/${encodeURIComponent(ticker)}`);
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail.error || 'No insider data.');
+    }
     const data = await res.json();
-    const rows = Array.isArray(data.insiders) ? data.insiders : [];
-    if (!rows.length) return;
-    body.innerHTML = rows.slice(0, 15).map(it => {
+    const rows = Array.isArray(data.transactions) ? data.transactions : [];
+    if (!rows.length) {
+      $('#insider-status').textContent = `${ticker}: no open-market insider trades in the last 6 months.`;
+      return;
+    }
+    body.innerHTML = rows.map(it => {
       const kind = it.type === 'buy' ? 'done' : 'error';
       return `<div class="stat">
         <span class="who"><b>${esc(it.name || '—')}</b>${it.title ? ' · ' + esc(it.title) : ''} · ${it.date ? esc(fmtDate(it.date)) : '—'}</span>
         <b><span class="badge ${kind}">${esc(it.type || '—')}</span> ${fmtInt(it.shares)} sh · ${fmtMoney(it.value)}</b>
       </div>`;
     }).join('');
-    if (rows.length > 15) $('#insider-more').textContent = `+${rows.length - 15} more`;
-    panel.classList.remove('hidden');
-  } catch { /* evaluation unavailable: keep the panel hidden */ }
+    $('#insider-more').textContent = `${rows.length} trade(s) · newest first`;
+    $('#insider-status').textContent = data.generated
+      ? `${ticker} · collected ${fmtDate(data.generated)}`
+      : `${ticker}`;
+  } catch (err) {
+    $('#insider-status').textContent = `${ticker}: ${err.message}`;
+  }
 }
 
 async function loadRecent() {
@@ -955,7 +1014,7 @@ function openRecent(ticker) {
 /* Screener ----------------------------------------------------------------- */
 
 const SCREEN = {
-  items: [], sort: { key: 'ticker', dir: 1 }, timer: null,
+  items: [], sort: { key: 'greenblatt_rank', dir: 1 }, timer: null,
   status: {}, total: 0, mode: 'run',
 };
 
@@ -1053,7 +1112,8 @@ async function loadScreener() {
     SCREEN.pipeline = data.pipeline || null;
     renderScreener();
   } catch {
-    $('#screen-body').innerHTML = '<tr><td colspan="9" class="muted">Could not load screened tickers.</td></tr>';
+    $('#screen-notes').innerHTML = '';
+    $('#screen-body').innerHTML = '<tr><td colspan="13" class="muted">Could not load screened tickers.</td></tr>';
   }
 }
 
@@ -1062,6 +1122,12 @@ function sortScreen(key) {
   if (sort.key === key) sort.dir = -sort.dir;
   else { sort.key = key; sort.dir = 1; }
   renderScreener();
+}
+
+function generateGraphs(ticker) {
+  $('#ticker').value = ticker;
+  updateMode();
+  runTicker(ticker);
 }
 
 const scoreCell = (v, hi, lo) => {
@@ -1079,7 +1145,7 @@ function renderScreener() {
     th.textContent = th.dataset.label + (th.dataset.key === SCREEN.sort.key ? (SCREEN.sort.dir > 0 ? ' ▲' : ' ▼') : '');
   });
   if (!SCREEN.items.length) {
-    body.innerHTML = '<tr><td colspan="9" class="muted">No screened tickers yet.</td></tr>';
+    body.innerHTML = '<tr><td colspan="13" class="muted">No screened tickers yet.</td></tr>';
     return;
   }
   const stale = SCREEN.items.filter(row => row.has_evaluation === false).length;
@@ -1092,11 +1158,9 @@ function renderScreener() {
   const notes = [];
   if (pipelineNote) notes.push(pipelineNote);
   if (stale) notes.push(`${stale} ticker(s) have results but no <code>evaluation.csv</code> — the pipeline wrote no
-        valuation data. Check that ticker's log in the panel above: <code>[!] valuation skipped</code> means Yahoo
+        valuation data. Check that ticker's log in the Run tab: <code>[!] valuation skipped</code> means Yahoo
         price data was unreachable from the container (SEC works, Yahoo often does not). Re-run once it can reach it.`);
-  const banner = notes.length
-    ? `<tr><td colspan="9" class="muted">${notes.join('<br>')}</td></tr>`
-    : '';
+  $('#screen-notes').innerHTML = notes.join('<br>');
   const { key, dir } = SCREEN.sort;
   const missing = v => v === null || v === undefined || v === ''
     || (key !== 'ticker' && key !== 'modified' && Number.isNaN(Number(v)));
@@ -1109,16 +1173,20 @@ function renderScreener() {
     if (key === 'modified') return (new Date(av) - new Date(bv)) * dir;
     return (Number(av) - Number(bv)) * dir;
   });
-  body.innerHTML = banner + rows.map(row => `<tr>
+  body.innerHTML = rows.map(row => `<tr>
       <td><strong>${esc(row.ticker)}</strong></td>
       <td>${row.has_evaluation === false ? '—' : esc(row.fiscal_year ?? '—')}</td>
       <td>${row.has_evaluation === false ? '<span class="badge queued">no valuation</span>' : scoreCell(row.f_score, 7, 3)}</td>
       <td>${scoreCell(row.z_score, 2.99, 1.81)}</td>
       <td>${fmtNum(row.pe, 1)}</td>
       <td>${fmtNum(row.ev_ebit, 1)}</td>
-      <td>${fmtPct(row.fcf_yield)}</td>
+      <td>${fmtRatio(row.earnings_yield)}</td>
+      <td>${fmtRatio(row.return_on_capital)}</td>
+      <td>${row.greenblatt_rank ? '#' + row.greenblatt_rank : '—'}</td>
+      <td>${fmtRatio(row.fcf_yield)}</td>
       <td>${fmtPctPoints(row.pe_percentile)}</td>
       <td>${fmtDate(row.modified)}</td>
+      <td><button class="panel-btn row-btn" onclick="generateGraphs('${esc(row.ticker)}')">graphs</button></td>
     </tr>`).join('');
 }
 
@@ -1136,6 +1204,9 @@ const fmtNum = (v, digits = 2) =>
 const fmtPct = (v, digits = 1) =>
   v === null || v === undefined || Number.isNaN(v) ? '—'
     : fmtNum(Math.abs(Number(v)) <= 1 ? Number(v) * 100 : Number(v), digits) + '%';
+const fmtRatio = (v, digits = 1) =>
+  v === null || v === undefined || Number.isNaN(Number(v)) ? '—'
+    : fmtNum(Number(v) * 100, digits) + '%';
 const fmtPctPoints = (v, digits = 1) =>
   v === null || v === undefined || Number.isNaN(v) ? '—' : fmtNum(v, digits) + '%';
 const fmtInt = v =>
