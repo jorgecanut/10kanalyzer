@@ -112,8 +112,7 @@
   /* Fixed width so idle/running/cancelled never shift the centred bar. */
   #status { font-size:13px; min-width:92px; display:flex; justify-content:flex-end; }
   #ticker { flex:0 1 360px; width:360px; min-width:240px; height:44px; border-color:var(--line-strong); }
-  /* The filings count is secondary: smaller and quieter, label kept. */
-  #filings { height:32px; padding:4px 8px; font-size:12px; color:var(--muted); }
+  #filings { height:44px; padding:0 10px; font-size:15px; }
   #run-btn { height:44px; min-width:96px; padding:0 22px; font-size:15px; }
   #cancel-btn { width:44px; height:44px; border-color:var(--line-strong); }
   #ticker:focus { border-color:var(--accent); }
@@ -411,11 +410,11 @@
       <span id="status" class="status"><span class="badge idle">idle</span></span>
       <input id="ticker" type="text" placeholder="AAPL, MSFT, NVDA" maxlength="120" aria-label="Tickers"
              oninput="updateMode()" onkeydown="if(event.key==='Enter')handlePrimary()">
-      <select id="filings" title="Number of 10-K filings">
-        <option value="3">3 filings</option>
-        <option value="5">5 filings</option>
-        <option value="10">10 filings</option>
-        <option value="20" selected>20 filings</option>
+      <select id="filings" title="Number of 10-K filings" aria-label="Number of 10-K filings">
+        <option value="3">3</option>
+        <option value="5">5</option>
+        <option value="10">10</option>
+        <option value="20" selected>20</option>
       </select>
       <button id="run-btn" class="primary" onclick="handlePrimary()">Run</button>
       <button id="cancel-btn" class="btn-cancel" onclick="cancelAll()"
