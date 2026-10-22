@@ -212,7 +212,12 @@
   .panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px;
                 min-height:52px; padding:0 18px;
                 border-bottom:1px solid var(--line-soft); flex-wrap:wrap; }
-  .panel-title { font-size:calc(var(--fs) * 17); font-weight:700; }
+  .panel-title { font-size:calc(var(--fs) * 17); font-weight:700; color:var(--heading); }
+  /* Section headings in every tab: the heading colour, uppercase and spaced, so they read as
+     labels over the white content. */
+  .home-block h3, .sim-section h3, .sim-market h3, .opt-pane h2 {
+    font-size:calc(var(--fs) * 15); font-weight:700; color:var(--heading);
+    text-transform:uppercase; letter-spacing:.08em; }
   .panel-actions { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
   .panel-btn { padding:6px 12px; border:1px solid var(--line); border-radius:var(--radius);
                background:none; color:var(--muted); font-size:calc(var(--fs) * 15); cursor:pointer; }
@@ -229,7 +234,7 @@
 
   /* Simulation: market data left of the chart, projection underneath. */
   .sim-row { display:grid; grid-template-columns:minmax(0,1fr) 250px; gap:20px; align-items:start; }
-  .sim-section h3, .sim-market h3 { margin:0 0 12px; font-size:calc(var(--fs) * 16); color:var(--text); font-weight:700; }
+  .sim-section h3, .sim-market h3 { margin:0 0 12px; }
   .sim-meta { color:var(--muted); font-size:calc(var(--fs) * 14); margin:0 0 10px; }
   .sim-chart svg { display:block; width:100%; height:auto; cursor:crosshair; touch-action:none; }
   .sim-controls { display:flex; gap:6px; flex-wrap:wrap; margin-top:12px; }
@@ -363,7 +368,7 @@
   .opt-tabs button:hover { color:var(--text); background:var(--hover); }
   .opt-tabs button.active { background:var(--accent-soft); color:var(--text); font-weight:600; }
   .opt-panes { flex:1; min-width:0; overflow:auto; padding:14px 18px; }
-  .opt-pane h2 { margin:0 0 4px; font-size:calc(var(--fs) * 16); font-weight:700; color:var(--text); }
+  .opt-pane h2 { margin:0 0 4px; }
   .opt-pane + .opt-pane { margin-top:18px; }
   .opt-row { padding:10px 0; border-bottom:1px solid var(--line-soft); }
   .opt-row:last-child { border-bottom:0; }
@@ -428,9 +433,7 @@
   .home-grid { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr); gap:0 28px; }
   .home-block { margin-top:16px; padding-top:14px; border-top:1px solid var(--line); }
   .home-grid .home-block { margin-top:4px; padding-top:0; border-top:0; }   /* first row: the head's line is enough */
-  /* Headings in the accent colour, uppercase and spaced, so they read as labels over the white content. */
-  .home-block h3 { margin:0 0 10px; font-size:calc(var(--fs) * 15); color:var(--heading); font-weight:700;
-                   text-transform:uppercase; letter-spacing:.08em; }
+  .home-block h3 { margin:0 0 10px; }
   .home-stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:0 20px; }
   .home-rank { list-style:none; margin:0 0 8px; padding:0; }
   .home-rank li { display:flex; gap:12px; padding:6px 10px; border-radius:var(--radius); }
