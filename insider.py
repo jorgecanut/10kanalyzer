@@ -2,8 +2,8 @@
 """Recent insider (Form 4) open-market transactions for a ticker.
 
 Collects ``P`` (purchase) and ``S`` (sale) transactions filed in the last
-``months`` months and writes ``insider.json`` into the ticker's output
-directory.
+``months`` months (3 years by default) and writes ``insider.json`` into the
+ticker's output directory. The UI then shows 1–3 years of it on request.
 
 Design notes:
     * Only open-market purchases/sales count. Grants (A), option exercises (M),
@@ -42,10 +42,12 @@ except Exception as exc:  # pragma: no cover - only when edgar is missing/broken
     _EDGAR_ERROR = exc
 
 # Cap the amount of SEC work per run: each ``filing.obj()`` parses a full XML
-# document. The window (6 months by default) is the real limit; this is only a
+# document. The window (3 years by default) is the real limit; this is only a
 # safety valve for pathological filing counts. All trades inside the window are
-# returned — there is no per-transaction cap.
-MAX_FILINGS = 500
+# returned — there is no per-transaction cap. When the valve trips, ``since`` in
+# the JSON says how far back the data really goes.
+MAX_FILINGS = 1500
+DEFAULT_MONTHS = 36
 OUTPUT_FILENAME = "insider.json"
 
 
@@ -176,18 +178,23 @@ def _rows_from_ownership(ownership: Any) -> list[dict]:
     return rows
 
 
-def collect_insiders(ticker: str, months: int = 6) -> list[dict]:
+def collect_insiders(ticker: str, months: int = DEFAULT_MONTHS) -> list[dict]:
     """Return recent open-market insider trades, newest first.
 
     Never raises: returns ``[]`` on any failure (bad ticker, network, parse).
     """
+    return _collect(ticker, months)[0]
+
+
+def _collect(ticker: str, months: int) -> tuple[list[dict], str | None]:
+    """Trades plus the oldest date they cover (``None`` on failure)."""
     try:
         if _EDGAR_ERROR is not None or Company is None:
             _warn(f"edgartools unavailable: {_EDGAR_ERROR}")
-            return []
+            return [], None
         if not ticker or not str(ticker).strip():
             _warn("empty ticker")
-            return []
+            return [], None
         ticker = str(ticker).strip().upper()
         months = max(1, int(months))
         cutoff = _months_ago(months)
@@ -195,12 +202,17 @@ def collect_insiders(ticker: str, months: int = 6) -> list[dict]:
         filings = Company(ticker).get_filings(form="4")
         if filings is None:
             _warn(f"no Form 4 filings for {ticker}")
-            return []
+            return [], cutoff.isoformat()
 
         transactions: list[dict] = []
         parsed = 0
+        since = cutoff.isoformat()
+        last_filed: date | None = None
         for filing in filings:
             if parsed >= MAX_FILINGS:
+                if last_filed is not None:
+                    since = last_filed.isoformat()
+                _warn(f"stopped after {MAX_FILINGS} filings; data starts {since}")
                 break
             try:
                 filing_date = _parse_date(getattr(filing, "filing_date", None))
@@ -209,6 +221,8 @@ def collect_insiders(ticker: str, months: int = 6) -> list[dict]:
                 if filing_date is not None and filing_date < cutoff:
                     break
                 parsed += 1
+                if filing_date is not None:
+                    last_filed = filing_date
                 ownership = filing.obj()
                 if ownership is None:
                     continue
@@ -220,13 +234,13 @@ def collect_insiders(ticker: str, months: int = 6) -> list[dict]:
                 continue
 
         transactions.sort(key=lambda item: item["date"], reverse=True)
-        return transactions
+        return transactions, since
     except Exception as exc:
         _warn(f"failed to collect insiders for {ticker}: {exc}")
-        return []
+        return [], None
 
 
-def write_insiders(ticker: str, output_dir: str, months: int = 6) -> str | None:
+def write_insiders(ticker: str, output_dir: str, months: int = DEFAULT_MONTHS) -> str | None:
     """Write ``<output_dir>/insider.json`` and return its path.
 
     Always writes a file (empty ``transactions`` when nothing was found or the
@@ -235,10 +249,12 @@ def write_insiders(ticker: str, output_dir: str, months: int = 6) -> str | None:
     """
     ticker = str(ticker or "").strip().upper()
     try:
-        transactions = collect_insiders(ticker, months=months)
+        transactions, since = _collect(ticker, months)
         payload = {
             "ticker": ticker,
             "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "months": months,
+            "since": since,
             "transactions": transactions,
         }
         os.makedirs(output_dir, exist_ok=True)
@@ -256,7 +272,7 @@ def main(argv: list[str]) -> int:
         print("usage: python insider.py <TICKER> [months]", file=sys.stderr)
         return 2
     ticker = argv[1].strip().upper()
-    months = int(argv[2]) if len(argv) > 2 else 6
+    months = int(argv[2]) if len(argv) > 2 else DEFAULT_MONTHS
     output_dir = os.path.join("financial_graphs", ticker)
     path = write_insiders(ticker, output_dir, months=months)
     if path is None:
