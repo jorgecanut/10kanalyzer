@@ -119,8 +119,16 @@
   #cancel-btn:hover { border-color:var(--badge-error-fg); }
 
   main { max-width:1100px; margin:0 auto; padding:18px 20px 40px; }
-  .tabs { display:flex; gap:6px; margin-bottom:16px; }
-  .tabs button { border:1px solid var(--line); background:var(--surface); padding:8px 16px; border-radius:8px;
+  /* Tabs slide sideways when they do not fit (phones); the scrollbar is
+     hidden and an edge fade shows there is more. */
+  .tabs { position:relative; display:flex; gap:6px; margin-bottom:16px; overflow-x:auto; overscroll-behavior-x:contain;
+          scrollbar-width:none; scroll-snap-type:x proximity; }
+  .tabs::-webkit-scrollbar { display:none; }
+  .tabs.more-right { mask-image:linear-gradient(to right, #000 calc(100% - 40px), transparent); }
+  .tabs.more-left { mask-image:linear-gradient(to right, transparent, #000 40px); }
+  .tabs.more-left.more-right { mask-image:linear-gradient(to right, transparent, #000 40px,
+                                                          #000 calc(100% - 40px), transparent); }
+  .tabs button { flex:none; white-space:nowrap; scroll-snap-align:start; border:1px solid var(--line); background:var(--surface); padding:8px 16px; border-radius:8px;
                  cursor:pointer; font-size:14px; color:var(--muted); }
   .tabs button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
   .tabs button.tab-icon { margin-left:auto; display:flex; align-items:center; justify-content:center; padding:8px 11px; }
@@ -246,7 +254,13 @@
     header { padding:10px 14px; }
     .toolbar { padding:8px 14px; }
     #ticker { flex:1 1 100%; width:auto; order:-1; }   /* status drops to the second row */
-    .user-id { max-width:130px; }
+    /* Profile shows only the avatar; it still opens Account. */
+    .user-btn { padding:4px; gap:0; }
+    .user-meta { display:none; }
+    .head-actions { gap:8px; }
+    .brand { gap:8px; }
+    .brand .brand-icon { width:30px; height:30px; }
+    header h1 { font-size:20px; }
   }
 
   /* Screener: ticker input plus a sortable results table. */
@@ -1293,11 +1307,25 @@ async function loadGraphSummary(ticker) {
 
 /* ------------------------------------------------------------------------ */
 
+// Edge fades on the tab strip, only where more tabs are hidden.
+function syncTabFades() {
+  const tabs = $('.tabs');
+  const max = tabs.scrollWidth - tabs.clientWidth;
+  tabs.classList.toggle('more-left', tabs.scrollLeft > 2);
+  tabs.classList.toggle('more-right', tabs.scrollLeft < max - 2);
+}
+
 function showTab(name) {
   for (const tab of ['graph', 'insiders', 'recent', 'screener', 'simulation']) {
     const active = tab === name;
     $(`#pane-${tab}`).classList.toggle('hidden', !active);
     $(`#tab-${tab}`).classList.toggle('active', active);
+  }
+  // Slide the strip (horizontally only) so the selected tab is visible.
+  const tabs = $('.tabs');
+  const button = $(`#tab-${name}`);
+  if (button.offsetLeft < tabs.scrollLeft || button.offsetLeft + button.offsetWidth > tabs.scrollLeft + tabs.clientWidth) {
+    tabs.scrollTo({ left: button.offsetLeft - 8, behavior: 'smooth' });
   }
   if (name === 'recent') loadRecent();
   if (name === 'insiders') initInsiders();
@@ -2252,6 +2280,9 @@ document.querySelectorAll('#sim-ranges button').forEach(button => {
 // Restore the pinned graph, then resume watching every other job in progress:
 // graph runs through the status badge, screener jobs through its progress.
 applyTheme(document.documentElement.dataset.theme || 'dark');
+$('.tabs').addEventListener('scroll', syncTabFades, { passive: true });
+window.addEventListener('resize', syncTabFades);
+syncTabFades();
 loadAccount();
 suggestTickers();
 setInterval(() => { if (!$('#ticker').value) suggestTickers(); }, 6000);
