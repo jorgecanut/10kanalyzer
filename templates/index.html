@@ -210,7 +210,9 @@
   .panel-btn.icon-btn svg { width:18px; height:18px; display:block; }
   .panel-btn.icon-btn[aria-pressed="true"] { color:var(--text); border-color:var(--accent); }
   .panel-body { padding:16px 18px; }
-  .panel-head select { background:var(--bar); }
+  /* Same height as the icon buttons beside them (6px padding + 18px icon + borders). */
+  .panel-head select { height:32px; padding:0 8px; border-radius:7px; background:var(--bar);
+                       font-size:calc(var(--fs) * 15); }
   .panel-body > :first-child { margin-top:0; }
   .panel-body > :last-child { margin-bottom:0; }
 
