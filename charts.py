@@ -30,6 +30,35 @@ sns.set_theme(style="whitegrid", context="talk")
 plt.rcParams["figure.autolayout"] = False
 
 # --------------------------------------------------------------------------- #
+# Themes: every chart is drawn twice, light into the ticker folder and dark into
+# its ``dark/`` sub-folder, so the web app can match the page theme.
+# --------------------------------------------------------------------------- #
+DARK_SUBDIR = "dark"
+LIGHT_INK = {"ink": "black", "label": "#374151", "muted": "#6b7280", "halo": "white", "strong": "#111827"}
+DARK_INK = {"ink": "#d1d5db", "label": "#e5e7eb", "muted": "#9ca3af", "halo": "#2c2d31", "strong": "#f3f4f6"}
+DARK_RC = {
+    "figure.facecolor": "#2c2d31",
+    "axes.facecolor": "#2c2d31",
+    "savefig.facecolor": "#2c2d31",
+    "savefig.edgecolor": "#2c2d31",
+    "axes.edgecolor": "#4a4c52",
+    "grid.color": "#3a3c41",
+    "patch.edgecolor": "#2c2d31",
+    "axes.labelcolor": "#e5e7eb",
+    "text.color": "#e5e7eb",
+    "xtick.color": "#e5e7eb",
+    "ytick.color": "#e5e7eb",
+    "legend.edgecolor": "#4a4c52",
+}
+_INK = LIGHT_INK
+_DARK = False
+
+
+def _c(role: str) -> str:
+    """Theme colour for non-data ink: zero lines, labels, halos."""
+    return _INK[role]
+
+# --------------------------------------------------------------------------- #
 # Color palette: one color per metric across every chart.
 # --------------------------------------------------------------------------- #
 COLORS: dict[str, str] = {
@@ -135,7 +164,8 @@ def _fmt_shares(value: float) -> str:
 
 def _color_for(label: str) -> str:
     if label in COLORS:
-        return COLORS[label]
+        # Near-black series would vanish on the dark background.
+        return _c("strong") if COLORS[label] == "#111827" else COLORS[label]
     idx = int(hashlib.md5(label.encode()).hexdigest(), 16) % len(FALLBACK_PALETTE)
     return FALLBACK_PALETTE[idx]
 
@@ -271,6 +301,10 @@ def _new_figure(title: str, subtitle: str | None = None) -> tuple[plt.Figure, pl
 
 
 def _save(fig: plt.Figure, path: str) -> str:
+    if _DARK:
+        folder = os.path.join(os.path.dirname(path), DARK_SUBDIR)
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, os.path.basename(path))
     fig.tight_layout()
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -283,7 +317,7 @@ def _style_axes(ax: plt.Axes, years: list[int]) -> None:
     ax.tick_params(axis="y", labelsize=9)
     ax.grid(axis="y", alpha=0.3)
     ax.set_axisbelow(True)
-    ax.axhline(0, color="black", linewidth=0.8)
+    ax.axhline(0, color=_c("ink"), linewidth=0.8)
 
 
 def _collect_label(
@@ -309,7 +343,7 @@ def _declutter(
     ax: plt.Axes,
     candidates: list[tuple[float, float, str, int]],
     fontsize: int = 5,
-    color: str = "#374151",
+    color: str | None = None,
     draw_ax: plt.Axes | None = None,
     draw_transform=None,
 ) -> None:
@@ -322,6 +356,7 @@ def _declutter(
     """
     if not candidates:
         return
+    color = color or _c("label")
     y0, y1 = ax.get_ylim()
     x0, x1 = ax.get_xlim()
     y_range = (y1 - y0) or 1.0
@@ -359,7 +394,7 @@ def _declutter(
             fontsize=fontsize, color=color, transform=trans,
             # A white halo keeps the number readable when it lands on
             # a bar or a line; it does not hide the data underneath.
-            path_effects=[path_effects.withStroke(linewidth=2, foreground="white")],
+            path_effects=[path_effects.withStroke(linewidth=2, foreground=_c("halo"))],
         )
 
 
@@ -833,7 +868,7 @@ def chart_returns(
     _style_axes(ax, years)
     ax.set_ylabel("Return (%)", fontsize=10)
     ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
-    ax.axhline(0, color="black", linewidth=0.8)
+    ax.axhline(0, color=_c("ink"), linewidth=0.8)
     ax.margins(y=0.18)
     _declutter(ax, candidates)
     _legend(ax, set())
@@ -899,13 +934,13 @@ def chart_valuation(ticker: str, output_dir: str, years: list[int]) -> list[str]
         for x, value in zip(positions[pe_mask.to_numpy()], pe[pe_mask].to_numpy()):
             ax_pe.text(
                 x, value, f"{value:.1f}x", ha="center", va="bottom", fontsize=7,
-                color="#374151",
-                path_effects=[path_effects.withStroke(linewidth=2, foreground="white")],
+                color=_c("label"),
+                path_effects=[path_effects.withStroke(linewidth=2, foreground=_c("halo"))],
             )
     else:
         ax_pe.text(
             0.5, 0.5, "No P/E data", transform=ax_pe.transAxes,
-            ha="center", va="center", color="#6b7280",
+            ha="center", va="center", color=_c("muted"),
         )
 
     medians = data["pe_median_hist"].dropna()
@@ -934,7 +969,7 @@ def chart_valuation(ticker: str, output_dir: str, years: list[int]) -> list[str]
         ax_pe.text(
             0.0, 1.0, f"FY{pct_year} P/E percentile: {pct_value:.0f}%",
             transform=ax_pe.transAxes, ha="left", va="bottom", fontsize=9,
-            color="#374151",
+            color=_c("label"),
         )
 
     ax_pe.set_xticks(positions)
@@ -942,7 +977,7 @@ def chart_valuation(ticker: str, output_dir: str, years: list[int]) -> list[str]
     ax_pe.tick_params(axis="y", labelsize=9)
     ax_pe.grid(axis="y", alpha=0.3)
     ax_pe.set_axisbelow(True)
-    ax_pe.axhline(0, color="black", linewidth=0.8)
+    ax_pe.axhline(0, color=_c("ink"), linewidth=0.8)
     ax_pe.set_ylabel("P/E (x)", fontsize=10)
     ax_pe.margins(y=0.18)
 
@@ -973,21 +1008,21 @@ def chart_valuation(ticker: str, output_dir: str, years: list[int]) -> list[str]
         if pd.notna(value):
             ax_f.text(
                 bar.get_x() + bar.get_width() / 2, value, f"{value:.0f}",
-                ha="center", va="bottom", fontsize=7, color="#374151",
-                path_effects=[path_effects.withStroke(linewidth=2, foreground="white")],
+                ha="center", va="bottom", fontsize=7, color=_c("label"),
+                path_effects=[path_effects.withStroke(linewidth=2, foreground=_c("halo"))],
             )
     for bar, value in zip(z_bars, z_score.to_numpy()):
         if pd.notna(value):
             ax_z.text(
                 bar.get_x() + bar.get_width() / 2, value, f"{value:.1f}",
-                ha="center", va="bottom", fontsize=7, color="#374151",
-                path_effects=[path_effects.withStroke(linewidth=2, foreground="white")],
+                ha="center", va="bottom", fontsize=7, color=_c("label"),
+                path_effects=[path_effects.withStroke(linewidth=2, foreground=_c("halo"))],
             )
 
     if f_score.dropna().empty and z_score.dropna().empty:
         ax_f.text(
             0.5, 0.5, "No quality data", transform=ax_f.transAxes,
-            ha="center", va="center", color="#6b7280",
+            ha="center", va="center", color=_c("muted"),
         )
 
     ax_f.set_xticks(positions)
@@ -995,7 +1030,7 @@ def chart_valuation(ticker: str, output_dir: str, years: list[int]) -> list[str]
     ax_f.tick_params(axis="y", labelsize=9)
     ax_f.grid(axis="y", alpha=0.3)
     ax_f.set_axisbelow(True)
-    ax_f.axhline(0, color="black", linewidth=0.8)
+    ax_f.axhline(0, color=_c("ink"), linewidth=0.8)
     ax_f.set_ylabel("F-Score (0-9)", fontsize=10)
     ax_f.set_ylim(0, 9.6)
     ax_z.set_ylabel("Z-Score", fontsize=10)
@@ -1071,10 +1106,10 @@ def _grouped_bar_windows(
                 transform=ax.transAxes,
                 ha="center",
                 va="center",
-                color="#6b7280",
+                color=_c("muted"),
             )
         if note:
-            fig.text(0.5, 0.015, note, ha="center", va="bottom", fontsize=9, color="#6b7280")
+            fig.text(0.5, 0.015, note, ha="center", va="bottom", fontsize=9, color=_c("muted"))
         paths.append(
             _save(fig, os.path.join(output_dir, f"{filename_prefix}_{suffix}.png"))
         )
@@ -1096,6 +1131,7 @@ def render_all(
     if not years:
         return []
 
+    global _INK, _DARK
     paths: list[str] = []
     chart_calls = [
         lambda: chart_income_statement(ticker, output_dir, df, statements, years),
@@ -1112,6 +1148,21 @@ def render_all(
             paths.extend(call())
         finally:
             plt.close("all")
-
     _write_quality_csv(output_dir)
+
+    # Dark copies: same charts, same names, under dark/. A failure here never
+    # costs the light charts already written.
+    _INK, _DARK = DARK_INK, True
+    try:
+        with plt.rc_context(DARK_RC):
+            for call in chart_calls:
+                try:
+                    call()
+                except Exception as exc:  # noqa: BLE001 - the light set is what counts
+                    print(f"    [!] dark chart skipped: {exc}")
+                finally:
+                    plt.close("all")
+    finally:
+        _INK, _DARK = LIGHT_INK, False
+        _QUALITY_ROWS.clear()
     return paths

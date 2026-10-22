@@ -198,8 +198,8 @@ def _ticker_dir(ticker: str, uid: str | None = None) -> Path:
     return _user_dir(uid) / ticker
 
 
-def _charts(ticker: str) -> list[str]:
-    directory = _ticker_dir(ticker)
+def _charts(ticker: str, subdir: str = "") -> list[str]:
+    directory = _ticker_dir(ticker) / subdir if subdir else _ticker_dir(ticker)
     try:
         if not directory.is_dir():
             return []
@@ -222,6 +222,8 @@ def _results_summary(ticker: str) -> dict | None:
     return {
         "ticker": ticker,
         "charts": _charts(ticker),
+        # Dark-theme copies of the charts (same names, under dark/).
+        "dark_charts": _charts(ticker, "dark"),
         "has_csv": (directory / "financial_data.csv").exists(),
         "has_insider": (directory / "insider.json").is_file(),
         "modified": datetime.fromtimestamp(modified, timezone.utc).isoformat(timespec="seconds"),
