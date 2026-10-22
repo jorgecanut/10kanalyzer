@@ -163,10 +163,16 @@
   .brand-name { display:flex; align-items:baseline; gap:10px; }
   #status { display:inline-block; }
   #status .badge { font-size:calc(var(--fs) * 15); line-height:20px; padding:0 8px; }
-  #ticker { flex:0 1 300px; width:300px; min-width:160px; height:44px; border-color:var(--line-strong); }
-  #filings { height:44px; padding:0 10px; font-size:calc(var(--fs) * 17); }
-  #run-btn { height:44px; min-width:96px; padding:0 22px; font-size:calc(var(--fs) * 17); }
-  #cancel-btn { width:44px; height:44px; }
+  /* One height for the whole toolbar row; icon buttons are squares of it with
+     one icon size, so Home, Recent and Cancel match (Cancel adds only its red
+     border, inside the same box). */
+  .toolbar { --ctl:40px; --ctl-icon:20px; }
+  #ticker { flex:0 1 300px; width:300px; min-width:160px; height:var(--ctl); border-color:var(--line-strong); }
+  #filings { height:var(--ctl); padding:0 10px; font-size:calc(var(--fs) * 17); }
+  #run-btn { height:var(--ctl); min-width:96px; padding:0 22px; font-size:calc(var(--fs) * 17); }
+  .toolbar .tabs button, .toolbar .nav-btn { height:var(--ctl); display:flex; align-items:center; padding:0 12px; }
+  .toolbar button.tab-icon, .toolbar #cancel-btn { width:var(--ctl); height:var(--ctl); padding:0; justify-content:center; }
+  .toolbar button.tab-icon svg, .toolbar #cancel-btn svg { flex:none; width:var(--ctl-icon); height:var(--ctl-icon); }
   #ticker:focus { border-color:var(--accent); }
 
   main { max-width:1100px; margin:0 auto; padding:20px 20px 40px; }
