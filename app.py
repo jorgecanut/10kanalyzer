@@ -61,6 +61,9 @@ app = Flask(__name__)
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 JOBS: dict[str, dict] = {}
+# Tickers of the latest screener request, so a reloaded page can resume its
+# progress. Guarded by JOBS_LOCK; cleared by cancel.
+SCREEN_BATCH: list[str] = []
 JOBS_LOCK = threading.Lock()
 # Live child processes, keyed by ticker, so /api/cancel can stop them.
 PROCS: dict[str, subprocess.Popen] = {}
@@ -477,6 +480,7 @@ def cancel_all():
     procs: list[subprocess.Popen] = []
     tickers: list[str] = []
     with JOBS_LOCK:
+        SCREEN_BATCH.clear()
         for ticker, job in JOBS.items():
             if job.get("status") not in ("queued", "running"):
                 continue
@@ -505,6 +509,19 @@ def cancel_all():
             except OSError:
                 pass
     return jsonify(cancelled=tickers)
+
+
+@app.get("/api/jobs")
+def jobs():
+    """Queued/running jobs plus the last screener batch, for resuming on reload."""
+    with JOBS_LOCK:
+        active = [
+            {"ticker": ticker, "status": job["status"], "charts": job.get("charts", True)}
+            for ticker, job in JOBS.items()
+            if job.get("status") in ("queued", "running")
+        ]
+        batch = list(SCREEN_BATCH)
+    return jsonify(jobs=active, batch=batch)
 
 
 @app.get("/api/status/<ticker>")
@@ -896,6 +913,14 @@ def screener_run():
         abort(400, "Provide at least one ticker.")
     if len(tickers) > 25:
         abort(400, "Too many tickers (max 25).")
+    try:
+        filings = int(payload.get("filings", 10))
+    except (TypeError, ValueError):
+        abort(400, "filings must be a number")
+    if not 1 <= filings <= 20:
+        abort(400, "filings must be between 1 and 20")
+    with JOBS_LOCK:
+        SCREEN_BATCH[:] = tickers
 
     queued: list[str] = []
     cached: list[str] = []
@@ -915,7 +940,7 @@ def screener_run():
                 continue
             job_id = secrets.token_hex(8)
             JOBS[ticker] = {"id": job_id, "ticker": ticker, "status": "queued", "queued": _now(), "charts": False}
-        threading.Thread(target=_worker, args=(ticker, 10, job_id), daemon=True).start()
+        threading.Thread(target=_worker, args=(ticker, filings, job_id), daemon=True).start()
         queued.append(ticker)
         items.append({"ticker": ticker, "status": "queued"})
 

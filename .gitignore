@@ -5,3 +5,6 @@ financial_graphs/
 .env
 images/
 nginx/htpasswd
+.edgar_cache/
+README.local.md
+CLAUDE.local.md

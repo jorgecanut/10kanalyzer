@@ -1064,6 +1064,16 @@ function renderResults(data, target) {
     <div class="grid">${grid}</div>`;
 }
 
+// Run selectors follow the pinned Graph ticker whenever the pin changes (or the
+// viewer's own pick is gone); otherwise they keep the viewer's pick.
+function pickRun(select, runs, current) {
+  const has = ticker => runs.some(item => item.ticker === ticker);
+  const pinChanged = select.dataset.pin !== GRAPH.ticker;
+  select.dataset.pin = GRAPH.ticker;
+  if ((pinChanged || !has(current)) && has(GRAPH.ticker)) return GRAPH.ticker;
+  return has(current) ? current : runs[0].ticker;
+}
+
 async function initInsiders() {
   const select = $('#insider-run');
   try {
@@ -1080,7 +1090,7 @@ async function initInsiders() {
     select.innerHTML = runs.map(item =>
       `<option value="${esc(item.ticker)}">${esc(item.ticker)} · ${fmtDate(item.modified)}</option>`
     ).join('');
-    select.value = runs.some(item => item.ticker === current) ? current : runs[0].ticker;
+    select.value = pickRun(select, runs, current);
   } catch {
     $('#insider-status').textContent = 'Could not load runs.';
     return;
@@ -1201,7 +1211,7 @@ function submitScreen(tickers) {
   fetch('/api/screener', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tickers }),
+    body: JSON.stringify({ tickers, filings: Number($('#filings').value) }),
   })
     .then(async res => {
       const data = await res.json();
@@ -1417,7 +1427,7 @@ function syncSimControls() {
 
 async function initSimulation(force = false) {
   const select = $('#sim-run');
-  if (force || !select.dataset.loaded) {
+  if (force || !select.dataset.loaded || select.dataset.pin !== GRAPH.ticker) {
     select.dataset.loaded = '1';
     try {
       const { items } = await (await fetch('/api/recent')).json();
@@ -1432,7 +1442,7 @@ async function initSimulation(force = false) {
         `<option value="${esc(item.ticker)}">${esc(item.ticker)} · ${fmtDate(item.modified)}</option>`
       ).join('');
       SIM.ticker = '';
-      select.value = runs.some(item => item.ticker === current) ? current : runs[0].ticker;
+      select.value = pickRun(select, runs, current);
     } catch {
       $('#sim-status').textContent = 'Could not load runs.';
       return;
@@ -1830,24 +1840,23 @@ document.querySelectorAll('#sim-ranges button').forEach(button => {
 });
 
 
-// Restore the pinned graph, then resume watching any other run in progress.
+// Restore the pinned graph, then resume watching every other job in progress:
+// graph runs through the status badge, screener jobs through its progress.
 applyTheme(document.documentElement.dataset.theme || 'dark');
 loadIdentity();
 renderGraph();
 refreshGraph();
 (async () => {
-  const { items } = await (await fetch('/api/recent')).json();
-  for (const it of items) {
-    if (it.ticker === GRAPH.ticker) continue;
-    const job = await (await fetch(`/api/status/${encodeURIComponent(it.ticker)}`)).json();
-    if (job.status === 'queued' || job.status === 'running') {
-      LIVE[it.ticker] = job.status;
-      pickActive();
-      setStatus(job.status, job.status);
-      poll(it.ticker);
-      break;
-    }
+  const { jobs, batch } = await (await fetch('/api/jobs')).json();
+  for (const job of jobs) {
+    if (job.charts && job.ticker !== GRAPH.ticker) poll(job.ticker);
   }
+  const screening = new Set(jobs.filter(job => !job.charts).map(job => job.ticker));
+  if (!screening.size) return;
+  const tickers = [...new Set([...batch, ...screening])];
+  SCREEN.status = Object.fromEntries(tickers.map(t => [t, screening.has(t) ? 'queued' : 'done']));
+  SCREEN.total = tickers.length;
+  screenPoll([...screening]);
 })();
 </script>
 </body>

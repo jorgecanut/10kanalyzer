@@ -3,16 +3,7 @@
 Connect to SEC EDGAR, download the last ten 10-K filings for a company,
 extract the XBRL financial data, and write it as CSV into `financial_graphs/`.
 The run form accepts 3, 5, 10 or 20 filings; the API accepts any value 1–20.
-No charts are generated.
-
-## Change workflow
-
-After every requested change, stage the affected files, commit, and push to
-`origin` without waiting for a separate request. Keep commit messages short and
-descriptive.
-
-If a change is left uncommitted or unpushed (for example, because you asked to
-review it first), say so explicitly and list the affected files.
+Charts are rendered as PNGs next to the CSVs; `--no-charts` skips them.
 
 ## Setup
 
@@ -100,15 +91,18 @@ Routes:
 | `POST` | `/api/run` | `{"ticker":"NFLX","filings":10}` → queues a run |
 | `POST` | `/api/cancel` | Cancels every queued/running job; keeps all files |
 | `GET` | `/api/status/<ticker>` | queued / running / done / error + log tail |
+| `GET` | `/api/jobs` | Active jobs (with `charts` flag) + last screener batch |
 | `GET` | `/api/identity` | Current SEC identity (name + email) |
 | `POST` | `/api/identity` | `{"identity":"Jane Doe jane@example.com"}` → save it |
 | `GET` | `/api/recent` | Tickers with results, newest first |
+| `DELETE` | `/api/recent/<ticker>` | Deletes that ticker's results folder |
 | `GET` | `/api/files/<ticker>` | Chart list for a ticker |
 | `GET` | `/api/evaluation/<ticker>` | `evaluation.csv` rows for one ticker |
 | `GET` | `/api/insiders/<ticker>` | `insider.json` trades for one ticker |
+| `GET` | `/api/simulation/<ticker>` | Yahoo price history + dividends (`?range=1y`) |
 | `GET` | `/api/fundamentals/<ticker>` | Flat metric set behind the screener |
 | `GET` | `/api/screener` | Cached screener results, Greenblatt ranks |
-| `POST` | `/api/screener` | `{"tickers":[...]}` (max 25) → scores and ratios |
+| `POST` | `/api/screener` | `{"tickers":[...],"filings":10}` (max 25) → data only, no charts |
 | `GET` | `/files/<ticker>/<name>` | View a chart inline |
 | `GET` | `/download/<ticker>` | Whole folder as a `.zip` |
 | `GET` | `/download/<ticker>/<name>` | One file |
@@ -122,7 +116,10 @@ reloads and cancel. The Graph tab is empty until then, and the pipeline log is
 hidden behind a **log** button. **Several tickers** switch to screener mode:
 data only, no charts (`--no-charts`), and the pinned graph is left as is.
 Running a single ticker that is queued as a screener job upgrades it to a graph
-run; if it is already running, a graph run is queued after it.
+run; if it is already running, a graph run is queued after it. The **Insiders**
+and **Simulation** selectors switch to the pinned ticker whenever the pin
+changes. A reloaded page resumes the pinned run, other graph runs and the
+screener batch's progress (`/api/jobs`).
 
 The **Screener** tab posts up to 25 tickers, shows a sortable table of scores and
 ratios, and caches each ticker's result for 7 days. Tickers with no cached data
@@ -138,6 +135,15 @@ The **Insiders** tab lists every open-market Form 4 buy/sell in the last 6
 months, newest first, in the same journal format used before, with a selector
 for successful runs. `insider.py` no longer caps transactions (it stops only at
 the 6-month window, with a 500-filing safety valve).
+
+### Tests
+
+```bash
+python -m unittest discover tests
+```
+
+Queue and route tests for `app.py`; the pipeline is replaced by a fake script,
+so they need no network and finish in a few seconds.
 
 ### Simulation tab
 
@@ -162,14 +168,6 @@ job, aborts in-flight browser requests, and resets the interface to its initial
 state, except for the pinned graph. It never deletes generated files; run logs and partial results stay in
 `financial_graphs/`.
 
-## Deploy on push (direct, no GitHub)
-
-`git push nas main` (alias `git deploy`) pushes to a bare repo on the TrueNAS
-box over the VPN; a `post-receive` hook resets the server checkout, rebuilds
-the container and waits for `/healthz`. GitHub is a backup remote only and
-deploys nothing. One-time setup, rules and troubleshooting:
-**[DEPLOY.md](DEPLOY.md)**.
-
 ## Docker
 
 A single service that publishes one HTTP port:
@@ -189,7 +187,7 @@ docker compose up -d --build     # http://localhost:${HTTP_PORT:-8053}
    directory Dockge manages.
 2. `cp .env.example .env` and edit it:
    - `EDGAR_IDENTITY` — your name/email (the SEC requires a real contact).
-   - `HTTP_PORT` — the host port to publish (default 8000); or just edit the
+   - `HTTP_PORT` — the host port to publish (default 8053); or just edit the
      `ports:` line in the compose file directly.
 3. Deploy in Dockge. If the compose file is not next to the Dockerfile, point
    the build at the repo:
@@ -226,10 +224,13 @@ sudo htpasswd -c /etc/nginx/.htpasswd you
 ### Notes
 
 - `./financial_graphs` is bind-mounted so results also land on the host; the
-  container runs as root, so those files may be root-owned.
+  container runs as uid 10001, so that directory must be writable by it (see
+  "Container permissions" below).
+- Edit the host side of the `volumes:` paths in `docker-compose.yml` for your
+  machine.
 - edgartools' raw SEC downloads are cached on the host: the compose file
-  bind-mounts `/mnt/tanques/stocky/edgar_cache` and `/mnt/tanques/stocky/edgar_data`
-  to `/root/.edgar_cache` and `/root/.edgar`, making repeat runs much faster.
+  bind-mounts `/path/to/stocky/edgar_cache` and `/path/to/stocky/edgar_data`
+  to `/home/appuser/.edgar_cache` and `/home/appuser/.edgar`, making repeat runs much faster.
 - The app listens on `0.0.0.0:8000` inside the container (override with `PORT`).
   It has **no authentication** — keep it behind nginx or a private network.
 - Runs are serialized (one at a time); ~1–3 minutes per ticker the first time.
@@ -262,9 +263,9 @@ host path bind-mounted into it must be writable by that uid, or the pipeline
 runs, reports success in its own log, and the app still sees nothing:
 
 ```bash
-sudo chown -R 10001:10001 /mnt/tanques/stocky/financial_graphs \
-                           /mnt/tanques/stocky/edgar_cache \
-                           /mnt/tanques/stocky/edgar_data
+sudo chown -R 10001:10001 /path/to/stocky/financial_graphs \
+                           /path/to/stocky/edgar_cache \
+                           /path/to/stocky/edgar_data
 ```
 
 - The SEC cache is written to `~/.edgar` / `~/.edgar_cache`, so the compose file
