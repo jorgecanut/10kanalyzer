@@ -12,7 +12,9 @@ extract the XBRL financial data, and write it as CSV. The command line writes
 into `financial_graphs/`; the web app keeps each user's results apart under
 `data/users/<id>/`.
 The run form accepts 3, 5, 10 or 20 filings; the API accepts any value 1–20.
-Charts are rendered as PNGs next to the CSVs; `--no-charts` skips them.
+Charts are rendered as PNGs next to the CSVs; `--no-charts` skips them. They
+use the app's own font (Ubuntu Mono, bundled in `static/fonts` under the Ubuntu
+Font Licence) and colours, with no frame and only faint horizontal gridlines.
 
 ## Setup
 

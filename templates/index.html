@@ -33,10 +33,16 @@
   try { applyProfileColor(localStorage.getItem('stocky-color')); } catch { applyProfileColor('orange'); }
 </script>
 <style>
+  /* The app's font, bundled (static/fonts) so the page and the charts match
+     on every machine. */
+  @font-face { font-family:"Stocky Mono"; font-weight:400; font-display:swap;
+               src:url("{{ url_for('static', filename='fonts/UbuntuMono-Regular.ttf') }}") format("truetype"); }
+  @font-face { font-family:"Stocky Mono"; font-weight:700; font-display:swap;
+               src:url("{{ url_for('static', filename='fonts/UbuntuMono-Bold.ttf') }}") format("truetype"); }
   :root {
     --fs:1px;               /* text size: Options → Appearance */
     color-scheme: dark;
-    --mono:"UbuntuMono Nerd Font Mono", "UbuntuMono Nerd Font",
+    --mono:"Stocky Mono", "UbuntuMono Nerd Font Mono", "UbuntuMono Nerd Font",
            "JetBrainsMono Nerd Font Mono", "JetBrainsMono Nerd Font",
            "FiraCode Nerd Font Mono", "FiraCode Nerd Font",
            "Hack Nerd Font Mono", "Hack Nerd Font",
