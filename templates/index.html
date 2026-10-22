@@ -17,6 +17,20 @@
     const size = Number(JSON.parse(localStorage.getItem('stocky-prefs') || '{}').textSize);
     if (size > 0) document.documentElement.style.setProperty('--fs', size + 'px');
   } catch {}
+  // Profile colour (Options → Account): titles and the avatar. A dark- and a
+  // light-theme shade each, both at least 6:1 against the page; the account
+  // stores the name, this browser remembers it to paint it before loading.
+  const PROFILE_COLORS = {
+    orange: ['#ffb066', '#9a3c06'], blue: ['#8ab4f8', '#1a52a8'], teal: ['#5fd4c4', '#0a645b'],
+    green: ['#8fe0a0', '#196a32'], amber: ['#f5c84c', '#764d00'], red: ['#ff9b9b', '#a51f15'],
+    pink: ['#f7a1d0', '#9a2c64'], violet: ['#c4a8ff', '#6534b8'],
+  };
+  function applyProfileColor(name) {
+    const [dark, light] = PROFILE_COLORS[name] || PROFILE_COLORS.orange;
+    document.documentElement.style.setProperty('--heading-dark', dark);
+    document.documentElement.style.setProperty('--heading-light', light);
+  }
+  try { applyProfileColor(localStorage.getItem('stocky-color')); } catch { applyProfileColor('orange'); }
 </script>
 <style>
   :root {
@@ -38,7 +52,8 @@
     --line-soft:#323338;
     --muted:#cfd2d8;          /* light grey: secondary but still easy to read */
     --text:#ffffff;
-    --heading:#8ab4f8;        /* soft blue: section headings and links; ~7:1 on --bg */
+    --heading:var(--heading-dark, #ffb066);   /* profile colour: titles, links, avatar */
+    --on-heading:#212226;
     --accent:#ffffff;
     --on-accent:#212226;
     --accent-soft:rgba(236,238,241,.14);
@@ -63,7 +78,8 @@
     --line-soft:#e7e8ec;
     --muted:#646770;
     --text:#1b1c1f;
-    --heading:#1d5bb8;
+    --heading:var(--heading-light, #9a3c06);
+    --on-heading:#ffffff;
     --accent:#26272a;
     --on-accent:#f7f8fa;
     --accent-soft:rgba(38,39,42,.09);
@@ -109,9 +125,21 @@
               background:none; border:1px solid transparent; border-radius:999px; cursor:pointer;
               font:inherit; color:inherit; text-align:left; }
   .user-btn:hover { background:var(--hover); }
-  .avatar { flex:none; width:32px; height:32px; border-radius:50%; background:var(--accent); color:var(--on-accent);
+  .avatar { flex:none; width:32px; height:32px; border-radius:50%; background:var(--heading); color:var(--on-heading);
             display:flex; align-items:center; justify-content:center; font-weight:700; font-size:calc(var(--fs) * 16);
-            text-transform:uppercase; }
+            text-transform:uppercase; overflow:hidden; }
+  /* With a picture, the profile colour shows as a ring around it. */
+  .avatar.has-photo { box-shadow:0 0 0 2px var(--heading); }
+  .avatar img { width:100%; height:100%; object-fit:cover; display:block; }
+  .avatar-lg { width:64px; height:64px; font-size:calc(var(--fs) * 28); }
+  .avatar-lg.has-photo { box-shadow:0 0 0 3px var(--heading); }
+  .swatches { display:flex; gap:8px; flex-wrap:wrap; }
+  .swatches button { width:30px; height:30px; padding:0; border-radius:50%; cursor:pointer;
+                     border:2px solid var(--bg); box-shadow:0 0 0 1px var(--line); }
+  .swatches button { background:var(--sw-dark); }
+  [data-theme="light"] .swatches button { background:var(--sw-light); }
+  .swatches button[aria-checked="true"] { box-shadow:0 0 0 2px var(--text); }
+  .avatar-row { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
   .user-meta { display:flex; flex-direction:column; min-width:0; }
   .user-label { font-size:calc(var(--fs) * 13); color:var(--muted); }
   .user-id { font-size:calc(var(--fs) * 15); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:230px; }
@@ -894,6 +922,23 @@
             <label for="acc-email">Email</label>
             <input id="acc-email" type="email" maxlength="200" autocomplete="email">
           </div>
+          <div class="opt-row" data-search="profile colour color title heading avatar accent">
+            <span class="opt-label">Profile colour</span>
+            <p class="opt-hint">Colours every title and your avatar.</p>
+            <div id="acc-colors" class="swatches" role="radiogroup" aria-label="Profile colour"></div>
+          </div>
+          <div class="opt-row" data-search="profile picture photo image avatar upload">
+            <span class="opt-label">Profile picture</span>
+            <div class="avatar-row">
+              <span id="acc-avatar" class="avatar avatar-lg">?</span>
+              <button class="panel-btn" onclick="$('#acc-photo').click()">Upload picture…</button>
+              <button class="panel-btn" id="acc-photo-remove" onclick="removeAvatar()">Remove</button>
+              <input id="acc-photo" type="file" accept="image/png,image/jpeg,image/webp" hidden
+                     onchange="uploadAvatar(this.files[0]); this.value = ''">
+            </div>
+            <p class="opt-hint">PNG, JPEG or WebP, up to 5 MB; cropped to a square.</p>
+            <span id="acc-photo-msg" class="opt-msg" role="status"></span>
+          </div>
           <div class="opt-row" data-search="sec edgar user agent contact identity">
             <span class="opt-label">SEC identity</span>
             <p class="opt-hint">Sent to the SEC as the contact for your requests: <b id="acc-identity"></b></p>
@@ -1351,8 +1396,54 @@ function setAccount(user) {
   ACCOUNT = user;
   $('#user-name').textContent = user.name;
   $('#user-id').textContent = user.email;
-  $('#user-avatar').textContent = (user.name.trim()[0] || '?');
   $('#acc-identity').textContent = user.identity;
+  // A fresh query string after every change so the browser never shows the old picture.
+  const photo = user.avatar ? `/api/account/avatar?v=${Date.now()}` : '';
+  for (const el of [$('#user-avatar'), $('#acc-avatar')]) {
+    el.classList.toggle('has-photo', !!photo);
+    el.innerHTML = photo ? `<img src="${photo}" alt="">` : esc(user.name.trim()[0] || '?');
+  }
+  $('#acc-photo-remove').disabled = !user.avatar;
+  applyProfileColor(user.color);
+  try { localStorage.setItem('stocky-color', user.color); } catch {}
+  $('#acc-colors').innerHTML = Object.entries(PROFILE_COLORS).map(([name, [dark, light]]) =>
+    `<button role="radio" aria-checked="${name === user.color}" title="${name}" aria-label="${name}"
+       style="--sw-dark:${dark}; --sw-light:${light}"
+       onclick="setProfileColor('${name}')"></button>`).join('');
+}
+
+async function accountRequest(method, url, body, headers = {}) {
+  const res = await fetch(url, { method, headers, body });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Could not save.');
+  setAccount(data.user);
+}
+
+async function setProfileColor(name) {
+  applyProfileColor(name);   // show it at once; the server confirms
+  try {
+    await accountRequest('PATCH', '/api/account', JSON.stringify({ color: name }),
+                         { 'Content-Type': 'application/json' });
+  } catch (err) {
+    setAccount(ACCOUNT);
+    setOptMsg('#acc-photo-msg', err.message, true);
+  }
+}
+
+async function uploadAvatar(file) {
+  if (!file) return;
+  setOptMsg('#acc-photo-msg', 'Uploading…');
+  try {
+    await accountRequest('PUT', '/api/account/avatar', file, { 'Content-Type': 'application/octet-stream' });
+    setOptMsg('#acc-photo-msg', '');
+  } catch (err) { setOptMsg('#acc-photo-msg', err.message, true); }
+}
+
+async function removeAvatar() {
+  try {
+    await accountRequest('DELETE', '/api/account/avatar');
+    setOptMsg('#acc-photo-msg', '');
+  } catch (err) { setOptMsg('#acc-photo-msg', err.message, true); }
 }
 
 async function loadAccount() {

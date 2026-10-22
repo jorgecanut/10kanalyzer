@@ -64,6 +64,12 @@ DATA_DIR = Path(os.environ.get("STOCKY_DATA_DIR", BASE_DIR / "data"))
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MIN_PASSWORD = 8
+# Profile colour: the names the UI offers (each has a checked dark and light
+# shade there); the first is the default.
+COLORS = ("orange", "blue", "teal", "green", "amber", "red", "pink", "violet")
+AVATAR_SIZE = 256                    # stored as a square PNG of this many pixels
+AVATAR_MAX_BYTES = 5 * 1024 * 1024
+AVATAR_MAX_PIXELS = 40_000_000       # refuse decompression bombs before decoding
 
 # Tickers: letters/digits plus the "." and "-" seen in symbols such as BRK.B.
 TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
@@ -117,6 +123,10 @@ def _db():
             " id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE COLLATE NOCASE,"
             " password_hash TEXT NOT NULL, created TEXT NOT NULL)"
         )
+        # Added after the first release: older databases get the column here.
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+        if "color" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN color TEXT")
         yield conn
         conn.commit()
     finally:
@@ -185,7 +195,13 @@ def _identity(user: dict) -> str:
 
 def _public_user(user: dict) -> dict:
     # The id is internal: it names the data folder and is never sent out.
-    return {"name": user["name"], "email": user["email"], "identity": _identity(user)}
+    return {"name": user["name"], "email": user["email"], "identity": _identity(user),
+            "color": user.get("color") or COLORS[0], "avatar": _avatar_path(user["id"]).is_file()}
+
+
+def _avatar_path(uid: str) -> Path:
+    # Outside the user's results folder, so "delete all results" keeps it.
+    return DATA_DIR / "avatars" / f"{uid}.png"
 
 
 def _user_dir(uid: str | None = None) -> Path:
@@ -646,6 +662,9 @@ def update_account():
     name = _clean_name(payload.get("name", user["name"]))
     email = _clean_email(payload.get("email", user["email"]))
     new_password = str(payload.get("new_password") or "")
+    color = payload.get("color", user.get("color") or COLORS[0])
+    if color not in COLORS:
+        abort(400, "Unknown colour.")
     if email.lower() != user["email"].lower() or new_password:
         if not check_password_hash(user["password_hash"], str(payload.get("current_password") or "")):
             abort(403, "Enter your current password to change the email or password.")
@@ -654,12 +673,59 @@ def update_account():
     try:
         with _db() as conn:
             conn.execute(
-                "UPDATE users SET name = ?, email = ?, password_hash = ? WHERE id = ?",
-                (name, email, password_hash, user["id"]),
+                "UPDATE users SET name = ?, email = ?, password_hash = ?, color = ? WHERE id = ?",
+                (name, email, password_hash, color, user["id"]),
             )
     except sqlite3.IntegrityError:
         abort(409, "An account with that email already exists.")
     return jsonify(user=_public_user(_get_user(user["id"])))
+
+
+@app.get("/api/account/avatar")
+def get_avatar():
+    path = _avatar_path(g.user["id"])
+    if not path.is_file():
+        abort(404, "No profile picture.")
+    response = send_file(path, mimetype="image/png", max_age=0)
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+@app.put("/api/account/avatar")
+def put_avatar():
+    """The raw image is the body (PNG, JPEG or WebP); stored as a centred square PNG.
+
+    A raw body, not a form, so a cross-site form post can never set it.
+    """
+    from PIL import Image, ImageOps, UnidentifiedImageError
+
+    if (request.content_length or 0) > AVATAR_MAX_BYTES:
+        abort(413, "Picture is too big (max 5 MB).")
+    data = request.stream.read(AVATAR_MAX_BYTES + 1)
+    if len(data) > AVATAR_MAX_BYTES:
+        abort(413, "Picture is too big (max 5 MB).")
+    try:
+        image = Image.open(io.BytesIO(data))
+        if image.format not in ("PNG", "JPEG", "WEBP"):
+            abort(400, "Use a PNG, JPEG or WebP picture.")
+        if image.width * image.height > AVATAR_MAX_PIXELS:
+            abort(400, "Picture has too many pixels.")
+        image = ImageOps.exif_transpose(image).convert("RGBA")
+        image = ImageOps.fit(image, (AVATAR_SIZE, AVATAR_SIZE), Image.LANCZOS)
+    except (UnidentifiedImageError, OSError, ValueError):
+        abort(400, "Use a PNG, JPEG or WebP picture.")
+    path = _avatar_path(g.user["id"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    image.save(tmp, "PNG")
+    tmp.replace(path)
+    return jsonify(user=_public_user(g.user))
+
+
+@app.delete("/api/account/avatar")
+def delete_avatar():
+    _avatar_path(g.user["id"]).unlink(missing_ok=True)
+    return jsonify(user=_public_user(g.user))
 
 
 def _require_confirm(payload) -> None:
@@ -698,6 +764,7 @@ def delete_account():
         abort(403, "Wrong password.")
     uid = g.user["id"]
     _wipe_user(uid)
+    _avatar_path(uid).unlink(missing_ok=True)
     with _db() as conn:
         conn.execute("DELETE FROM users WHERE id = ?", (uid,))
     session.clear()
