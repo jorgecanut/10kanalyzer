@@ -598,6 +598,12 @@
             <a href="#" class="home-more" onclick="showTab('news');return false">More news</a>
           </div>
           <div class="home-block">
+            <h3>Insider trades</h3>
+            <p class="sim-meta" id="home-insider-status"></p>
+            <div id="home-insiders" class="insider-list"></div>
+            <a href="#" class="home-more" onclick="showTab('insiders');return false">All insider trades</a>
+          </div>
+          <div class="home-block">
             <h3>Charts</h3>
             <div id="home-charts" class="home-charts"></div>
           </div>
@@ -1720,6 +1726,7 @@ async function refreshGraph() {
 }
 
 async function loadGraph(ticker) {
+  if (ticker === GRAPH.ticker) loadHomeInsiders(ticker);
   await Promise.all([loadResults(ticker), loadScreenerData()]);
 }
 
@@ -1740,7 +1747,7 @@ async function loadScreenerData() {
 
 // Overview of the pinned ticker: its numbers, where it sits in the screener
 // ranking, a few headlines and every chart as a thumbnail.
-const HOME = { news: null, newsTicker: '', newsError: '' };
+const HOME = { news: null, newsTicker: '', newsError: '', insiders: null, insiderTicker: '' };
 
 function initHome(force = false) {
   const ticker = GRAPH.ticker;
@@ -1749,6 +1756,24 @@ function initHome(force = false) {
   if (force) refreshGraph();
   else if (!SCREEN.items.length) loadScreenerData();
   if (force || HOME.newsTicker !== ticker) loadHomeNews(ticker, force);
+  if (force || HOME.insiderTicker !== ticker) loadHomeInsiders(ticker);
+}
+
+// The five most recent insider trades; '' data means none collected yet.
+async function loadHomeInsiders(ticker) {
+  HOME.insiderTicker = ticker;
+  HOME.insiders = null;
+  renderHome();
+  try {
+    const res = await fetch(`/api/insiders/${encodeURIComponent(ticker)}`);
+    const data = res.ok ? await res.json() : { transactions: [], missing: true };
+    if (ticker !== HOME.insiderTicker) return;
+    HOME.insiders = data;
+  } catch {
+    if (ticker !== HOME.insiderTicker) return;
+    HOME.insiders = { transactions: [], failed: true };
+  }
+  renderHome();
 }
 
 async function loadHomeNews(ticker, fresh = false) {
@@ -1826,6 +1851,15 @@ function renderHome() {
       <a href="${esc(a.link)}" target="_blank" rel="noopener noreferrer">${esc(a.title)}</a>
       <div class="news-meta">${esc([a.source, fmtAgo(a.published)].filter(Boolean).join(' · '))}</div>
     </li>`).join('');
+
+  // Insider trades: the latest five, newest first.
+  const ins = HOME.insiderTicker === ticker ? HOME.insiders : null;
+  const trades = ins && Array.isArray(ins.transactions) ? ins.transactions.slice(0, 5) : [];
+  $('#home-insider-status').textContent = !ins ? 'Loading insider trades…'
+    : ins.failed ? 'Could not load insider trades.'
+    : ins.missing ? 'No insider data yet — it is collected when the run finishes.'
+    : trades.length ? '' : 'No open-market insider trades in the collected period.';
+  $('#home-insiders').innerHTML = trades.map(insiderRow).join('');
 
   // Charts: one small thumbnail per chart type (its most recent year window);
   // a click opens that chart in the Charts tab.
@@ -2236,6 +2270,11 @@ async function loadInsiderTicker() {
   }
 }
 
+const insiderRow = it => `<div class="stat">
+    <span class="who"><b>${esc(it.name || '—')}</b>${it.title ? ' · ' + esc(it.title) : ''} · ${it.date ? esc(fmtDate(it.date)) : '—'}</span>
+    <b><span class="badge ${it.type === 'buy' ? 'done' : 'error'}">${esc(it.type || '—')}</span> ${fmtInt(it.shares)} sh · ${fmtMoney(it.value)}</b>
+  </div>`;
+
 function renderInsiders() {
   const { ticker, data, months } = INSIDER;
   if (!ticker || !data) return;
@@ -2256,13 +2295,7 @@ function renderInsiders() {
     $('#insider-status').textContent = `${collected} · no open-market insider trades in the last ${period}${short}`;
     return;
   }
-  $('#insider-body').innerHTML = rows.map(it => {
-    const kind = it.type === 'buy' ? 'done' : 'error';
-    return `<div class="stat">
-      <span class="who"><b>${esc(it.name || '—')}</b>${it.title ? ' · ' + esc(it.title) : ''} · ${it.date ? esc(fmtDate(it.date)) : '—'}</span>
-      <b><span class="badge ${kind}">${esc(it.type || '—')}</span> ${fmtInt(it.shares)} sh · ${fmtMoney(it.value)}</b>
-    </div>`;
-  }).join('');
+  $('#insider-body').innerHTML = rows.map(insiderRow).join('');
   $('#insider-status').textContent = `${collected} · ${rows.length} trade(s) in the last ${period} · newest first${short}`;
 }
 
