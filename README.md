@@ -180,7 +180,19 @@ all tabs. Clicking your name in the header opens it on the **Account** tab.
 
 - **Account**: change name, email or password (email and password need the
   current password), see the SEC identity, sign out, delete the account.
-- **Appearance**: dark or light theme.
+- **General**: tab shown on open (Home by default), tab order (up/down
+  arrows, **Reset order**; Recent stays at the far right), default number of
+  10-K filings (also used after cancel).
+- **Appearance**: dark or light theme; text size (Small / Normal / Large /
+  Larger: every font scales through the `--fs` CSS variable); date format
+  (31/12/2026, 12/31/2026 or 2026-12-31); number format (1,234.5 / 1.234,5 /
+  1 234,5).
+- **Defaults**: Insiders period (the tab's own picker changes it for that
+  visit only); Simulation investment, horizon, dividends (cash or reinvest)
+  and price range.
+
+These settings live in the browser (`localStorage`, key `stocky-prefs`), not
+in the account: another browser or device starts from the defaults.
 - **Data**: what is stored, and **Remove all data**.
 
 Removing all data and deleting the account both open a confirmation screen
