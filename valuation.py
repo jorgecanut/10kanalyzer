@@ -352,8 +352,37 @@ def _split_factor(ratio: float) -> float:
     return 1.0
 
 
+def _latest_value(frame: pd.DataFrame, names: pd.Series, concept: str) -> tuple[float, object]:
+    """Newest dimension-free positive value of ``concept`` and its date (NaN, NaT if none)."""
+    rows = frame[names == concept].copy()
+    if rows.empty:
+        return np.nan, pd.NaT
+    if "is_dimensioned" in rows.columns:
+        rows = rows[~rows["is_dimensioned"].astype(bool)]
+    rows["_value"] = pd.to_numeric(rows["value"], errors="coerce")
+    rows = rows[rows["_value"] > 0]
+    if rows.empty:
+        return np.nan, pd.NaT
+    if "period_instant" in rows.columns:
+        instant = pd.to_datetime(rows["period_instant"], errors="coerce")
+    else:
+        instant = pd.Series(pd.NaT, index=rows.index)
+    if "period_end" in rows.columns:
+        end = pd.to_datetime(rows["period_end"], errors="coerce")
+    else:
+        end = pd.Series(pd.NaT, index=rows.index)
+    rows["_date"] = instant.fillna(end)
+    rows = rows.sort_values("_date", ascending=False, na_position="last")
+    return _finite(rows.iloc[0]["_value"]), rows.iloc[0]["_date"]
+
+
 def _extract_shares(facts: pd.DataFrame, year: int) -> float:
-    """Newest dimension-free share count for one fiscal year, in shares."""
+    """Shares outstanding for one fiscal year, in shares.
+
+    In order: the reported outstanding count; issued minus treasury shares at
+    the same date (filers such as Pfizer report only those two); the weighted
+    average diluted, then basic, count for the year.
+    """
     if facts is None or facts.empty:
         return np.nan
     if not {"concept", "value"} <= set(facts.columns):
@@ -366,26 +395,23 @@ def _extract_shares(facts: pd.DataFrame, year: int) -> float:
     names = frame["concept"].astype(str).str.split(":").str[-1]
     for concept in ("CommonStockSharesOutstanding",
                     "EntityCommonStockSharesOutstanding"):
-        rows = frame[names == concept].copy()
-        if rows.empty:
-            continue
-        if "is_dimensioned" in rows.columns:
-            rows = rows[~rows["is_dimensioned"].astype(bool)]
-        rows["_value"] = pd.to_numeric(rows["value"], errors="coerce")
-        rows = rows[rows["_value"] > 0]
-        if rows.empty:
-            continue
-        if "period_instant" in rows.columns:
-            instant = pd.to_datetime(rows["period_instant"], errors="coerce")
-        else:
-            instant = pd.Series(pd.NaT, index=rows.index)
-        if "period_end" in rows.columns:
-            end = pd.to_datetime(rows["period_end"], errors="coerce")
-        else:
-            end = pd.Series(pd.NaT, index=rows.index)
-        rows["_date"] = instant.fillna(end)
-        rows = rows.sort_values("_date", ascending=False, na_position="last")
-        return _finite(rows.iloc[0]["_value"])
+        value, _ = _latest_value(frame, names, concept)
+        if np.isfinite(value):
+            return value
+
+    issued, issued_date = _latest_value(frame, names, "CommonStockSharesIssued")
+    if np.isfinite(issued):
+        # The treasury concept was renamed in newer taxonomies; take either.
+        for concept in ("TreasuryStockCommonShares", "TreasuryStockShares"):
+            treasury, treasury_date = _latest_value(frame, names, concept)
+            if np.isfinite(treasury) and treasury_date == issued_date and treasury < issued:
+                return issued - treasury
+
+    for concept in ("WeightedAverageNumberOfDilutedSharesOutstanding",
+                    "WeightedAverageNumberOfSharesOutstandingBasic"):
+        value, _ = _latest_value(frame, names, concept)
+        if np.isfinite(value):
+            return value
     return np.nan
 
 
