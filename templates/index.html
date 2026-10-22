@@ -38,6 +38,7 @@
     --line-soft:#323338;
     --muted:#cfd2d8;          /* light grey: secondary but still easy to read */
     --text:#ffffff;
+    --heading:#8ab4f8;        /* soft blue: section headings and links; ~7:1 on --bg */
     --accent:#ffffff;
     --on-accent:#212226;
     --accent-soft:rgba(236,238,241,.14);
@@ -62,6 +63,7 @@
     --line-soft:#e7e8ec;
     --muted:#646770;
     --text:#1b1c1f;
+    --heading:#1d5bb8;
     --accent:#26272a;
     --on-accent:#f7f8fa;
     --accent-soft:rgba(38,39,42,.09);
@@ -426,16 +428,19 @@
   .home-grid { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr); gap:0 28px; }
   .home-block { margin-top:16px; padding-top:14px; border-top:1px solid var(--line); }
   .home-grid .home-block { margin-top:4px; padding-top:0; border-top:0; }   /* first row: the head's line is enough */
-  .home-block h3 { margin:0 0 10px; font-size:calc(var(--fs) * 16); color:var(--text); font-weight:700; }
+  /* Headings in the accent colour, uppercase and spaced, so they read as labels over the white content. */
+  .home-block h3 { margin:0 0 10px; font-size:calc(var(--fs) * 15); color:var(--heading); font-weight:700;
+                   text-transform:uppercase; letter-spacing:.08em; }
   .home-stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:0 20px; }
   .home-rank { list-style:none; margin:0 0 8px; padding:0; }
   .home-rank li { display:flex; gap:12px; padding:6px 10px; border-radius:var(--radius); }
   .home-rank li .r { color:var(--muted); min-width:3.5em; font-variant-numeric:tabular-nums; }
   .home-rank li.me { background:var(--accent-soft); font-weight:700; }
   .home-rank a { color:var(--text); }
-  .home-more { font-size:calc(var(--fs) * 15); color:var(--muted); text-decoration:underline;
-               text-underline-offset:3px; text-decoration-color:var(--line-strong); }
+  .home-more { font-size:calc(var(--fs) * 15); color:var(--heading); text-decoration:underline;
+               text-underline-offset:3px; }
   .home-more:hover { color:var(--text); }
+  #pane-home .news-list a { font-weight:400; }   /* lighter than the headings */
   .home-charts { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:10px; }
   .home-charts figure { padding:6px; cursor:pointer; }
   .home-charts figure:hover { border-color:var(--line-strong); }
