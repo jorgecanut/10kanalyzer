@@ -148,7 +148,9 @@ Routes:
 
 The tabs sit on the left of the ticker bar's row, the bar on the right (on
 narrow screens the tabs get a row of their own below the bar); the **Recent**
-clock icon sits left of the ticker box.
+clock icon sits left of the ticker box, or at the right end of the tab row on
+narrow screens. The logo and the Stocky name open Home. The logo and every
+icon are drawn for this project (no third-party icon sets).
 **Home** (the house icon, first tab) is the default tab: an overview of the
 latest search (the pinned ticker). It shows that company's key numbers (the
 only place outside the Screener with stats), its spot in the screener's Magic

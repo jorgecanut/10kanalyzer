@@ -18,6 +18,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as path_effects
 from matplotlib import font_manager
+from matplotlib.container import BarContainer
+from matplotlib.patches import FancyBboxPatch
 import matplotlib.ticker as mticker
 from matplotlib.transforms import blended_transform_factory
 import numpy as np
@@ -398,12 +400,51 @@ def _header(
                 fontweight="bold", color=_c("strong"))
 
 
+BAR_RADIUS_PX = 4
+
+
+def _round_bars(fig: plt.Figure) -> None:
+    """Swap every bar for one with slightly rounded corners.
+
+    The radius is set in pixels and corrected for each axes' aspect, so the
+    corners stay circular whatever the scales; short bars get a smaller one.
+    Runs once the layout and limits are final.
+    """
+    fig.canvas.draw()
+    for ax in fig.axes:
+        box = ax.get_window_extent()
+        (x0, x1), (y0, y1) = ax.get_xlim(), ax.get_ylim()
+        if not box.width or not box.height or x1 == x0 or y1 == y0:
+            continue
+        x_per_px = abs(x1 - x0) / box.width
+        y_per_px = abs(y1 - y0) / box.height
+        for container in ax.containers:
+            if not isinstance(container, BarContainer):
+                continue
+            for rect in container.patches:
+                x, y, w, h = rect.get_x(), rect.get_y(), rect.get_width(), rect.get_height()
+                if not all(np.isfinite([x, y, w, h])) or w == 0 or h == 0:
+                    continue
+                radius_px = min(BAR_RADIUS_PX, w / x_per_px / 2, abs(h) / y_per_px / 2)
+                rounded = FancyBboxPatch(
+                    (x, min(y, y + h)), w, abs(h),
+                    boxstyle=f"round,pad=0,rounding_size={radius_px * x_per_px}",
+                    mutation_aspect=y_per_px / x_per_px,
+                    facecolor=rect.get_facecolor(), edgecolor=rect.get_edgecolor(),
+                    linewidth=rect.get_linewidth(), zorder=rect.get_zorder(),
+                    alpha=rect.get_alpha(), label="_nolegend_",
+                )
+                rect.set_visible(False)
+                ax.add_patch(rounded)
+
+
 def _save(fig: plt.Figure, path: str) -> str:
     if _DARK:
         folder = os.path.join(os.path.dirname(path), DARK_SUBDIR)
         os.makedirs(folder, exist_ok=True)
         path = os.path.join(folder, os.path.basename(path))
     fig.tight_layout()
+    _round_bars(fig)
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return path

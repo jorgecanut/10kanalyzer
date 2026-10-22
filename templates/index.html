@@ -108,6 +108,9 @@
             border-bottom:1px solid var(--line); }
   header { padding:12px 20px; }
   .brand { display:flex; align-items:center; gap:11px; }
+  .brand-link { display:flex; align-items:center; gap:11px; color:inherit; text-decoration:none; }
+  .brand-link:hover { text-decoration:none; }
+  .brand-link:hover h1 { color:var(--heading); }
   .brand .brand-icon { width:36px; height:36px; display:block; color:var(--accent); }
   header h1 { margin:0; font-size:calc(var(--fs) * 24); letter-spacing:.01em; }
   .head-row { display:flex; align-items:center; justify-content:space-between; gap:16px; }
@@ -154,8 +157,9 @@
   /* Ticker bar: always visible under the title bar. */
   .toolbar { padding:8px 20px; border-top:1px solid var(--line-soft); background:var(--bg); }
   /* One row: ticker bar left, tabs right; as wide as the page column below. */
-  .toolbar-inner { max-width:1060px; margin:0 auto; display:flex; gap:8px 16px; flex-wrap:nowrap;
-                   align-items:center; justify-content:space-between; }
+  .toolbar-inner { max-width:1060px; margin:0 auto; display:flex; gap:8px; flex-wrap:nowrap;
+                   align-items:center; }
+  .toolbar #tab-recent { margin-left:auto; }
   .bar { display:flex; gap:8px; align-items:center; flex:0 1 auto; min-width:0; }
   /* On one row the tabs and buttons keep their width; the ticker box gives way. */
   .toolbar .tabs, #filings, #run-btn, #cancel-btn, #tab-recent { flex:none; }
@@ -195,9 +199,9 @@
   /* Not enough room for one row: the tabs move to their own row. */
   @media (max-width:1100px) {
     .toolbar-inner { flex-wrap:wrap; }
-    /* The ticker bar stays on top, the tabs go under it. */
+    /* The ticker bar stays on top; the tabs and, at their right, Recent go under it. */
     .bar { flex:1 1 100%; justify-content:center; order:-1; }
-    .toolbar .tabs { flex:1 1 100%; }
+    .toolbar .tabs { flex:1 1 0; }
     html { scroll-padding-top:180px; }
   }
   .card { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-lg); padding:18px; margin-bottom:16px; }
@@ -265,11 +269,10 @@
                 min-height:52px; padding:0 18px;
                 border-bottom:1px solid var(--line-soft); flex-wrap:wrap; }
   .panel-title { font-size:calc(var(--fs) * 17); font-weight:700; color:var(--heading); }
-  /* Section headings in every tab: the heading colour, uppercase and spaced, so they read as
-     labels over the white content. */
+  /* Section headings in every tab: bold, in the heading colour, so they read
+     as labels over the white content. */
   .home-block h3, .sim-section h3, .sim-market h3, .opt-pane h2 {
-    font-size:calc(var(--fs) * 15); font-weight:700; color:var(--heading);
-    text-transform:uppercase; letter-spacing:.08em; }
+    font-size:calc(var(--fs) * 16); font-weight:700; color:var(--heading); }
   .panel-actions { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
   .panel-btn { padding:6px 12px; border:1px solid var(--line); border-radius:var(--radius);
                background:none; color:var(--muted); font-size:calc(var(--fs) * 15); cursor:pointer; }
@@ -347,8 +350,7 @@
 
   /* Log block: its own background and a rule under it, apart from the index. */
   .term-wrap { background:var(--bg); border-bottom:1px solid var(--line-strong); }
-  .term-label { padding:8px 18px 0; font-size:calc(var(--fs) * 13); font-weight:700; color:var(--heading);
-                text-transform:uppercase; letter-spacing:.08em; }
+  .term-label { padding:8px 18px 0; font-size:calc(var(--fs) * 14); font-weight:700; color:var(--heading); }
   /* Terminal body: same panel chrome, monospace log. */
   .term-body { max-height:360px; overflow:auto;
                font:calc(var(--fs) * 17)/1.7 var(--mono); color:var(--text); }
@@ -554,30 +556,33 @@
   <header>
     <div class="head-row">
       <div class="brand">
-        <svg class="brand-icon" viewBox="0 0 24 24" role="img" aria-label="Stocky">
+        <!-- Stocky's own mark: three rising candlesticks. Opens Home. -->
+        <a href="#" class="brand-link" onclick="showTab('home');return false" title="Home" aria-label="Stocky, go to Home">
+        <svg class="brand-icon" viewBox="0 0 24 24" aria-hidden="true">
           <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
-            <path d="m1.76 16.35l.93-4c.3-1.27.45-1.91.82-1.94s.6.58 1.09 1.8l.43 1.11c.34.86.51 1.3.83 1.32c.32.01.54-.4.98-1.2l.16-.3c.45-.82.67-1.23.99-1.21s.49.46.82 1.33l.42 1.1c.52 1.35.78 2.03 1.16 2c.38-.04.5-.76.76-2.19l.65-3.66c.32-1.8.48-2.7.88-2.72s.63.87 1.07 2.65l.57 2.28c.26 1.03.39 1.55.72 1.6c.34.04.6-.43 1.12-1.36l.65-1.15c.35-.62.52-.93.8-.95s.48.28.9.87l.4.58c.44.64.66.96.95.94s.45-.38.77-1.09l1.73-3.74M17.6 4.08V2.59m0 18.79v-1.46m0-2.72v-1.45" />
-            <path fill="currentColor" d="M18.1 7.35a.5.5 0 1 1-1 0a.5.5 0 0 1 1 0" />
+            <path d="M3.5 13.5h4v4.5h-4zM10 9h4v5.5h-4zM16.5 4.5h4v5.5h-4z" fill="currentColor" opacity=".2" stroke="none" />
+            <path d="M3.5 13.5h4v4.5h-4zM10 9h4v5.5h-4zM16.5 4.5h4v5.5h-4zM5.5 11v2.5M5.5 18v2.5M12 6.5V9M12 14.5V17M18.5 2v2.5M18.5 10v2.5" />
           </g>
         </svg>
+        <h1>Stocky</h1>
+        </a>
         <div class="brand-name">
-          <h1>Stocky</h1>
           <span id="status" class="status"><span class="badge idle">idle</span></span>
         </div>
       </div>
       <div class="head-actions">
         <button id="theme-btn" class="theme-btn" onclick="toggleTheme()" title="Switch colour theme" aria-label="Switch colour theme">
           <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true">
-            <g fill="none">
-              <circle cx="11.97" cy="11.99" r="4.73" fill="currentColor" opacity=".2" transform="rotate(90 11.97 11.99)" />
-              <circle cx="11.97" cy="11.99" r="4.73" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" transform="rotate(90 11.97 11.99)" />
-              <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M1.56 11.99H4.3m15.45.01h2.7m-10.5 10.34v-2.62m0-15.38V1.66M18 5.87l2.02-2.02M4 19.87l1.75-1.75m.07-12.34L3.9 3.85m16.11 16.12l-1.86-1.86" />
+            <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
+              <circle cx="12" cy="12" r="4" fill="currentColor" opacity=".2" stroke="none" />
+              <circle cx="12" cy="12" r="4" />
+              <path d="M18.4 12H21M16.53 16.53l1.83 1.83M12 18.4V21M7.47 16.53l-1.83 1.83M5.6 12H3M7.47 7.47L5.64 5.64M12 5.6V3M16.53 7.47l1.83-1.83" />
             </g>
           </svg>
           <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true">
-            <g fill="none">
-              <path fill="currentColor" d="M12.44 21.6a9.96 9.96 0 0 1-9.96-9.95c0-5.5 3.57-8.3 6.12-8.93c0 0-1.56 5.29 2.43 10.2c4.79 4.8 10.48.75 10.7 1.68c.22.94-3.8 7-9.3 7" opacity=".2" />
-              <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.48 11.65a9.96 9.96 0 0 0 18.96 4.24c.4-.83.6-1.25.38-1.5c-.22-.24-.72-.08-1.72.25c-2.33.77-6.18 1.35-9.15-1.63a8.2 8.2 0 0 1-2.13-8.59c.36-1.17.53-1.76.27-1.97c-.27-.21-.72.05-1.63.57a10 10 0 0 0-4.98 8.63" />
+            <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
+              <path d="M10.8 3.88A8.6 8.6 0 1 0 20.39 14.28A7.4 7.4 0 0 1 10.8 3.88z" fill="currentColor" opacity=".2" stroke="none" />
+              <path d="M10.8 3.88A8.6 8.6 0 1 0 20.39 14.28A7.4 7.4 0 0 1 10.8 3.88z" />
             </g>
           </svg>
         </button>
@@ -605,7 +610,8 @@
 
   <div class="toolbar">
     <div class="toolbar-inner">
-      <!-- Left: the tabs; right: recent runs and the ticker bar. -->
+      <!-- Left: the tabs; right: recent runs and the ticker bar. On narrow
+           screens the bar goes on top and Recent ends the tab row. -->
       <nav class="tabs" aria-label="Tabs">
         <button id="tab-home" class="tab-icon active" onclick="showTab('home')" title="Home" aria-label="Home">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -622,17 +628,16 @@
         <button id="tab-simulation" onclick="showTab('simulation')">Simulation</button>
         <button id="tab-news" onclick="showTab('news')">News</button>
       </nav>
+      <button id="tab-recent" class="tab-icon nav-btn" onclick="showTab('recent')"
+              title="Recent runs" aria-label="Recent runs">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
+            <circle cx="12" cy="12" r="8.4" fill="currentColor" opacity=".2" stroke="none" />
+            <path d="M4.11 9.13A8.4 8.4 0 1 1 5.57 17.4M3.6 5.6l.5 3.55l3.5-.75M12 7.8V12l2.9 1.8" />
+          </g>
+        </svg>
+      </button>
       <div class="bar">
-        <button id="tab-recent" class="tab-icon nav-btn" onclick="showTab('recent')"
-                title="Recent runs" aria-label="Recent runs">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
-              <circle cx="12" cy="12.2" r="8.6" fill="currentColor" opacity=".2" stroke="none" />
-              <circle cx="12" cy="12.2" r="8.6" />
-              <path d="M12 7.6v4.6l3.2 2" />
-            </g>
-          </svg>
-        </button>
         <input id="ticker" type="text" placeholder="AAPL, MSFT, NVDA" maxlength="120" aria-label="Tickers"
                oninput="updateMode()" onkeydown="if(event.key==='Enter')handlePrimary()">
         <select id="filings" title="Number of 10-K filings" aria-label="Number of 10-K filings">
