@@ -10,9 +10,15 @@
   try {
     document.documentElement.dataset.theme = localStorage.getItem('stocky-theme') || 'dark';
   } catch { document.documentElement.dataset.theme = 'dark'; }
+  // Text size (Options → Appearance) scales every font through --fs.
+  try {
+    const size = Number(JSON.parse(localStorage.getItem('stocky-prefs') || '{}').textSize);
+    if (size > 0) document.documentElement.style.setProperty('--fs', size + 'px');
+  } catch {}
 </script>
 <style>
   :root {
+    --fs:1px;               /* text size: Options → Appearance */
     color-scheme: dark;
     --mono:"UbuntuMono Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "FiraCode Nerd Font Mono",
            "Noto Sans Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "DejaVu Sans Mono", monospace;
@@ -28,28 +34,28 @@
   }
   * { box-sizing:border-box; }
   body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-         padding:24px 16px; font:17px/1.55 var(--mono); background:var(--bg); color:var(--text); }
+         padding:24px 16px; font:calc(var(--fs) * 17)/1.55 var(--mono); background:var(--bg); color:var(--text); }
   button, input { font-family:var(--mono); }
   .card { width:100%; max-width:380px; background:var(--surface); border:1px solid var(--line);
           border-radius:12px; overflow:hidden; }
   .brand { display:flex; align-items:center; gap:10px; padding:18px 20px 6px; }
   .brand svg { width:32px; height:32px; color:var(--accent); }
-  .brand h1 { margin:0; font-size:22px; }
+  .brand h1 { margin:0; font-size:calc(var(--fs) * 22); }
   .switch { display:flex; gap:6px; padding:12px 20px 0; }
   .switch button { flex:1; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--bar);
-                   color:var(--muted); font-size:15px; cursor:pointer; }
+                   color:var(--muted); font-size:calc(var(--fs) * 15); cursor:pointer; }
   .switch button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
   form { padding:16px 20px 20px; }
-  label { display:block; font-size:14px; color:var(--muted); margin:0 0 5px; }
+  label { display:block; font-size:calc(var(--fs) * 14); color:var(--muted); margin:0 0 5px; }
   input { width:100%; margin:0 0 12px; padding:10px 12px; border:1px solid var(--line); border-radius:8px;
-          background:var(--bg); color:var(--text); font-size:16px; }
+          background:var(--bg); color:var(--text); font-size:calc(var(--fs) * 16); }
   input:focus { outline:none; border-color:var(--accent); }
   .primary { width:100%; margin-top:4px; padding:10px 12px; border:1px solid var(--accent); border-radius:8px;
-             background:var(--accent); color:var(--on-accent); font-size:16px; font-weight:600; cursor:pointer; }
+             background:var(--accent); color:var(--on-accent); font-size:calc(var(--fs) * 16); font-weight:600; cursor:pointer; }
   .primary:disabled { opacity:.55; cursor:default; }
-  .note { margin:12px 0 0; color:var(--muted); font-size:14px; }
+  .note { margin:12px 0 0; color:var(--muted); font-size:calc(var(--fs) * 14); }
   .msg { margin:0 0 12px; padding:8px 10px; border-radius:8px; background:var(--error-bg);
-         color:var(--error); font-size:15px; }
+         color:var(--error); font-size:calc(var(--fs) * 15); }
   .msg:empty { display:none; }
   .hidden { display:none; }
 </style>

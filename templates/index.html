@@ -12,9 +12,15 @@
   try {
     document.documentElement.dataset.theme = localStorage.getItem('stocky-theme') || 'dark';
   } catch { document.documentElement.dataset.theme = 'dark'; }
+  // Text size (Options → Appearance) scales every font through --fs.
+  try {
+    const size = Number(JSON.parse(localStorage.getItem('stocky-prefs') || '{}').textSize);
+    if (size > 0) document.documentElement.style.setProperty('--fs', size + 'px');
+  } catch {}
 </script>
 <style>
   :root {
+    --fs:1px;               /* text size: Options → Appearance */
     color-scheme: dark;
     --mono:"UbuntuMono Nerd Font Mono", "UbuntuMono Nerd Font",
            "JetBrainsMono Nerd Font Mono", "JetBrainsMono Nerd Font",
@@ -66,7 +72,7 @@
   }
   * { box-sizing: border-box; }
   html { scroll-padding-top:130px; }
-  body { margin:0; font:17px/1.55 var(--mono);
+  body { margin:0; font:calc(var(--fs) * 17)/1.55 var(--mono);
          background:var(--bg); color:var(--text); }
   button, input, select, textarea { font-family: var(--mono); }
 
@@ -76,12 +82,12 @@
   header { padding:12px 20px; }
   .brand { display:flex; align-items:center; gap:11px; }
   .brand .brand-icon { width:36px; height:36px; display:block; color:var(--accent); }
-  header h1 { margin:0; font-size:24px; letter-spacing:.01em; }
+  header h1 { margin:0; font-size:calc(var(--fs) * 24); letter-spacing:.01em; }
   .head-row { display:flex; align-items:center; justify-content:space-between; gap:16px; }
   .head-actions { display:flex; align-items:center; gap:10px; }
   .theme-btn { display:flex; align-items:center; gap:7px; padding:7px 12px; border-radius:8px;
                border:1px solid var(--line); background:var(--surface); color:var(--muted);
-               font:inherit; font-size:15px; cursor:pointer; }
+               font:inherit; font-size:calc(var(--fs) * 15); cursor:pointer; }
   .theme-btn:hover { color:var(--text); border-color:var(--muted); }
   .btn-cancel { display:flex; align-items:center; justify-content:center; width:40px; height:40px;
                 padding:0; border:1px solid var(--line); border-radius:8px;
@@ -99,11 +105,11 @@
               font:inherit; color:inherit; text-align:left; }
   .user-btn:hover { border-color:var(--muted); }
   .avatar { flex:none; width:32px; height:32px; border-radius:50%; background:var(--accent); color:var(--on-accent);
-            display:flex; align-items:center; justify-content:center; font-weight:700; font-size:16px;
+            display:flex; align-items:center; justify-content:center; font-weight:700; font-size:calc(var(--fs) * 16);
             text-transform:uppercase; }
   .user-meta { display:flex; flex-direction:column; min-width:0; }
-  .user-label { font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
-  .user-id { font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:230px; }
+  .user-label { font-size:calc(var(--fs) * 13); color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
+  .user-id { font-size:calc(var(--fs) * 15); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:230px; }
 
   /* Ticker bar: always visible under the title bar. */
   .toolbar { padding:8px 20px; border-top:1px solid var(--line-soft); background:var(--bg); }
@@ -112,10 +118,10 @@
   /* Run state sits beside the title, a step smaller, on the title's baseline. */
   .brand-name { display:flex; align-items:baseline; gap:10px; }
   #status { display:inline-block; }
-  #status .badge { font-size:15px; line-height:20px; padding:0 8px; }
+  #status .badge { font-size:calc(var(--fs) * 15); line-height:20px; padding:0 8px; }
   #ticker { flex:0 1 360px; width:360px; min-width:240px; height:44px; border-color:var(--line-strong); }
-  #filings { height:44px; padding:0 10px; font-size:17px; }
-  #run-btn { height:44px; min-width:96px; padding:0 22px; font-size:17px; }
+  #filings { height:44px; padding:0 10px; font-size:calc(var(--fs) * 17); }
+  #run-btn { height:44px; min-width:96px; padding:0 22px; font-size:calc(var(--fs) * 17); }
   #cancel-btn { width:44px; height:44px; border-color:var(--line-strong); }
   #ticker:focus { border-color:var(--accent); }
   #cancel-btn:hover { border-color:var(--badge-error-fg); }
@@ -131,7 +137,7 @@
   .tabs.more-left.more-right { mask-image:linear-gradient(to right, transparent, #000 40px,
                                                           #000 calc(100% - 40px), transparent); }
   .tabs button { flex:none; white-space:nowrap; scroll-snap-align:start; border:1px solid var(--line); background:var(--surface); padding:8px 16px; border-radius:8px;
-                 cursor:pointer; font-size:16px; color:var(--muted); }
+                 cursor:pointer; font-size:calc(var(--fs) * 16); color:var(--muted); }
   .tabs button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
   .tabs button.tab-icon { display:flex; align-items:center; justify-content:center; padding:8px 11px; }
   .tabs #tab-recent { margin-left:auto; }
@@ -139,16 +145,16 @@
   .card { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:18px; margin-bottom:16px; }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
   input[type=text] { flex:1; min-width:160px; padding:10px 12px; border:1px solid var(--line);
-                     border-radius:8px; font-size:17px; text-transform:uppercase;
+                     border-radius:8px; font-size:calc(var(--fs) * 17); text-transform:uppercase;
                      background:var(--surface); color:var(--text); }
   input[type=text]::placeholder { color:var(--muted); text-transform:none; }
   input[type=text]:focus, select:focus { outline:none; border-color:var(--accent); }
   select, button.primary { padding:10px 12px; border:1px solid var(--line); border-radius:8px;
-                           font-size:16px; background:var(--surface); color:var(--text); }
+                           font-size:calc(var(--fs) * 16); background:var(--surface); color:var(--text); }
   button.primary { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600;
                    cursor:pointer; }
   button.primary:disabled { opacity:.55; cursor:default; }
-  .badge { display:inline-block; padding:2px 9px; border-radius:999px; font-size:14px; font-weight:600; }
+  .badge { display:inline-block; padding:2px 9px; border-radius:999px; font-size:calc(var(--fs) * 14); font-weight:600; }
   .queued { background:var(--badge-queued-bg); color:var(--badge-queued-fg); }
   .running { background:var(--badge-running-bg); color:var(--badge-running-fg); }
   .done { background:var(--badge-done-bg); color:var(--badge-done-fg); }
@@ -162,7 +168,7 @@
   figure img { width:100%; border-radius:6px; display:block; background:var(--surface); }
   /* Charts: an index, then each chart as wide as the screen allows (or a grid). */
   .chart-index:empty { display:none; }
-  .chart-index ol { margin:0; padding-left:26px; font-size:16px; line-height:1.9; }
+  .chart-index ol { margin:0; padding-left:26px; font-size:calc(var(--fs) * 16); line-height:1.9; }
   .chart-index .windows { color:var(--muted); }
   /* Chart layout: two joined buttons, exactly one lit. */
   .view-seg { display:flex; border:1px solid var(--line); border-radius:7px; overflow:hidden; }
@@ -177,7 +183,7 @@
   .charts-full { display:flex; flex-direction:column; gap:16px; position:relative; left:50%;
                  width:min(calc(100vw - 40px), 1600px); transform:translateX(-50%); }
   .charts-full figure, .grid figure { scroll-margin-top:150px; }
-  figcaption { display:flex; justify-content:space-between; font-size:14px; color:var(--muted);
+  figcaption { display:flex; justify-content:space-between; font-size:calc(var(--fs) * 14); color:var(--muted);
                margin-top:8px; }
   a { color:var(--accent); text-decoration:none; }
   a:hover { text-decoration:underline; }
@@ -186,7 +192,7 @@
                  border-bottom:1px solid var(--line-soft); }
   ul.recent li:last-child { border-bottom:0; }
   ul.recent .t { font-weight:600; cursor:pointer; }
-  .muted { color:var(--muted); font-size:15px; }
+  .muted { color:var(--muted); font-size:calc(var(--fs) * 15); }
   .hidden { display:none; }
 
   /* Panels: shared chrome for Run, Recent and Simulation. */
@@ -195,10 +201,10 @@
   .panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px;
                 min-height:52px; padding:0 18px; background:var(--bar);
                 border-bottom:1px solid var(--line); flex-wrap:wrap; }
-  .panel-title { font-size:16px; font-weight:600; letter-spacing:.02em; }
+  .panel-title { font-size:calc(var(--fs) * 16); font-weight:600; letter-spacing:.02em; }
   .panel-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
   .panel-btn { padding:7px 14px; border:1px solid var(--line); border-radius:7px;
-               background:var(--bar); color:var(--muted); font-size:15px; cursor:pointer; }
+               background:var(--bar); color:var(--muted); font-size:calc(var(--fs) * 15); cursor:pointer; }
   .panel-btn:hover { color:var(--text); border-color:var(--muted); }
   .panel-btn.icon-btn { display:flex; align-items:center; justify-content:center; padding:6px 8px; }
   .panel-btn.icon-btn svg { width:18px; height:18px; display:block; }
@@ -210,16 +216,16 @@
 
   /* Simulation: market data left of the chart, projection underneath. */
   .sim-row { display:grid; grid-template-columns:minmax(0,1fr) 250px; gap:20px; align-items:start; }
-  .sim-section h3, .sim-market h3 { margin:0 0 12px; font-size:14px; color:var(--muted); font-weight:600;
+  .sim-section h3, .sim-market h3 { margin:0 0 12px; font-size:calc(var(--fs) * 14); color:var(--muted); font-weight:600;
                                     text-transform:uppercase; letter-spacing:.04em; }
-  .sim-meta { color:var(--muted); font-size:14px; margin:0 0 10px; }
+  .sim-meta { color:var(--muted); font-size:calc(var(--fs) * 14); margin:0 0 10px; }
   .sim-chart svg { display:block; width:100%; height:auto; cursor:crosshair; touch-action:none; }
   .sim-controls { display:flex; gap:6px; flex-wrap:wrap; margin-top:12px; }
   .sim-controls button { padding:5px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bar);
-                         color:var(--muted); font-size:14px; cursor:pointer; }
+                         color:var(--muted); font-size:calc(var(--fs) * 14); cursor:pointer; }
   .sim-controls button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
   .sim-past { align-items:center; justify-content:space-between; }
-  .sim-hint { color:var(--muted); font-size:14px; }
+  .sim-hint { color:var(--muted); font-size:calc(var(--fs) * 14); }
   .sim-hint b { color:var(--text); font-weight:600; }
   .sim-controls #sim-clear[hidden] { display:none; }
   .sim-stats { display:block; }
@@ -232,24 +238,24 @@
   .sim-summary { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0 20px; }
   .sim-years { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:0 20px;
                margin-top:12px; padding-top:10px; border-top:1px solid var(--line-soft); }
-  .sim-years .stat { border-bottom:0; padding:4px 0; font-size:14px; }
+  .sim-years .stat { border-bottom:0; padding:4px 0; font-size:calc(var(--fs) * 14); }
   .sim-years .stat b { font-weight:500; color:var(--muted); }
   .stat { display:flex; justify-content:space-between; gap:12px; padding:7px 0;
-          border-bottom:1px solid var(--line-soft); font-size:15px; }
+          border-bottom:1px solid var(--line-soft); font-size:calc(var(--fs) * 15); }
   .stat:last-child { border-bottom:0; }
   .stat span:first-child { color:var(--muted); }
   .stat b { font-weight:600; }
   .stat[title], td[title] { cursor:help; }
   .sim-section { margin-top:20px; padding-top:18px; border-top:1px solid var(--line); }
   .sim-form { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; align-items:end; }
-  .sim-form label { display:block; font-size:14px; color:var(--muted); margin:0 0 5px; }
+  .sim-form label { display:block; font-size:calc(var(--fs) * 14); color:var(--muted); margin:0 0 5px; }
   .sim-form input { width:100%; padding:8px 10px; border:1px solid var(--line);
-                    border-radius:7px; background:var(--bar); color:var(--text); font-size:16px; }
+                    border-radius:7px; background:var(--bar); color:var(--text); font-size:calc(var(--fs) * 16); }
   .sim-mode { display:flex; gap:6px; }
   .sim-mode button { flex:1; padding:8px; border:1px solid var(--line); border-radius:7px;
-                     background:var(--bar); color:var(--muted); font-size:14px; cursor:pointer; }
+                     background:var(--bar); color:var(--muted); font-size:calc(var(--fs) * 14); cursor:pointer; }
   .sim-mode button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
-  .sim-note { color:var(--muted); font-size:14px; margin:12px 0 0; }
+  .sim-note { color:var(--muted); font-size:calc(var(--fs) * 14); margin:12px 0 0; }
   @media (max-width:820px) {
     .sim-row { grid-template-columns:1fr; }
   }
@@ -260,7 +266,7 @@
   }
 
   /* Charts tab: one pinned ticker, chart index in the panel, charts below. */
-  .graph-progress { margin:0; color:var(--muted); font-size:15px; overflow:hidden;
+  .graph-progress { margin:0; color:var(--muted); font-size:calc(var(--fs) * 15); overflow:hidden;
                     text-overflow:ellipsis; white-space:nowrap; }
   .graph-progress:empty { display:none; }
   .graph-progress.is-error { color:var(--badge-error-fg); white-space:pre-wrap; }
@@ -268,12 +274,12 @@
 
   /* Terminal body: same panel chrome, monospace log. */
   .term-body { max-height:360px; overflow:auto;
-               font:17px/1.7 var(--mono); color:var(--text); }
+               font:calc(var(--fs) * 17)/1.7 var(--mono); color:var(--text); }
   .term-log { margin:0; font:inherit; color:inherit; white-space:pre-wrap; word-break:break-word; }
   .term-dim { color:var(--muted); }
   .term-ok { color:var(--green); }
   @media (max-width:600px) {
-    .term-body { font-size:16px; }
+    .term-body { font-size:calc(var(--fs) * 16); }
     header { padding:10px 14px; }
     .toolbar { padding:8px 14px; }
     /* One row on phones: the ticker box takes what is left. */
@@ -287,21 +293,21 @@
     .head-actions { gap:8px; }
     .brand { gap:8px; }
     .brand .brand-icon { width:30px; height:30px; }
-    header h1 { font-size:22px; }
+    header h1 { font-size:calc(var(--fs) * 22); }
   }
 
   /* Screener: ticker input plus a sortable results table. */
   textarea { width:100%; min-height:88px; padding:10px 12px; border:1px solid var(--line);
              border-radius:8px; background:var(--surface); color:var(--text);
-             font-size:16px; resize:vertical; }
+             font-size:calc(var(--fs) * 16); resize:vertical; }
   textarea::placeholder { color:var(--muted); }
   textarea:focus { outline:none; border-color:var(--accent); }
   .screen-actions { margin-top:10px; }
   .table-wrap { overflow-x:auto; }
-  table.data { width:100%; border-collapse:collapse; font-size:15px; }
+  table.data { width:100%; border-collapse:collapse; font-size:calc(var(--fs) * 15); }
   table.data th, table.data td { padding:8px 10px; text-align:right; white-space:nowrap;
                                  border-bottom:1px solid var(--line-soft); }
-  table.data th { color:var(--muted); font-size:14px; font-weight:600; text-transform:uppercase;
+  table.data th { color:var(--muted); font-size:calc(var(--fs) * 14); font-weight:600; text-transform:uppercase;
                   letter-spacing:.03em; cursor:pointer; user-select:none; }
   table.data th:hover { color:var(--text); }
   table.data th:first-child, table.data td:first-child { text-align:left; }
@@ -309,9 +315,9 @@
   table.data tbody tr:last-child td { border-bottom:0; }
   table.data td.muted { text-align:center; padding:16px 10px; }
   #screen-table th, #screen-table td { padding:6px 8px; }
-  .screen-notes { color:var(--muted); font-size:14px; line-height:1.6; margin:0 0 10px; }
+  .screen-notes { color:var(--muted); font-size:calc(var(--fs) * 14); line-height:1.6; margin:0 0 10px; }
   .screen-notes:empty { display:none; }
-  .row-btn { padding:3px 8px; font-size:14px; }
+  .row-btn { padding:3px 8px; font-size:calc(var(--fs) * 14); }
 
   /* Options: a small centred dialog; vertical tabs left, sections right. */
   .opt-backdrop { position:fixed; inset:0; z-index:60; display:flex; align-items:center; justify-content:center;
@@ -324,7 +330,7 @@
   .opt-top { display:flex; gap:8px; align-items:center; padding:10px 12px; background:var(--bar);
              border-bottom:1px solid var(--line); }
   .opt-top input { flex:1; min-width:0; padding:8px 11px; border:1px solid var(--line); border-radius:8px;
-                   background:var(--bg); color:var(--text); font-size:16px; }
+                   background:var(--bg); color:var(--text); font-size:calc(var(--fs) * 16); }
   .opt-top input::placeholder { color:var(--muted); }
   .opt-top input:focus, .opt input:focus { outline:none; border-color:var(--accent); }
   .opt-close { flex:none; display:flex; align-items:center; justify-content:center; width:36px; height:36px;
@@ -336,37 +342,48 @@
   .opt-tabs { flex:none; width:150px; display:flex; flex-direction:column; gap:4px; padding:12px 8px;
               border-right:1px solid var(--line); background:var(--bar); }
   .opt-tabs button { text-align:left; padding:8px 10px; border:0; border-radius:7px; background:none;
-                     color:var(--muted); font-size:15px; cursor:pointer; }
+                     color:var(--muted); font-size:calc(var(--fs) * 15); cursor:pointer; }
   .opt-tabs button:hover { color:var(--text); }
   .opt-tabs button.active { background:var(--accent); color:var(--on-accent); font-weight:600; }
   .opt-panes { flex:1; min-width:0; overflow:auto; padding:14px 18px; }
-  .opt-pane h2 { margin:0 0 4px; font-size:14px; font-weight:600; text-transform:uppercase;
+  .opt-pane h2 { margin:0 0 4px; font-size:calc(var(--fs) * 14); font-weight:600; text-transform:uppercase;
                  letter-spacing:.04em; color:var(--muted); }
   .opt-pane + .opt-pane { margin-top:18px; }
   .opt-row { padding:10px 0; border-bottom:1px solid var(--line-soft); }
   .opt-row:last-child { border-bottom:0; }
-  .opt-row label, .opt-label { display:block; font-size:14px; color:var(--muted); margin:0 0 5px; }
+  .opt-row label, .opt-label { display:block; font-size:calc(var(--fs) * 14); color:var(--muted); margin:0 0 5px; }
   .opt input[type=text], .opt input[type=email], .opt input[type=password] {
     width:100%; min-width:0; padding:8px 10px; border:1px solid var(--line); border-radius:7px;
-    background:var(--bg); color:var(--text); font-size:16px; text-transform:none; }
-  .opt-hint { margin:0 0 8px; color:var(--muted); font-size:14px; }
+    background:var(--bg); color:var(--text); font-size:calc(var(--fs) * 16); text-transform:none; }
+  .opt-hint { margin:0 0 8px; color:var(--muted); font-size:calc(var(--fs) * 14); }
   .opt-hint:last-child { margin-bottom:0; }
-  .opt-msg { font-size:14px; color:var(--muted); }
+  .opt-msg { font-size:calc(var(--fs) * 14); color:var(--muted); }
   .opt-msg.is-error { color:var(--badge-error-fg); }
   .opt-actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
   .danger-btn { padding:8px 14px; border:1px solid var(--badge-error-fg); border-radius:7px;
-                background:var(--badge-error-bg); color:var(--badge-error-fg); font-size:15px;
+                background:var(--badge-error-bg); color:var(--badge-error-fg); font-size:calc(var(--fs) * 15);
                 font-weight:600; cursor:pointer; }
   .danger-btn:disabled { opacity:.45; cursor:not-allowed; }
   .seg { display:flex; gap:6px; max-width:260px; }
   .seg button { flex:1; padding:7px; border:1px solid var(--line); border-radius:7px; background:var(--bar);
-                color:var(--muted); font-size:15px; cursor:pointer; }
+                color:var(--muted); font-size:calc(var(--fs) * 15); cursor:pointer; }
   .seg button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
+  .seg-wide { max-width:420px; }
+  .opt-select { min-width:200px; background:var(--bg); }
+  .opt input.opt-num { width:160px; padding:8px 10px; border:1px solid var(--line); border-radius:7px;
+                       background:var(--bg); color:var(--text); font-size:calc(var(--fs) * 16); }
+  .opt-order { margin:0 0 10px; padding:0; list-style:none; max-width:320px; }
+  .opt-order li { display:flex; align-items:center; gap:6px; padding:3px 0; font-size:calc(var(--fs) * 15); }
+  .opt-order li span { flex:1; }
+  .opt-order button { padding:2px 9px; border:1px solid var(--line); border-radius:6px; background:var(--bar);
+                      color:var(--muted); cursor:pointer; font-size:calc(var(--fs) * 14); }
+  .opt-order button:hover:not(:disabled) { color:var(--text); border-color:var(--muted); }
+  .opt-order button:disabled { opacity:.35; cursor:default; }
   .opt-confirm { flex:1; overflow:auto; padding:22px 24px; }
-  .opt-confirm h2 { margin:0 0 8px; font-size:19px; color:var(--badge-error-fg); }
-  .opt-confirm p { margin:0 0 10px; font-size:15px; }
-  .opt-confirm ul { margin:0 0 16px; padding-left:18px; color:var(--muted); font-size:15px; }
-  .opt-confirm label { display:block; font-size:14px; color:var(--muted); margin:0 0 5px; }
+  .opt-confirm h2 { margin:0 0 8px; font-size:calc(var(--fs) * 19); color:var(--badge-error-fg); }
+  .opt-confirm p { margin:0 0 10px; font-size:calc(var(--fs) * 15); }
+  .opt-confirm ul { margin:0 0 16px; padding-left:18px; color:var(--muted); font-size:calc(var(--fs) * 15); }
+  .opt-confirm label { display:block; font-size:calc(var(--fs) * 14); color:var(--muted); margin:0 0 5px; }
   .opt-confirm input { margin-bottom:12px; }
   @media (max-width:600px) {
     .opt-tabs { width:112px; }
@@ -381,19 +398,19 @@
              background:var(--surface-2); border:1px solid var(--line); border-radius:10px;
              box-shadow:0 18px 44px rgba(0,0,0,.35); overflow:hidden; }
   .dropbar.open { transform:translate(-50%, 12px); visibility:visible; transition:transform .25s ease; }
-  .dropbar-row { display:flex; align-items:center; gap:10px 12px; padding:10px 14px; font-size:15px; flex-wrap:wrap; }
+  .dropbar-row { display:flex; align-items:center; gap:10px 12px; padding:10px 14px; font-size:calc(var(--fs) * 15); flex-wrap:wrap; }
   .dropbar-text { flex:1; min-width:200px; }
-  .dropbar-count { color:var(--muted); font-size:14px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .dropbar-count { color:var(--muted); font-size:calc(var(--fs) * 14); font-variant-numeric:tabular-nums; white-space:nowrap; }
   .dropbar-progress { height:3px; background:var(--accent); transform-origin:left; }
   .dropbar.open .dropbar-progress { animation:drain 3s linear forwards; }
   @keyframes drain { to { transform:scaleX(0); } }
 
   /* Home: the latest search at a glance. */
   .home-title { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:6px; }
-  .home-title b { font-size:24px; }
+  .home-title b { font-size:calc(var(--fs) * 24); }
   .home-grid { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr); gap:0 28px; }
   .home-block { margin-top:18px; padding-top:14px; border-top:1px solid var(--line); }
-  .home-block h3 { margin:0 0 10px; font-size:14px; color:var(--muted); font-weight:600;
+  .home-block h3 { margin:0 0 10px; font-size:calc(var(--fs) * 14); color:var(--muted); font-weight:600;
                    text-transform:uppercase; letter-spacing:.04em; }
   .home-stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:0 20px; }
   .home-rank { list-style:none; margin:0 0 8px; padding:0; }
@@ -401,11 +418,11 @@
   .home-rank li .r { color:var(--muted); min-width:3.5em; font-variant-numeric:tabular-nums; }
   .home-rank li.me { background:var(--accent-soft); font-weight:700; }
   .home-rank a { color:var(--text); }
-  .home-more { font-size:15px; color:var(--muted); }
+  .home-more { font-size:calc(var(--fs) * 15); color:var(--muted); }
   .home-charts { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:10px; }
   .home-charts figure { padding:6px; cursor:pointer; }
   .home-charts figure:hover { border-color:var(--muted); }
-  .home-charts figcaption { margin-top:4px; font-size:13px; }
+  .home-charts figcaption { margin-top:4px; font-size:calc(var(--fs) * 13); }
   @media (max-width:820px) { .home-grid { grid-template-columns:1fr; } }
 
   /* Insider trades reuse the stat rows for a compact list. */
@@ -414,7 +431,7 @@
   .news-list li { padding:11px 0; border-bottom:1px solid var(--line-soft); }
   .news-list li:last-child { border-bottom:0; }
   .news-list a { color:var(--text); font-weight:600; line-height:1.4; }
-  .news-meta { color:var(--muted); font-size:14px; margin-top:3px; }
+  .news-meta { color:var(--muted); font-size:calc(var(--fs) * 14); margin-top:3px; }
   .insider-list .stat:first-child { padding-top:0; }
   .insider-list .who { color:var(--muted); }
   .insider-list .who b { color:var(--text); font-weight:600; }
@@ -830,7 +847,9 @@
     <div class="opt-main" id="opt-main">
       <nav class="opt-tabs" role="tablist" aria-orientation="vertical">
         <button data-tab="account" role="tab" onclick="showOptTab('account')">Account</button>
+        <button data-tab="general" role="tab" onclick="showOptTab('general')">General</button>
         <button data-tab="appearance" role="tab" onclick="showOptTab('appearance')">Appearance</button>
+        <button data-tab="defaults" role="tab" onclick="showOptTab('defaults')">Defaults</button>
         <button data-tab="data" role="tab" onclick="showOptTab('data')">Data</button>
       </nav>
       <div class="opt-panes">
@@ -871,6 +890,25 @@
             <button class="danger-btn" onclick="openConfirm('account')">Delete account…</button>
           </div>
         </section>
+        <section class="opt-pane" data-pane="general">
+          <h2>General</h2>
+          <div class="opt-row" data-search="start open startup landing first default tab page">
+            <label for="pref-tab">Tab on open</label>
+            <select id="pref-tab" class="opt-select" onchange="setPref('tab', this.value)"></select>
+          </div>
+          <div class="opt-row" data-search="tabs order arrange move sort reorder">
+            <span class="opt-label">Tab order</span>
+            <ol id="pref-order" class="opt-order"></ol>
+            <button class="panel-btn" onclick="setPref('tabOrder', PREF_DEFAULTS.tabOrder.slice())">Reset order</button>
+          </div>
+          <div class="opt-row" data-search="filings 10-k number years default run">
+            <label for="pref-filings">Default number of 10-K filings</label>
+            <select id="pref-filings" class="opt-select" onchange="setPref('filings', this.value)">
+              <option value="3">3</option><option value="5">5</option>
+              <option value="10">10</option><option value="20">20</option>
+            </select>
+          </div>
+        </section>
         <section class="opt-pane" data-pane="appearance">
           <h2>Appearance</h2>
           <div class="opt-row" data-search="theme dark light mode colour color">
@@ -879,6 +917,68 @@
               <button id="opt-dark" onclick="setTheme('dark')">Dark</button>
               <button id="opt-light" onclick="setTheme('light')">Light</button>
             </div>
+          </div>
+          <div class="opt-row" data-search="text font size bigger smaller zoom">
+            <span class="opt-label">Text size</span>
+            <div class="seg seg-wide" id="pref-size">
+              <button data-value="0.88" onclick="setPref('textSize', this.dataset.value)">Small</button>
+              <button data-value="1" onclick="setPref('textSize', this.dataset.value)">Normal</button>
+              <button data-value="1.12" onclick="setPref('textSize', this.dataset.value)">Large</button>
+              <button data-value="1.25" onclick="setPref('textSize', this.dataset.value)">Larger</button>
+            </div>
+          </div>
+          <div class="opt-row" data-search="date format day month year">
+            <label for="pref-date">Date format</label>
+            <select id="pref-date" class="opt-select" onchange="setPref('date', this.value)">
+              <option value="dmy">31/12/2026</option>
+              <option value="mdy">12/31/2026</option>
+              <option value="ymd">2026-12-31</option>
+            </select>
+          </div>
+          <div class="opt-row" data-search="number format decimal thousands separator comma point money">
+            <label for="pref-number">Number format</label>
+            <select id="pref-number" class="opt-select" onchange="setPref('number', this.value)">
+              <option value="en-US">1,234,567.89</option>
+              <option value="de-DE">1.234.567,89</option>
+              <option value="fr-FR">1 234 567,89</option>
+            </select>
+          </div>
+        </section>
+        <section class="opt-pane" data-pane="defaults">
+          <h2>Defaults</h2>
+          <div class="opt-row" data-search="insiders insider trades period since months years form 4">
+            <label for="pref-insider">Insiders: show trades from the last</label>
+            <select id="pref-insider" class="opt-select" onchange="setPref('insiderMonths', Number(this.value))">
+              <option value="1">1 month</option><option value="3">3 months</option>
+              <option value="6">6 months</option><option value="12">1 year</option>
+              <option value="24">2 years</option><option value="36">3 years</option>
+            </select>
+          </div>
+          <div class="opt-row" data-search="simulation investment amount money invest">
+            <label for="pref-sim-amount">Simulation: investment</label>
+            <input id="pref-sim-amount" type="number" min="0" step="100" class="opt-num"
+                   onchange="setPref('simAmount', Math.max(0, Number(this.value) || 0))">
+          </div>
+          <div class="opt-row" data-search="simulation horizon years projection">
+            <label for="pref-sim-years">Simulation: horizon (years)</label>
+            <input id="pref-sim-years" type="number" min="0.25" step="0.25" class="opt-num"
+                   onchange="setPref('simYears', Math.max(0.25, Number(this.value) || 4))">
+          </div>
+          <div class="opt-row" data-search="simulation dividends cash payout reinvest">
+            <span class="opt-label">Simulation: dividends</span>
+            <div class="seg" id="pref-sim-mode">
+              <button data-value="cash" onclick="setPref('simMode', 'cash')">Cash payout</button>
+              <button data-value="reinvest" onclick="setPref('simMode', 'reinvest')">Reinvest</button>
+            </div>
+          </div>
+          <div class="opt-row" data-search="simulation price range period chart history">
+            <label for="pref-sim-range">Simulation: price range</label>
+            <select id="pref-sim-range" class="opt-select" onchange="setPref('simRange', this.value)">
+              <option value="1mo">1 month</option><option value="4mo">4 months</option>
+              <option value="6mo">6 months</option><option value="1y">1 year</option>
+              <option value="3y">3 years</option><option value="5y">5 years</option>
+              <option value="10y">10 years</option><option value="max">max</option>
+            </select>
           </div>
         </section>
         <section class="opt-pane" data-pane="data">
@@ -968,6 +1068,106 @@ try {
 } catch {}
 const LIVE = {};
 
+/* Preferences ---------------------------------------------------------------- */
+
+// Per-browser settings from Options. One JSON blob; bad values fall back.
+const TAB_NAMES = { home: 'Home', graph: 'Charts', insiders: 'Insiders', screener: 'Screener',
+                    simulation: 'Simulation', news: 'News' };
+const PREF_DEFAULTS = {
+  tab: 'home', tabOrder: ['home', 'graph', 'insiders', 'screener', 'simulation', 'news'],
+  filings: '20', textSize: '1', date: 'dmy', number: 'en-US',
+  insiderMonths: 12, simAmount: 1000, simYears: 4, simMode: 'cash', simRange: '1y',
+};
+const PREF_CHOICES = {
+  tab: Object.keys(TAB_NAMES), filings: ['3', '5', '10', '20'], textSize: ['0.88', '1', '1.12', '1.25'],
+  date: ['dmy', 'mdy', 'ymd'], number: ['en-US', 'de-DE', 'fr-FR'], insiderMonths: [1, 3, 6, 12, 24, 36],
+  simMode: ['cash', 'reinvest'], simRange: ['1mo', '4mo', '6mo', '1y', '3y', '5y', '10y', 'max'],
+};
+const PREFS = { ...PREF_DEFAULTS };
+try {
+  const saved = JSON.parse(localStorage.getItem('stocky-prefs') || '{}');
+  for (const [key, value] of Object.entries(saved)) {
+    if (!(key in PREF_DEFAULTS)) continue;
+    if (PREF_CHOICES[key] && !PREF_CHOICES[key].includes(value)) continue;
+    if (key === 'tabOrder' && !(Array.isArray(value) && value.length === PREF_DEFAULTS.tabOrder.length
+        && PREF_DEFAULTS.tabOrder.every(tab => value.includes(tab)))) continue;
+    if ((key === 'simAmount' || key === 'simYears') && !(Number(value) >= 0)) continue;
+    PREFS[key] = value;
+  }
+} catch {}
+
+function setPref(key, value) {
+  PREFS[key] = value;
+  try { localStorage.setItem('stocky-prefs', JSON.stringify(PREFS)); } catch {}
+  applyPrefs(key);
+}
+
+// Push the preferences into the page. `changed` limits the work to one key.
+function applyPrefs(changed = '') {
+  const all = !changed;
+  if (all || changed === 'textSize') document.documentElement.style.setProperty('--fs', PREFS.textSize + 'px');
+  if (all || changed === 'tabOrder') {
+    const strip = $('.tabs');
+    for (const tab of PREFS.tabOrder) strip.insertBefore($(`#tab-${tab}`), $('#tab-recent'));
+    syncTabFades();
+  }
+  if (all || changed === 'filings') $('#filings').value = PREFS.filings;
+  if (changed === 'insiderMonths') {
+    INSIDER.months = PREFS.insiderMonths;
+    $('#insider-months').value = String(INSIDER.months);
+    renderInsiders();
+  }
+  if (changed === 'date' || changed === 'number') rerenderAll();
+  if (changed.startsWith('sim') && !SIM.backtest) {
+    // Takes effect now unless a backtest is open, and on every reset.
+    applySimPrefs();
+    if (changed === 'simRange' && SIM.ticker) loadSimulation(true);
+    else renderSimulation();
+  }
+  syncPrefControls();
+}
+
+function syncPrefControls() {
+  $('#pref-tab').innerHTML = PREFS.tabOrder.map(tab =>
+    `<option value="${tab}">${TAB_NAMES[tab]}</option>`).join('');
+  $('#pref-tab').value = PREFS.tab;
+  $('#pref-order').innerHTML = PREFS.tabOrder.map((tab, i) => `<li><span>${TAB_NAMES[tab]}</span>
+      <button onclick="moveTab(${i}, -1)" ${i ? '' : 'disabled'} title="Move up" aria-label="Move ${TAB_NAMES[tab]} earlier">↑</button>
+      <button onclick="moveTab(${i}, 1)" ${i < PREFS.tabOrder.length - 1 ? '' : 'disabled'} title="Move down" aria-label="Move ${TAB_NAMES[tab]} later">↓</button></li>`).join('');
+  $('#pref-filings').value = PREFS.filings;
+  document.querySelectorAll('#pref-size button').forEach(button =>
+    button.classList.toggle('active', button.dataset.value === PREFS.textSize));
+  $('#pref-date').value = PREFS.date;
+  $('#pref-number').value = PREFS.number;
+  $('#pref-insider').value = String(PREFS.insiderMonths);
+  $('#pref-sim-amount').value = PREFS.simAmount;
+  $('#pref-sim-years').value = PREFS.simYears;
+  document.querySelectorAll('#pref-sim-mode button').forEach(button =>
+    button.classList.toggle('active', button.dataset.value === PREFS.simMode));
+  $('#pref-sim-range').value = PREFS.simRange;
+}
+
+function moveTab(index, step) {
+  const order = PREFS.tabOrder.slice();
+  const to = index + step;
+  if (to < 0 || to >= order.length) return;
+  [order[index], order[to]] = [order[to], order[index]];
+  setPref('tabOrder', order);
+}
+
+// Dates and numbers are formatted at render time: redraw whatever is showing.
+function rerenderAll() {
+  renderScreener();
+  renderHome();
+  renderInsiders();
+  if (SIM.data) { renderStats(); renderSimulation(); }
+  if (!$('#pane-recent').classList.contains('hidden')) loadRecent();
+  // Drop-down labels carry dates too.
+  document.querySelectorAll('#insider-run option, #news-run option, #sim-run option').forEach(option => {
+    if (option.dataset.modified) option.textContent = `${option.value} · ${fmtDate(option.dataset.modified)}`;
+  });
+}
+
 // All requests go through this wrapper so "cancel" can abort every in-flight
 // call at once. Aborted calls never settle: a detached handler must not write
 // stale results into the freshly reset interface.
@@ -1030,7 +1230,9 @@ function resetUi() {
 
   $('#ticker').value = '';
   updateMode();
-  $('#filings').value = '20';
+  $('#filings').value = PREFS.filings;
+  INSIDER.months = PREFS.insiderMonths;
+  $('#insider-months').value = String(INSIDER.months);
   $('#run-btn').disabled = false;
   setStatus('idle', 'idle');
   $('#insider-status').textContent = '';
@@ -1051,7 +1253,7 @@ function resetUi() {
   resetSimulation();
   closeDropbar();
   suggestTickers();
-  showTab('home');
+  showTab(PREFS.tab);
   // The pinned graph is kept; re-read its state now that the jobs are gone.
   GRAPH.log = false;
   renderGraph();
@@ -1063,8 +1265,6 @@ function resetSimulation() {
   SIM.ticker = '';
   SIM.data = null;
   SIM.backtest = null;
-  SIM.mode = 'cash';
-  SIM.range = '1y';
   SIM.seq = (SIM.seq || 0) + 1;
   const select = $('#sim-run');
   select.innerHTML = '';
@@ -1073,20 +1273,15 @@ function resetSimulation() {
   $('#sim-svg').replaceChildren();
   $('#sim-result').innerHTML = '';
   $('#sim-target').value = '';
-  $('#sim-amount').value = '1000';
-  $('#sim-years').value = '4';
   $('#sim-target').disabled = false;
   $('#sim-years').disabled = false;
   $('#sim-cash').disabled = false;
   $('#sim-reinvest').disabled = false;
-  $('#sim-cash').classList.add('active');
-  $('#sim-reinvest').classList.remove('active');
   $('#sim-clear').hidden = true;
   $('#sim-form-title').textContent = 'Your projection';
   $('#sim-hint').textContent = 'Click the chart to backtest an investment at a past date.';
   $('#sim-note').textContent = 'Future dividends hold the trailing yield, so they grow with the projected price. Estimates only; no taxes or fees.';
-  document.querySelectorAll('#sim-ranges button')
-    .forEach(button => button.classList.toggle('active', button.dataset.range === '1y'));
+  applySimPrefs();
 }
 
 /* Theme ------------------------------------------------------------------- */
@@ -1878,7 +2073,7 @@ function chartSrc(data, name) {
 
 // Every ticker drop-down reads "TICKER · last run date".
 const runOption = item =>
-  `<option value="${esc(item.ticker)}">${esc(item.ticker)} · ${fmtDate(item.modified)}</option>`;
+  `<option value="${esc(item.ticker)}" data-modified="${esc(item.modified || '')}">${esc(item.ticker)} · ${fmtDate(item.modified)}</option>`;
 
 // Run selectors follow the pinned Charts ticker whenever the pin changes (or the
 // viewer's own pick is gone); otherwise they keep the viewer's pick.
@@ -1970,18 +2165,13 @@ async function initInsiders() {
   await loadInsiderTicker();
 }
 
-// How far back the Insiders tab looks: 1 year unless the viewer picked
-// otherwise (runs collect up to 3 years).
-const INSIDER = { ticker: '', data: null, months: 12 };
-try {
-  const saved = localStorage.getItem('stocky-insider-months');
-  if ([1, 3, 6, 12, 24, 36].includes(Number(saved))) INSIDER.months = Number(saved);
-} catch {}
+// How far back the Insiders tab looks: the Options default (1 year) unless
+// changed for this visit (runs collect up to 3 years).
+const INSIDER = { ticker: '', data: null, months: PREFS.insiderMonths };
 $('#insider-months').value = String(INSIDER.months);
 
 function setInsiderMonths() {
-  INSIDER.months = Number($('#insider-months').value) || 12;
-  try { localStorage.setItem('stocky-insider-months', String(INSIDER.months)); } catch {}
+  INSIDER.months = Number($('#insider-months').value) || PREFS.insiderMonths;
   renderInsiders();
 }
 
@@ -2261,15 +2451,27 @@ function renderScreener() {
 
 /* Simulation --------------------------------------------------------------- */
 
-const SIM = { ticker: '', range: '1y', mode: 'cash', data: null, backtest: null };
+const SIM = { ticker: '', range: PREFS.simRange, mode: PREFS.simMode, data: null, backtest: null };
+
+function applySimPrefs() {
+  SIM.mode = PREFS.simMode;
+  SIM.range = PREFS.simRange;
+  $('#sim-amount').value = String(PREFS.simAmount);
+  $('#sim-years').value = String(PREFS.simYears);
+  $('#sim-cash').classList.toggle('active', SIM.mode === 'cash');
+  $('#sim-reinvest').classList.toggle('active', SIM.mode === 'reinvest');
+  document.querySelectorAll('#sim-ranges button')
+    .forEach(button => button.classList.toggle('active', button.dataset.range === SIM.range));
+}
 
 const fmtMoney = (v, currency = 'USD') => {
   if (v === null || v === undefined || Number.isNaN(v)) return '—';
   const symbol = currency === 'USD' ? '$' : esc(currency) + ' ';
-  return symbol + Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 });
+  return symbol + Number(v).toLocaleString(PREFS.number, { maximumFractionDigits: 2 });
 };
 const fmtNum = (v, digits = 2) =>
-  v === null || v === undefined || Number.isNaN(v) ? '—' : Number(v).toFixed(digits);
+  v === null || v === undefined || Number.isNaN(v) ? '—'
+    : Number(v).toLocaleString(PREFS.number, { minimumFractionDigits: digits, maximumFractionDigits: digits });
 const fmtPct = (v, digits = 1) =>
   v === null || v === undefined || Number.isNaN(v) ? '—'
     : fmtNum(Math.abs(Number(v)) <= 1 ? Number(v) * 100 : Number(v), digits) + '%';
@@ -2279,13 +2481,16 @@ const fmtRatio = (v, digits = 1) =>
 const fmtPctPoints = (v, digits = 1) =>
   v === null || v === undefined || Number.isNaN(v) ? '—' : fmtNum(v, digits) + '%';
 const fmtInt = v =>
-  v === null || v === undefined || Number.isNaN(Number(v)) ? '—' : Number(v).toLocaleString();
+  v === null || v === undefined || Number.isNaN(Number(v)) ? '—' : Number(v).toLocaleString(PREFS.number);
 const fmtDate = value => {
   const d = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(d.getTime())) return '—';
   const day = String(d.getUTCDate()).padStart(2, '0');
   const month = String(d.getUTCMonth() + 1).padStart(2, '0');
-  return `${day}/${month}/${d.getUTCFullYear()}`;
+  const year = d.getUTCFullYear();
+  if (PREFS.date === 'mdy') return `${month}/${day}/${year}`;
+  if (PREFS.date === 'ymd') return `${year}-${month}-${day}`;
+  return `${day}/${month}/${year}`;
 };
 
 function simAnnualDividend() {
@@ -2752,9 +2957,11 @@ syncTabFades();
 loadAccount();
 suggestTickers();
 setInterval(() => { if (!$('#ticker').value) suggestTickers(); }, 6000);
+applyPrefs();
+applySimPrefs();
 renderGraph();
 refreshGraph();
-showTab('home');
+showTab(PREFS.tab);
 (async () => {
   const { jobs, batch } = await (await fetch('/api/jobs')).json();
   for (const job of jobs) {
