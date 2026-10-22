@@ -1093,6 +1093,9 @@ def insiders(ticker: str):
     return jsonify(
         ticker=ticker,
         generated=payload.get("generated"),
+        # Files written before the 3-year window cover 6 months.
+        months=payload.get("months") or 6,
+        since=payload.get("since"),
         transactions=payload.get("transactions") or [],
     )
 

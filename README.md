@@ -52,7 +52,7 @@ financial_graphs/
 ├── NFLX/
 │   ├── financial_data.csv   # per-year ratio inputs/outputs
 │   ├── evaluation.csv       # per-year valuation, quality and distress scores
-│   ├── insider.json         # open-market insider buys/sells, last 6 months
+│   ├── insider.json         # open-market insider buys/sells, last 3 years
 │   ├── statements.csv       # every dimension-free primary-statement line
 │   ├── facts.csv            # every fact for each period, dimensions included
 │   ├── notes.csv            # key schedules: debt, segments, EPS, taxes, shares
@@ -112,7 +112,7 @@ Routes:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/` | The UI (Graph / Insiders / Screener / Simulation / News tabs); redirects to `/login` when signed out |
+| `GET` | `/` | The UI (Charts / Insiders / Screener / Simulation / News tabs); redirects to `/login` when signed out |
 | `GET` | `/login` | Sign-in / create-account page |
 | `POST` | `/api/signup` | `{"name","email","password"}` → creates the account and signs in |
 | `POST` | `/api/login` | `{"email","password"}` → signs in |
@@ -140,12 +140,14 @@ Routes:
 | `GET` | `/download/<ticker>/<name>` | One file |
 | `GET` | `/healthz` | Health probe |
 
-The ticker bar decides the mode. **One ticker** runs the full pipeline: graphs
-plus screener data. It is pinned to the **Graph** tab with its screener line
-(scores, ratios, Magic rank) and stays there until you press **remove** (clears
-the view only, never files) or run/open another ticker; the pin survives page
-reloads and cancel. The Graph tab is empty until then, and the pipeline log is
-hidden behind a **log** button. **Several tickers** switch to screener mode:
+The ticker bar decides the mode. **One ticker** runs the full pipeline: charts
+plus screener data. It is pinned to the **Charts** tab and stays there until you
+press **remove** (clears the view only, never files) or run/open another
+ticker; the pin survives page reloads and cancel. Its scores and ratios live in
+the **Screener** tab only. The Charts tab is empty until then, and the pipeline
+log is hidden behind a **log** button. The chart index sits inside the Charts
+panel, one line per chart (year windows side by side); the layout switch
+(full width or grid) is the joined pair of buttons left of the other actions. **Several tickers** switch to screener mode:
 data only, no charts (`--no-charts`), and the pinned graph is left as is.
 Running a single ticker that is queued as a screener job upgrades it to a graph
 run; if it is already running, a graph run is queued after it. The **Insiders**
@@ -183,21 +185,28 @@ are queued through the same serialized worker as `/api/run`. It ranks the
 watchlist with Joel Greenblatt's Magic Formula: **earnings yield** (EBIT / EV)
 and **return on capital** (EBIT / (total assets − current liabilities)); the
 combined rank is 1 + 1 for the best of both, lower is better. Each row has a
-**graphs** button that opens the ticker in the Graph tab, running the full
+**charts** button that opens the ticker in the Charts tab, running the full
 pipeline first only if it has no charts yet. Older `evaluation.csv` files without `return_on_capital` are repaired
 on the fly from `financial_data.csv` + `statements.csv`.
 
-The **Insiders** tab lists every open-market Form 4 buy/sell in the last 6
-months, newest first, in the same journal format used before, with a selector
-for successful runs. `insider.py` no longer caps transactions (it stops only at
-the 6-month window, with a 500-filing safety valve).
+The **Insiders** tab lists every open-market Form 4 buy/sell (the SEC filing
+officers, directors and 10% owners make within two business days of a trade),
+newest first, with a period selector (1 month to 3 years, default 1 year,
+remembered per browser) and a ticker selector. The count and the collection
+date share the line under the header. `insider.py` collects 3 years and does
+not cap transactions (it stops at the window, with a 1500-filing safety valve;
+`since` in `insider.json` says how far back the data really goes). Runs made
+before this collected 6 months; the tab says so and suggests re-running.
+
+Every tab's panel title is just the tab name, every refresh button is the
+circular-arrow icon, and every ticker drop-down reads `TICKER · last run date`.
 
 The **News** tab lists up to 25 articles about the company from the last 14
 days: headline, outlet and date, each linking to the original. The company name
 comes from Yahoo's search and the articles from the Google News RSS feed, in
 Google's ranking order (its "top stories", the closest free signal to
 popularity). Results are cached for 30 minutes and shared by every user;
-**refresh** fetches them again. Nothing else is derived from them.
+the refresh button fetches them again. Nothing else is derived from them.
 
 ### Tests
 

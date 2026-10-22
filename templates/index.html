@@ -66,7 +66,7 @@
   }
   * { box-sizing: border-box; }
   html { scroll-padding-top:130px; }
-  body { margin:0; font:15px/1.55 var(--mono);
+  body { margin:0; font:17px/1.55 var(--mono);
          background:var(--bg); color:var(--text); }
   button, input, select, textarea { font-family: var(--mono); }
 
@@ -76,12 +76,12 @@
   header { padding:12px 20px; }
   .brand { display:flex; align-items:center; gap:11px; }
   .brand .brand-icon { width:36px; height:36px; display:block; color:var(--accent); }
-  header h1 { margin:0; font-size:22px; letter-spacing:.01em; }
+  header h1 { margin:0; font-size:24px; letter-spacing:.01em; }
   .head-row { display:flex; align-items:center; justify-content:space-between; gap:16px; }
   .head-actions { display:flex; align-items:center; gap:10px; }
   .theme-btn { display:flex; align-items:center; gap:7px; padding:7px 12px; border-radius:8px;
                border:1px solid var(--line); background:var(--surface); color:var(--muted);
-               font:inherit; font-size:13px; cursor:pointer; }
+               font:inherit; font-size:15px; cursor:pointer; }
   .theme-btn:hover { color:var(--text); border-color:var(--muted); }
   .btn-cancel { display:flex; align-items:center; justify-content:center; width:40px; height:40px;
                 padding:0; border:1px solid var(--line); border-radius:8px;
@@ -99,11 +99,11 @@
               font:inherit; color:inherit; text-align:left; }
   .user-btn:hover { border-color:var(--muted); }
   .avatar { flex:none; width:32px; height:32px; border-radius:50%; background:var(--accent); color:var(--on-accent);
-            display:flex; align-items:center; justify-content:center; font-weight:700; font-size:14px;
+            display:flex; align-items:center; justify-content:center; font-weight:700; font-size:16px;
             text-transform:uppercase; }
   .user-meta { display:flex; flex-direction:column; min-width:0; }
-  .user-label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
-  .user-id { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:230px; }
+  .user-label { font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
+  .user-id { font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:230px; }
 
   /* Ticker bar: always visible under the title bar. */
   .toolbar { padding:8px 20px; border-top:1px solid var(--line-soft); background:var(--bg); }
@@ -112,10 +112,10 @@
   /* Run state sits beside the title, a step smaller, on the title's baseline. */
   .brand-name { display:flex; align-items:baseline; gap:10px; }
   #status { display:inline-block; }
-  #status .badge { font-size:13px; line-height:18px; padding:0 8px; }
+  #status .badge { font-size:15px; line-height:20px; padding:0 8px; }
   #ticker { flex:0 1 360px; width:360px; min-width:240px; height:44px; border-color:var(--line-strong); }
-  #filings { height:44px; padding:0 10px; font-size:15px; }
-  #run-btn { height:44px; min-width:96px; padding:0 22px; font-size:15px; }
+  #filings { height:44px; padding:0 10px; font-size:17px; }
+  #run-btn { height:44px; min-width:96px; padding:0 22px; font-size:17px; }
   #cancel-btn { width:44px; height:44px; border-color:var(--line-strong); }
   #ticker:focus { border-color:var(--accent); }
   #cancel-btn:hover { border-color:var(--badge-error-fg); }
@@ -131,23 +131,23 @@
   .tabs.more-left.more-right { mask-image:linear-gradient(to right, transparent, #000 40px,
                                                           #000 calc(100% - 40px), transparent); }
   .tabs button { flex:none; white-space:nowrap; scroll-snap-align:start; border:1px solid var(--line); background:var(--surface); padding:8px 16px; border-radius:8px;
-                 cursor:pointer; font-size:14px; color:var(--muted); }
+                 cursor:pointer; font-size:16px; color:var(--muted); }
   .tabs button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
   .tabs button.tab-icon { margin-left:auto; display:flex; align-items:center; justify-content:center; padding:8px 11px; }
   .tabs button.tab-icon svg { width:18px; height:18px; display:block; }
   .card { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:18px; margin-bottom:16px; }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
   input[type=text] { flex:1; min-width:160px; padding:10px 12px; border:1px solid var(--line);
-                     border-radius:8px; font-size:15px; text-transform:uppercase;
+                     border-radius:8px; font-size:17px; text-transform:uppercase;
                      background:var(--surface); color:var(--text); }
   input[type=text]::placeholder { color:var(--muted); text-transform:none; }
   input[type=text]:focus, select:focus { outline:none; border-color:var(--accent); }
   select, button.primary { padding:10px 12px; border:1px solid var(--line); border-radius:8px;
-                           font-size:14px; background:var(--surface); color:var(--text); }
+                           font-size:16px; background:var(--surface); color:var(--text); }
   button.primary { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600;
                    cursor:pointer; }
   button.primary:disabled { opacity:.55; cursor:default; }
-  .badge { display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:600; }
+  .badge { display:inline-block; padding:2px 9px; border-radius:999px; font-size:14px; font-weight:600; }
   .queued { background:var(--badge-queued-bg); color:var(--badge-queued-fg); }
   .running { background:var(--badge-running-bg); color:var(--badge-running-fg); }
   .done { background:var(--badge-done-bg); color:var(--badge-done-fg); }
@@ -160,15 +160,23 @@
   figure { margin:0; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:10px; }
   figure img { width:100%; border-radius:6px; display:block; background:var(--surface); }
   /* Charts: an index, then each chart as wide as the screen allows (or a grid). */
-  .chart-index-head { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:10px; }
-  .chart-index ol { margin:0; padding-left:22px; columns:2 260px; column-gap:28px; font-size:14px; line-height:1.9; }
-  .chart-index li { break-inside:avoid; }
+  .chart-index:empty { display:none; }
+  .chart-index ol { margin:0; padding-left:26px; font-size:16px; line-height:1.9; }
   .chart-index .windows { color:var(--muted); }
-  .view-toggle { display:flex; gap:6px; }
+  /* Chart layout: two joined buttons, exactly one lit. */
+  .view-seg { display:flex; border:1px solid var(--line); border-radius:7px; overflow:hidden; }
+  .view-seg[hidden], .head-sep[hidden] { display:none; }
+  .view-seg button { display:flex; align-items:center; justify-content:center; padding:6px 10px; border:0;
+                     background:var(--bar); color:var(--muted); cursor:pointer; }
+  .view-seg button + button { border-left:1px solid var(--line); }
+  .view-seg button:hover { color:var(--text); }
+  .view-seg button[aria-checked="true"] { background:var(--accent); color:var(--on-accent); }
+  .view-seg svg { width:18px; height:18px; display:block; }
+  .head-sep { width:1px; height:26px; margin:0 4px; background:var(--line-strong); }
   .charts-full { display:flex; flex-direction:column; gap:16px; position:relative; left:50%;
                  width:min(calc(100vw - 40px), 1600px); transform:translateX(-50%); }
   .charts-full figure, .grid figure { scroll-margin-top:150px; }
-  figcaption { display:flex; justify-content:space-between; font-size:12px; color:var(--muted);
+  figcaption { display:flex; justify-content:space-between; font-size:14px; color:var(--muted);
                margin-top:8px; }
   a { color:var(--accent); text-decoration:none; }
   a:hover { text-decoration:underline; }
@@ -177,7 +185,7 @@
                  border-bottom:1px solid var(--line-soft); }
   ul.recent li:last-child { border-bottom:0; }
   ul.recent .t { font-weight:600; cursor:pointer; }
-  .muted { color:var(--muted); font-size:13px; }
+  .muted { color:var(--muted); font-size:15px; }
   .hidden { display:none; }
 
   /* Panels: shared chrome for Run, Recent and Simulation. */
@@ -186,10 +194,10 @@
   .panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px;
                 min-height:52px; padding:0 18px; background:var(--bar);
                 border-bottom:1px solid var(--line); flex-wrap:wrap; }
-  .panel-title { font-size:14px; font-weight:600; letter-spacing:.02em; }
+  .panel-title { font-size:16px; font-weight:600; letter-spacing:.02em; }
   .panel-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
   .panel-btn { padding:7px 14px; border:1px solid var(--line); border-radius:7px;
-               background:var(--bar); color:var(--muted); font-size:13px; cursor:pointer; }
+               background:var(--bar); color:var(--muted); font-size:15px; cursor:pointer; }
   .panel-btn:hover { color:var(--text); border-color:var(--muted); }
   .panel-btn.icon-btn { display:flex; align-items:center; justify-content:center; padding:6px 8px; }
   .panel-btn.icon-btn svg { width:18px; height:18px; display:block; }
@@ -201,16 +209,16 @@
 
   /* Simulation: market data left of the chart, projection underneath. */
   .sim-row { display:grid; grid-template-columns:minmax(0,1fr) 250px; gap:20px; align-items:start; }
-  .sim-section h3, .sim-market h3 { margin:0 0 12px; font-size:12px; color:var(--muted); font-weight:600;
+  .sim-section h3, .sim-market h3 { margin:0 0 12px; font-size:14px; color:var(--muted); font-weight:600;
                                     text-transform:uppercase; letter-spacing:.04em; }
-  .sim-meta { color:var(--muted); font-size:12px; margin:0 0 10px; }
+  .sim-meta { color:var(--muted); font-size:14px; margin:0 0 10px; }
   .sim-chart svg { display:block; width:100%; height:auto; cursor:crosshair; touch-action:none; }
   .sim-controls { display:flex; gap:6px; flex-wrap:wrap; margin-top:12px; }
   .sim-controls button { padding:5px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bar);
-                         color:var(--muted); font-size:12px; cursor:pointer; }
+                         color:var(--muted); font-size:14px; cursor:pointer; }
   .sim-controls button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
   .sim-past { align-items:center; justify-content:space-between; }
-  .sim-hint { color:var(--muted); font-size:12px; }
+  .sim-hint { color:var(--muted); font-size:14px; }
   .sim-hint b { color:var(--text); font-weight:600; }
   .sim-controls #sim-clear[hidden] { display:none; }
   .sim-stats { display:block; }
@@ -223,24 +231,24 @@
   .sim-summary { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0 20px; }
   .sim-years { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:0 20px;
                margin-top:12px; padding-top:10px; border-top:1px solid var(--line-soft); }
-  .sim-years .stat { border-bottom:0; padding:4px 0; font-size:12px; }
+  .sim-years .stat { border-bottom:0; padding:4px 0; font-size:14px; }
   .sim-years .stat b { font-weight:500; color:var(--muted); }
   .stat { display:flex; justify-content:space-between; gap:12px; padding:7px 0;
-          border-bottom:1px solid var(--line-soft); font-size:13px; }
+          border-bottom:1px solid var(--line-soft); font-size:15px; }
   .stat:last-child { border-bottom:0; }
   .stat span:first-child { color:var(--muted); }
   .stat b { font-weight:600; }
   .stat[title], td[title] { cursor:help; }
   .sim-section { margin-top:20px; padding-top:18px; border-top:1px solid var(--line); }
   .sim-form { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; align-items:end; }
-  .sim-form label { display:block; font-size:12px; color:var(--muted); margin:0 0 5px; }
+  .sim-form label { display:block; font-size:14px; color:var(--muted); margin:0 0 5px; }
   .sim-form input { width:100%; padding:8px 10px; border:1px solid var(--line);
-                    border-radius:7px; background:var(--bar); color:var(--text); font-size:14px; }
+                    border-radius:7px; background:var(--bar); color:var(--text); font-size:16px; }
   .sim-mode { display:flex; gap:6px; }
   .sim-mode button { flex:1; padding:8px; border:1px solid var(--line); border-radius:7px;
-                     background:var(--bar); color:var(--muted); font-size:12px; cursor:pointer; }
+                     background:var(--bar); color:var(--muted); font-size:14px; cursor:pointer; }
   .sim-mode button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
-  .sim-note { color:var(--muted); font-size:12px; margin:12px 0 0; }
+  .sim-note { color:var(--muted); font-size:14px; margin:12px 0 0; }
   @media (max-width:820px) {
     .sim-row { grid-template-columns:1fr; }
   }
@@ -250,22 +258,21 @@
     .sim-form { grid-template-columns:1fr 1fr; }
   }
 
-  /* Graph tab: one pinned ticker, its screener line, charts below. */
-  .graph-progress { margin:0; color:var(--muted); font-size:13px; overflow:hidden;
+  /* Charts tab: one pinned ticker, chart index in the panel, charts below. */
+  .graph-progress { margin:0; color:var(--muted); font-size:15px; overflow:hidden;
                     text-overflow:ellipsis; white-space:nowrap; }
   .graph-progress:empty { display:none; }
-  .graph-summary { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:0 20px; }
   .graph-progress.is-error { color:var(--badge-error-fg); white-space:pre-wrap; }
   .panel-btn[hidden] { display:none; }
 
   /* Terminal body: same panel chrome, monospace log. */
   .term-body { max-height:360px; overflow:auto;
-               font:15px/1.7 var(--mono); color:var(--text); }
+               font:17px/1.7 var(--mono); color:var(--text); }
   .term-log { margin:0; font:inherit; color:inherit; white-space:pre-wrap; word-break:break-word; }
   .term-dim { color:var(--muted); }
   .term-ok { color:var(--green); }
   @media (max-width:600px) {
-    .term-body { font-size:14px; }
+    .term-body { font-size:16px; }
     header { padding:10px 14px; }
     .toolbar { padding:8px 14px; }
     /* One row on phones: the ticker box takes what is left. */
@@ -279,21 +286,21 @@
     .head-actions { gap:8px; }
     .brand { gap:8px; }
     .brand .brand-icon { width:30px; height:30px; }
-    header h1 { font-size:20px; }
+    header h1 { font-size:22px; }
   }
 
   /* Screener: ticker input plus a sortable results table. */
   textarea { width:100%; min-height:88px; padding:10px 12px; border:1px solid var(--line);
              border-radius:8px; background:var(--surface); color:var(--text);
-             font-size:14px; resize:vertical; }
+             font-size:16px; resize:vertical; }
   textarea::placeholder { color:var(--muted); }
   textarea:focus { outline:none; border-color:var(--accent); }
   .screen-actions { margin-top:10px; }
   .table-wrap { overflow-x:auto; }
-  table.data { width:100%; border-collapse:collapse; font-size:13px; }
+  table.data { width:100%; border-collapse:collapse; font-size:15px; }
   table.data th, table.data td { padding:8px 10px; text-align:right; white-space:nowrap;
                                  border-bottom:1px solid var(--line-soft); }
-  table.data th { color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase;
+  table.data th { color:var(--muted); font-size:14px; font-weight:600; text-transform:uppercase;
                   letter-spacing:.03em; cursor:pointer; user-select:none; }
   table.data th:hover { color:var(--text); }
   table.data th:first-child, table.data td:first-child { text-align:left; }
@@ -301,9 +308,9 @@
   table.data tbody tr:last-child td { border-bottom:0; }
   table.data td.muted { text-align:center; padding:16px 10px; }
   #screen-table th, #screen-table td { padding:6px 8px; }
-  .screen-notes { color:var(--muted); font-size:12px; line-height:1.6; margin:0 0 10px; }
+  .screen-notes { color:var(--muted); font-size:14px; line-height:1.6; margin:0 0 10px; }
   .screen-notes:empty { display:none; }
-  .row-btn { padding:3px 8px; font-size:12px; }
+  .row-btn { padding:3px 8px; font-size:14px; }
 
   /* Options: a small centred dialog; vertical tabs left, sections right. */
   .opt-backdrop { position:fixed; inset:0; z-index:60; display:flex; align-items:center; justify-content:center;
@@ -316,7 +323,7 @@
   .opt-top { display:flex; gap:8px; align-items:center; padding:10px 12px; background:var(--bar);
              border-bottom:1px solid var(--line); }
   .opt-top input { flex:1; min-width:0; padding:8px 11px; border:1px solid var(--line); border-radius:8px;
-                   background:var(--bg); color:var(--text); font-size:14px; }
+                   background:var(--bg); color:var(--text); font-size:16px; }
   .opt-top input::placeholder { color:var(--muted); }
   .opt-top input:focus, .opt input:focus { outline:none; border-color:var(--accent); }
   .opt-close { flex:none; display:flex; align-items:center; justify-content:center; width:36px; height:36px;
@@ -328,37 +335,37 @@
   .opt-tabs { flex:none; width:150px; display:flex; flex-direction:column; gap:4px; padding:12px 8px;
               border-right:1px solid var(--line); background:var(--bar); }
   .opt-tabs button { text-align:left; padding:8px 10px; border:0; border-radius:7px; background:none;
-                     color:var(--muted); font-size:13px; cursor:pointer; }
+                     color:var(--muted); font-size:15px; cursor:pointer; }
   .opt-tabs button:hover { color:var(--text); }
   .opt-tabs button.active { background:var(--accent); color:var(--on-accent); font-weight:600; }
   .opt-panes { flex:1; min-width:0; overflow:auto; padding:14px 18px; }
-  .opt-pane h2 { margin:0 0 4px; font-size:12px; font-weight:600; text-transform:uppercase;
+  .opt-pane h2 { margin:0 0 4px; font-size:14px; font-weight:600; text-transform:uppercase;
                  letter-spacing:.04em; color:var(--muted); }
   .opt-pane + .opt-pane { margin-top:18px; }
   .opt-row { padding:10px 0; border-bottom:1px solid var(--line-soft); }
   .opt-row:last-child { border-bottom:0; }
-  .opt-row label, .opt-label { display:block; font-size:12px; color:var(--muted); margin:0 0 5px; }
+  .opt-row label, .opt-label { display:block; font-size:14px; color:var(--muted); margin:0 0 5px; }
   .opt input[type=text], .opt input[type=email], .opt input[type=password] {
     width:100%; min-width:0; padding:8px 10px; border:1px solid var(--line); border-radius:7px;
-    background:var(--bg); color:var(--text); font-size:14px; text-transform:none; }
-  .opt-hint { margin:0 0 8px; color:var(--muted); font-size:12px; }
+    background:var(--bg); color:var(--text); font-size:16px; text-transform:none; }
+  .opt-hint { margin:0 0 8px; color:var(--muted); font-size:14px; }
   .opt-hint:last-child { margin-bottom:0; }
-  .opt-msg { font-size:12px; color:var(--muted); }
+  .opt-msg { font-size:14px; color:var(--muted); }
   .opt-msg.is-error { color:var(--badge-error-fg); }
   .opt-actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
   .danger-btn { padding:8px 14px; border:1px solid var(--badge-error-fg); border-radius:7px;
-                background:var(--badge-error-bg); color:var(--badge-error-fg); font-size:13px;
+                background:var(--badge-error-bg); color:var(--badge-error-fg); font-size:15px;
                 font-weight:600; cursor:pointer; }
   .danger-btn:disabled { opacity:.45; cursor:not-allowed; }
   .seg { display:flex; gap:6px; max-width:260px; }
   .seg button { flex:1; padding:7px; border:1px solid var(--line); border-radius:7px; background:var(--bar);
-                color:var(--muted); font-size:13px; cursor:pointer; }
+                color:var(--muted); font-size:15px; cursor:pointer; }
   .seg button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
   .opt-confirm { flex:1; overflow:auto; padding:22px 24px; }
-  .opt-confirm h2 { margin:0 0 8px; font-size:17px; color:var(--badge-error-fg); }
-  .opt-confirm p { margin:0 0 10px; font-size:13px; }
-  .opt-confirm ul { margin:0 0 16px; padding-left:18px; color:var(--muted); font-size:13px; }
-  .opt-confirm label { display:block; font-size:12px; color:var(--muted); margin:0 0 5px; }
+  .opt-confirm h2 { margin:0 0 8px; font-size:19px; color:var(--badge-error-fg); }
+  .opt-confirm p { margin:0 0 10px; font-size:15px; }
+  .opt-confirm ul { margin:0 0 16px; padding-left:18px; color:var(--muted); font-size:15px; }
+  .opt-confirm label { display:block; font-size:14px; color:var(--muted); margin:0 0 5px; }
   .opt-confirm input { margin-bottom:12px; }
   @media (max-width:600px) {
     .opt-tabs { width:112px; }
@@ -366,16 +373,16 @@
     .opt-confirm { padding:18px 16px; }
   }
 
-  /* Drop-down notice bar (cached graphs) with a visible countdown. */
+  /* Drop-down notice bar (cached charts) with a visible countdown. */
   .dropbar { position:fixed; top:0; left:50%; z-index:70; width:min(580px, calc(100% - 32px));
              transform:translate(-50%, -120%); visibility:hidden;
              transition:transform .25s ease, visibility 0s linear .25s;
              background:var(--surface-2); border:1px solid var(--line); border-radius:10px;
              box-shadow:0 18px 44px rgba(0,0,0,.35); overflow:hidden; }
   .dropbar.open { transform:translate(-50%, 12px); visibility:visible; transition:transform .25s ease; }
-  .dropbar-row { display:flex; align-items:center; gap:10px 12px; padding:10px 14px; font-size:13px; flex-wrap:wrap; }
+  .dropbar-row { display:flex; align-items:center; gap:10px 12px; padding:10px 14px; font-size:15px; flex-wrap:wrap; }
   .dropbar-text { flex:1; min-width:200px; }
-  .dropbar-count { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .dropbar-count { color:var(--muted); font-size:14px; font-variant-numeric:tabular-nums; white-space:nowrap; }
   .dropbar-progress { height:3px; background:var(--accent); transform-origin:left; }
   .dropbar.open .dropbar-progress { animation:drain 3s linear forwards; }
   @keyframes drain { to { transform:scaleX(0); } }
@@ -386,13 +393,21 @@
   .news-list li { padding:11px 0; border-bottom:1px solid var(--line-soft); }
   .news-list li:last-child { border-bottom:0; }
   .news-list a { color:var(--text); font-weight:600; line-height:1.4; }
-  .news-meta { color:var(--muted); font-size:12px; margin-top:3px; }
+  .news-meta { color:var(--muted); font-size:14px; margin-top:3px; }
   .insider-list .stat:first-child { padding-top:0; }
   .insider-list .who { color:var(--muted); }
   .insider-list .who b { color:var(--text); font-weight:600; }
 </style>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-refresh" viewBox="0 0 24 24">
+    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
+      <circle cx="12" cy="12" r="8" fill="currentColor" opacity=".2" stroke="none" />
+      <path d="M20 12a8 8 0 1 1-2.34-5.66M20 3.5v4h-4" />
+    </g>
+  </symbol>
+</svg>
 <div class="topbar">
   <header>
     <div class="head-row">
@@ -472,7 +487,7 @@
 
 <main>
   <div class="tabs">
-    <button id="tab-graph" class="active" onclick="showTab('graph')">Graph</button>
+    <button id="tab-graph" class="active" onclick="showTab('graph')">Charts</button>
     <button id="tab-insiders" onclick="showTab('insiders')">Insiders</button>
     <button id="tab-screener" onclick="showTab('screener')">Screener</button>
     <button id="tab-simulation" onclick="showTab('simulation')">Simulation</button>
@@ -485,12 +500,24 @@
     </button>
   </div>
 
-  <!-- Graph tab: the pinned ticker stays until it is removed or replaced. -->
+  <!-- Charts tab: the pinned ticker stays until it is removed or replaced. -->
   <section id="pane-graph">
     <section class="panel" id="graph-panel">
       <div class="panel-head">
-        <span class="panel-title" id="graph-title">Graph</span>
+        <span class="panel-title">Charts</span>
         <span class="panel-actions">
+          <span class="view-seg" id="view-seg" role="radiogroup" aria-label="Chart layout" hidden>
+            <button data-view="full" role="radio" onclick="setChartView('full')" title="Full-width charts" aria-label="Full-width charts">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+                <rect x="3.5" y="4" width="17" height="7" rx="1.5" fill="currentColor" fill-opacity=".2" /><rect x="3.5" y="13" width="17" height="7" rx="1.5" /></g></svg>
+            </button>
+            <button data-view="grid" role="radio" onclick="setChartView('grid')" title="Grid of charts" aria-label="Grid of charts">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+                <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" fill="currentColor" fill-opacity=".2" /><rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
+                <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" /><rect x="13.5" y="13.5" width="7" height="7" rx="1.5" /></g></svg>
+            </button>
+          </span>
+          <span class="head-sep" id="view-sep" hidden></span>
           <span id="graph-state"></span>
           <button class="panel-btn icon-btn" id="graph-download-btn" hidden onclick="downloadGraph()"
                   title="Download all charts and data (.zip)" aria-label="Download all charts and data">
@@ -513,15 +540,10 @@
           </button>
           <button class="panel-btn icon-btn" id="graph-refresh-btn" hidden onclick="refreshGraph()"
                   title="Refresh" aria-label="Refresh">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
-                <circle cx="12" cy="12" r="8" fill="currentColor" opacity=".2" stroke="none" />
-                <path d="M20 12a8 8 0 1 1-2.34-5.66M20 3.5v4h-4" />
-              </g>
-            </svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh" /></svg>
           </button>
           <button class="panel-btn icon-btn" id="graph-remove-btn" hidden onclick="removeGraph()"
-                  title="Clear this ticker from the Graph tab — no files are deleted" aria-label="Remove from Graph tab">
+                  title="Clear this ticker from the Charts tab — no files are deleted" aria-label="Remove from Charts tab">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
                 <circle cx="12" cy="12" r="9" fill="currentColor" opacity=".2" stroke="none" />
@@ -533,10 +555,10 @@
         </span>
       </div>
       <div class="panel-body" id="graph-body">
-        <p class="muted" id="graph-empty">No ticker yet. Enter one above and press Run — its graphs and
-          screener data stay here until you remove it or open another. Several tickers run the screener only.</p>
+        <p class="muted" id="graph-empty">No ticker yet. Enter one above and press Run — its charts
+          stay here until you remove it or open another. Several tickers run the screener only.</p>
         <p class="graph-progress" id="graph-progress"></p>
-        <div id="graph-summary"></div>
+        <div id="chart-index" class="chart-index"></div>
       </div>
       <div class="panel-body term-body hidden" id="term-body">
         <pre id="term-log" class="term-log" role="log" aria-live="polite"></pre>
@@ -549,16 +571,27 @@
   <section id="pane-insiders" class="hidden">
     <div class="panel">
       <div class="panel-head">
-        <span class="panel-title">Insider trades (Form 4, 6 months)</span>
+        <span class="panel-title">Insiders</span>
         <span class="panel-actions">
-          <span id="insider-more" class="muted"></span>
-          <select id="insider-run" title="Successful run" onchange="loadInsiderTicker()"></select>
-          <button class="panel-btn" onclick="initInsiders(true)">refresh</button>
+          <select id="insider-months" title="Show trades since" aria-label="Show trades since" onchange="setInsiderMonths()">
+            <option value="1">1 month</option>
+            <option value="3">3 months</option>
+            <option value="6">6 months</option>
+            <option value="12" selected>1 year</option>
+            <option value="24">2 years</option>
+            <option value="36">3 years</option>
+          </select>
+          <select id="insider-run" title="Ticker" aria-label="Ticker" onchange="loadInsiderTicker()"></select>
+          <button class="panel-btn icon-btn" onclick="initInsiders(true)" title="Refresh" aria-label="Refresh">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh" /></svg>
+          </button>
         </span>
       </div>
       <div class="panel-body">
         <p class="sim-meta" id="insider-status"></p>
         <div id="insider-body" class="insider-list"></div>
+        <p class="sim-note">Open-market buys and sells reported on SEC Form 4, which officers, directors and
+          10% owners must file within two business days of a trade.</p>
       </div>
     </div>
   </section>
@@ -567,10 +600,12 @@
   <section id="pane-news" class="hidden">
     <div class="panel">
       <div class="panel-head">
-        <span class="panel-title" id="news-title">News</span>
+        <span class="panel-title">News</span>
         <span class="panel-actions">
           <select id="news-run" title="Ticker" aria-label="Ticker" onchange="loadNews()"></select>
-          <button class="panel-btn" onclick="loadNews(true)">refresh</button>
+          <button class="panel-btn icon-btn" onclick="loadNews(true)" title="Refresh" aria-label="Refresh">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh" /></svg>
+          </button>
         </span>
       </div>
       <div class="panel-body">
@@ -586,7 +621,9 @@
       <div class="panel-head">
         <span class="panel-title">Recent</span>
         <span class="panel-actions">
-          <button class="panel-btn" onclick="loadRecent()">refresh</button>
+          <button class="panel-btn icon-btn" onclick="loadRecent()" title="Refresh" aria-label="Refresh">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh" /></svg>
+          </button>
         </span>
       </div>
       <div class="panel-body">
@@ -599,10 +636,12 @@
   <section id="pane-screener" class="hidden">
     <div class="panel">
       <div class="panel-head">
-        <span class="panel-title">Results</span>
+        <span class="panel-title">Screener</span>
         <span class="panel-actions">
           <span class="muted" id="screen-progress"></span>
-          <button class="panel-btn" onclick="loadScreener()">refresh</button>
+          <button class="panel-btn icon-btn" onclick="loadScreener()" title="Refresh" aria-label="Refresh">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh" /></svg>
+          </button>
         </span>
       </div>
       <div class="panel-body">
@@ -641,8 +680,10 @@
       <div class="panel-head">
         <span class="panel-title">Simulation</span>
         <span class="panel-actions">
-          <select id="sim-run" title="Successful run" onchange="loadSimulation(false)"></select>
-          <button class="panel-btn" onclick="initSimulation(true)">refresh</button>
+          <select id="sim-run" title="Ticker" aria-label="Ticker" onchange="loadSimulation(false)"></select>
+          <button class="panel-btn icon-btn" onclick="initSimulation(true)" title="Refresh" aria-label="Refresh">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh" /></svg>
+          </button>
         </span>
       </div>
       <div class="panel-body">
@@ -776,7 +817,7 @@
           </div>
           <div class="opt-row" data-search="remove all data delete wipe clear erase reset">
             <span class="opt-label">Remove all data</span>
-            <p class="opt-hint">Deletes every ticker's graphs, CSVs and logs. Your account stays.</p>
+            <p class="opt-hint">Deletes every ticker's charts, CSVs and logs. Your account stays.</p>
             <button class="danger-btn" onclick="openConfirm('data')">Remove all data…</button>
           </div>
         </section>
@@ -815,7 +856,7 @@
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-// Hover descriptions for the numbers in the Graph, Screener and Simulation tabs.
+// Hover descriptions for the numbers in the Screener and Simulation tabs.
 const HELP = {
   ticker: 'Stock symbol.',
   fiscal_year: 'Fiscal year of the latest 10-K the values below come from.',
@@ -844,7 +885,7 @@ let ACTIVE_TICKER = '';
 const POLL_TIMERS = {};
 const TICKER_RE = /^[A-Z][A-Z0-9.\-]{0,9}$/;
 
-// The Graph tab shows one pinned ticker. It survives reloads and cancel, and
+// The Charts tab shows one pinned ticker. It survives reloads and cancel, and
 // changes only when a single ticker is run or opened, or it is removed.
 const GRAPH = { ticker: '', state: '', log: false, results: null };
 let CHART_VIEW = 'full';
@@ -922,7 +963,6 @@ function resetUi() {
   setStatus('idle', 'idle');
   $('#insider-status').textContent = '';
   $('#insider-body').innerHTML = '';
-  $('#insider-more').textContent = '';
   const insiderSelect = $('#insider-run');
   insiderSelect.innerHTML = '';
   delete insiderSelect.dataset.loaded;
@@ -1132,7 +1172,7 @@ const CONFIRMS = {
     button: 'Remove all data',
     text: 'This permanently deletes everything Stocky stored for you on this machine:',
     list: count => [
-      `${count} ticker(s): graphs, CSVs, valuation, insider trades and logs`,
+      `${count} ticker(s): charts, CSVs, valuation, insider trades and logs`,
       'any queued or running job (it is stopped first)',
       'Your account and settings stay. This cannot be undone.',
     ],
@@ -1218,7 +1258,7 @@ document.addEventListener('keydown', e => {
   else closeOptions();
 });
 
-/* Cached-graphs bar ---------------------------------------------------------- */
+/* Cached-charts bar ---------------------------------------------------------- */
 
 const DROPBAR = { timer: null };
 
@@ -1228,7 +1268,7 @@ function showCachedBar(ticker, generated) {
   const time = new Date(generated);
   const at = Number.isNaN(time.getTime()) ? 'earlier today'
     : `today at ${time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-  $('#dropbar-text').innerHTML = `<b>${esc(ticker)}</b> graphs were generated ${esc(at)}. Showing the cached copy.`;
+  $('#dropbar-text').innerHTML = `<b>${esc(ticker)}</b> charts were generated ${esc(at)}. Showing the cached copy.`;
   $('#dropbar-fresh').onclick = () => { closeDropbar(); runTicker(ticker, { fresh: true }); };
   let left = 3;
   $('#dropbar-count').textContent = `closes in ${left}s`;
@@ -1277,7 +1317,7 @@ function setTermLog(text) {
   body.scrollTop = body.scrollHeight;
 }
 
-/* Graph tab --------------------------------------------------------------- */
+/* Charts tab --------------------------------------------------------------- */
 
 function setGraph(ticker) {
   GRAPH.ticker = ticker;
@@ -1287,8 +1327,8 @@ function setGraph(ticker) {
     else localStorage.removeItem('stocky-graph');
   } catch {}
   $('#results-graph').innerHTML = '';
+  $('#chart-index').innerHTML = '';
   GRAPH.results = null;
-  $('#graph-summary').innerHTML = '';
   setGraphProgress('');
   setTermLog('');
   renderGraph();
@@ -1296,7 +1336,6 @@ function setGraph(ticker) {
 
 function renderGraph() {
   const { ticker, state } = GRAPH;
-  $('#graph-title').textContent = ticker ? `Graph · ${ticker}` : 'Graph';
   $('#graph-empty').classList.toggle('hidden', !!ticker);
   for (const id of ['#graph-download-btn', '#graph-log-btn', '#graph-refresh-btn', '#graph-remove-btn']) $(id).hidden = !ticker;
   const logBtn = $('#graph-log-btn');
@@ -1307,6 +1346,15 @@ function renderGraph() {
   const cls = state === 'cancelled' ? 'idle' : state;
   $('#graph-state').innerHTML = ticker && state && state !== 'done'
     ? `<span class="badge ${esc(cls)}">${esc(state)}</span>` : '';
+  syncChartView();
+}
+
+function syncChartView() {
+  const shown = !!(GRAPH.ticker && GRAPH.results);
+  $('#view-seg').hidden = !shown;
+  $('#view-sep').hidden = !shown;
+  document.querySelectorAll('#view-seg button').forEach(button =>
+    button.setAttribute('aria-checked', String(button.dataset.view === (CHART_VIEW === 'grid' ? 'grid' : 'full'))));
 }
 
 function setGraphProgress(text, isError = false) {
@@ -1380,12 +1428,11 @@ async function refreshGraph() {
 }
 
 async function loadGraph(ticker) {
-  await Promise.all([loadResults(ticker), loadGraphSummary(ticker)]);
+  await Promise.all([loadResults(ticker), loadScreenerData()]);
 }
 
-// The screener line for the pinned ticker. Also refreshes the Screener tab's
-// data, since every graph run produces screener data too.
-async function loadGraphSummary(ticker) {
+// Every graph run produces screener data too; keep the Screener tab current.
+async function loadScreenerData() {
   try {
     const res = await fetch('/api/screener');
     const data = await res.json();
@@ -1393,30 +1440,7 @@ async function loadGraphSummary(ticker) {
     SCREEN.items = Array.isArray(data.items) ? data.items : [];
     SCREEN.pipeline = data.pipeline || null;
     renderScreener();
-    if (ticker !== GRAPH.ticker) return;
-    const row = SCREEN.items.find(item => item.ticker === ticker);
-    const target = $('#graph-summary');
-    if (!row) { target.innerHTML = ''; return; }
-    if (row.has_evaluation === false) {
-      target.innerHTML = `<p class="muted">No valuation data for ${esc(ticker)} — usually Yahoo prices were
-        unreachable. Open the log and look for <code>[!] valuation skipped</code>.</p>`;
-      return;
-    }
-    const ranked = SCREEN.items.filter(item => item.greenblatt_rank).length;
-    const stat = (label, value, key) => `<div class="stat"${tip(key)}><span>${label}</span><b>${value}</b></div>`;
-    target.innerHTML = `<div class="graph-summary">
-      ${stat('FY', esc(row.fiscal_year ?? '—'), 'fiscal_year')}
-      ${stat('F-score', scoreCell(row.f_score, 7, 3), 'f_score')}
-      ${stat('Z-score', scoreCell(row.z_score, 2.99, 1.81), 'z_score')}
-      ${stat('P/E', fmtNum(row.pe, 1), 'pe')}
-      ${stat('EV/EBIT', fmtNum(row.ev_ebit, 1), 'ev_ebit')}
-      ${stat('Earnings yield', fmtRatio(row.earnings_yield), 'earnings_yield')}
-      ${stat('Return on capital', fmtRatio(row.return_on_capital), 'return_on_capital')}
-      ${stat('Magic rank', row.greenblatt_rank ? `#${row.greenblatt_rank} of ${ranked}` : '—', 'greenblatt_rank')}
-      ${stat('FCF yield', fmtRatio(row.fcf_yield), 'fcf_yield')}
-      ${stat('P/E pct', fmtPctPoints(row.pe_percentile), 'pe_percentile')}
-    </div>`;
-  } catch { /* the charts still render without the screener line */ }
+  } catch { /* the charts still render without it */ }
 }
 
 /* ------------------------------------------------------------------------ */
@@ -1463,7 +1487,7 @@ function setStatus(text, cls) {
   status.dataset.ticker = live ? ACTIVE_TICKER : '';
 }
 
-// The pinned ticker's run lives in the Graph tab; anything else is a screener job.
+// The pinned ticker's run lives in the Charts tab; anything else is a screener job.
 function gotoActive() {
   const ticker = $('#status').dataset.ticker || ACTIVE_TICKER;
   if (!ticker) return;
@@ -1594,15 +1618,17 @@ function renderResultsError(ticker, data, target) {
 
 function renderResults(data, target) {
   GRAPH.results = null;
+  $('#chart-index').innerHTML = '';
+  syncChartView();
   if (!data.charts.length) {
     // A screener run writes the data but no charts.
     $(target).innerHTML = `
       <div class="card">
         <div class="row" style="justify-content:space-between">
-          <strong>${esc(data.ticker)} — no graphs yet</strong>
-          <button class="primary" onclick="runTicker('${esc(data.ticker)}')">Generate graphs</button>
+          <strong>${esc(data.ticker)} — no charts yet</strong>
+          <button class="primary" onclick="runTicker('${esc(data.ticker)}')">Generate charts</button>
         </div>
-        <p class="muted">Screener runs collect the data only. Generate graphs runs the full pipeline.</p>
+        <p class="muted">Screener runs collect the data only. Generate charts runs the full pipeline.</p>
       </div>`;
     return;
   }
@@ -1615,7 +1641,9 @@ function renderResults(data, target) {
         <a href="/download/${esc(data.ticker)}/${esc(name)}">download</a></figcaption>
     </figure>`).join('');
   const view = CHART_VIEW === 'grid' ? 'grid' : 'charts-full';
-  $(target).innerHTML = `${chartIndex(data.charts)}<div class="${view}">${grid}</div>`;
+  $('#chart-index').innerHTML = chartIndex(data.charts);
+  $(target).innerHTML = `<div class="${view}">${grid}</div>`;
+  syncChartView();
 }
 
 // Chart files are NN_name[_YYYY_YYYY].png: one index line per NN, with a link
@@ -1636,19 +1664,7 @@ function chartIndex(charts) {
     if (items.length === 1) return `<li>${link(items[0].name, label)}</li>`;
     return `<li>${esc(label)} <span class="windows">${items.map(it => link(it.name, it.label || it.name)).join(' · ')}</span></li>`;
   }).join('');
-  const toggle = (view, title, icon) => `<button class="panel-btn icon-btn" onclick="setChartView('${view}')" title="${title}"
-      aria-label="${title}" aria-pressed="${CHART_VIEW === view}">${icon}</button>`;
-  const fullIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
-      <rect x="3.5" y="4" width="17" height="7" rx="1.5" fill="currentColor" fill-opacity=".2" /><rect x="3.5" y="13" width="17" height="7" rx="1.5" /></g></svg>`;
-  const gridIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
-      <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" fill="currentColor" fill-opacity=".2" /><rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
-      <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" /><rect x="13.5" y="13.5" width="7" height="7" rx="1.5" /></g></svg>`;
-  return `<div class="card chart-index">
-      <div class="chart-index-head"><strong>Charts</strong>
-        <span class="view-toggle">${toggle('full', 'Full-width charts', fullIcon)}${toggle('grid', 'Grid of charts', gridIcon)}</span>
-      </div>
-      <ol>${lines}</ol>
-    </div>`;
+  return `<ol>${lines}</ol>`;
 }
 
 const chartId = name => 'chart-' + name.replace(/\.png$/, '').replace(/[^\w-]/g, '_');
@@ -1672,7 +1688,11 @@ function chartSrc(data, name) {
   return `/files/${esc(data.ticker)}/${dark ? 'dark/' : ''}${esc(name)}`;
 }
 
-// Run selectors follow the pinned Graph ticker whenever the pin changes (or the
+// Every ticker drop-down reads "TICKER · last run date".
+const runOption = item =>
+  `<option value="${esc(item.ticker)}">${esc(item.ticker)} · ${fmtDate(item.modified)}</option>`;
+
+// Run selectors follow the pinned Charts ticker whenever the pin changes (or the
 // viewer's own pick is gone); otherwise they keep the viewer's pick.
 function pickRun(select, runs, current) {
   const has = ticker => runs.some(item => item.ticker === ticker);
@@ -1705,7 +1725,7 @@ async function initNews() {
       return;
     }
     const current = select.value;
-    select.innerHTML = items.map(item => `<option value="${esc(item.ticker)}">${esc(item.ticker)}</option>`).join('');
+    select.innerHTML = items.map(runOption).join('');
     select.value = pickRun(select, items, current);
   } catch {
     $('#news-status').textContent = 'Could not load runs.';
@@ -1718,7 +1738,6 @@ async function loadNews(fresh = false) {
   const ticker = $('#news-run').value;
   const list = $('#news-list');
   list.innerHTML = '';
-  $('#news-title').textContent = ticker ? `News · ${ticker}` : 'News';
   if (!ticker) { $('#news-status').textContent = ''; return; }
   $('#news-status').textContent = `Looking for ${ticker} articles…`;
   try {
@@ -1750,13 +1769,10 @@ async function initInsiders() {
       select.innerHTML = '';
       $('#insider-status').textContent = 'No insider data yet. Run a ticker first.';
       $('#insider-body').innerHTML = '';
-      $('#insider-more').textContent = '';
       return;
     }
     const current = select.value;
-    select.innerHTML = runs.map(item =>
-      `<option value="${esc(item.ticker)}">${esc(item.ticker)} · ${fmtDate(item.modified)}</option>`
-    ).join('');
+    select.innerHTML = runs.map(runOption).join('');
     select.value = pickRun(select, runs, current);
   } catch {
     $('#insider-status').textContent = 'Could not load runs.';
@@ -1766,11 +1782,26 @@ async function initInsiders() {
   await loadInsiderTicker();
 }
 
+// How far back the Insiders tab looks: 1 year unless the viewer picked
+// otherwise (runs collect up to 3 years).
+const INSIDER = { ticker: '', data: null, months: 12 };
+try {
+  const saved = localStorage.getItem('stocky-insider-months');
+  if ([1, 3, 6, 12, 24, 36].includes(Number(saved))) INSIDER.months = Number(saved);
+} catch {}
+$('#insider-months').value = String(INSIDER.months);
+
+function setInsiderMonths() {
+  INSIDER.months = Number($('#insider-months').value) || 12;
+  try { localStorage.setItem('stocky-insider-months', String(INSIDER.months)); } catch {}
+  renderInsiders();
+}
+
 async function loadInsiderTicker() {
   const ticker = $('#insider-run').value;
-  const body = $('#insider-body');
-  body.innerHTML = '';
-  $('#insider-more').textContent = '';
+  INSIDER.ticker = ticker;
+  INSIDER.data = null;
+  $('#insider-body').innerHTML = '';
   if (!ticker) { $('#insider-status').textContent = ''; return; }
   $('#insider-status').textContent = `Loading ${ticker} insider trades…`;
   try {
@@ -1780,25 +1811,42 @@ async function loadInsiderTicker() {
       throw new Error(detail.error || 'No insider data.');
     }
     const data = await res.json();
-    const rows = Array.isArray(data.transactions) ? data.transactions : [];
-    if (!rows.length) {
-      $('#insider-status').textContent = `${ticker}: no open-market insider trades in the last 6 months.`;
-      return;
-    }
-    body.innerHTML = rows.map(it => {
-      const kind = it.type === 'buy' ? 'done' : 'error';
-      return `<div class="stat">
-        <span class="who"><b>${esc(it.name || '—')}</b>${it.title ? ' · ' + esc(it.title) : ''} · ${it.date ? esc(fmtDate(it.date)) : '—'}</span>
-        <b><span class="badge ${kind}">${esc(it.type || '—')}</span> ${fmtInt(it.shares)} sh · ${fmtMoney(it.value)}</b>
-      </div>`;
-    }).join('');
-    $('#insider-more').textContent = `${rows.length} trade(s) · newest first`;
-    $('#insider-status').textContent = data.generated
-      ? `${ticker} · collected ${fmtDate(data.generated)}`
-      : `${ticker}`;
+    if (ticker !== INSIDER.ticker) return;
+    INSIDER.data = data;
+    renderInsiders();
   } catch (err) {
-    $('#insider-status').textContent = `${ticker}: ${err.message}`;
+    if (ticker === INSIDER.ticker) $('#insider-status').textContent = `${ticker}: ${err.message}`;
   }
+}
+
+function renderInsiders() {
+  const { ticker, data, months } = INSIDER;
+  if (!ticker || !data) return;
+  const now = new Date();
+  const cutoff = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - months, now.getUTCDate()))
+    .toISOString().slice(0, 10);
+  const rows = (Array.isArray(data.transactions) ? data.transactions : [])
+    .filter(it => !it.date || it.date >= cutoff);
+  const period = $('#insider-months').selectedOptions[0].textContent;
+  // Runs made before the 3-year window collected 6 months only.
+  const since = data.since || '';
+  const short = since > cutoff || (!since && (data.months || 6) < months)
+    ? ` · this run only ${since ? `goes back to ${fmtDate(since)}` : `covers ${data.months || 6} months`}; run ${ticker} again for up to 3 years`
+    : '';
+  const collected = data.generated ? `${ticker} · collected ${fmtDate(data.generated)}` : ticker;
+  if (!rows.length) {
+    $('#insider-body').innerHTML = '';
+    $('#insider-status').textContent = `${collected} · no open-market insider trades in the last ${period}${short}`;
+    return;
+  }
+  $('#insider-body').innerHTML = rows.map(it => {
+    const kind = it.type === 'buy' ? 'done' : 'error';
+    return `<div class="stat">
+      <span class="who"><b>${esc(it.name || '—')}</b>${it.title ? ' · ' + esc(it.title) : ''} · ${it.date ? esc(fmtDate(it.date)) : '—'}</span>
+      <b><span class="badge ${kind}">${esc(it.type || '—')}</span> ${fmtInt(it.shares)} sh · ${fmtMoney(it.value)}</b>
+    </div>`;
+  }).join('');
+  $('#insider-status').textContent = `${collected} · ${rows.length} trade(s) in the last ${period} · newest first${short}`;
 }
 
 async function loadRecent() {
@@ -1948,7 +1996,7 @@ function sortScreen(key) {
   renderScreener();
 }
 
-// Open the ticker's graphs; run the pipeline only when none exist yet
+// Open the ticker's charts; run the pipeline only when none exist yet
 // (screener runs skip charts).
 async function generateGraphs(ticker) {
   try {
@@ -1990,7 +2038,7 @@ function renderScreener() {
   const notes = [];
   if (pipelineNote) notes.push(pipelineNote);
   if (stale) notes.push(`${stale} ticker(s) have results but no <code>evaluation.csv</code> — the pipeline wrote no
-        valuation data. Open it with <b>graphs</b> and check its log: <code>[!] valuation skipped</code> means Yahoo
+        valuation data. Open it with <b>charts</b> and check its log: <code>[!] valuation skipped</code> means Yahoo
         price data was unreachable from the container (SEC works, Yahoo often does not). Re-run once it can reach it.`);
   $('#screen-notes').innerHTML = notes.join('<br>');
   const { key, dir } = SCREEN.sort;
@@ -2018,7 +2066,7 @@ function renderScreener() {
       <td${tip('fcf_yield')}>${fmtRatio(row.fcf_yield)}</td>
       <td${tip('pe_percentile')}>${fmtPctPoints(row.pe_percentile)}</td>
       <td${tip('modified')}>${fmtDate(row.modified)}</td>
-      <td><button class="panel-btn row-btn" onclick="generateGraphs('${esc(row.ticker)}')">graphs</button></td>
+      <td><button class="panel-btn row-btn" onclick="generateGraphs('${esc(row.ticker)}')">charts</button></td>
     </tr>`).join('');
 }
 
@@ -2106,9 +2154,7 @@ async function initSimulation(force = false) {
         return;
       }
       const current = SIM.ticker;
-      select.innerHTML = runs.map(item =>
-        `<option value="${esc(item.ticker)}">${esc(item.ticker)} · ${fmtDate(item.modified)}</option>`
-      ).join('');
+      select.innerHTML = runs.map(runOption).join('');
       SIM.ticker = '';
       select.value = pickRun(select, runs, current);
     } catch {
@@ -2295,7 +2341,7 @@ function renderSimulation() {
   syncSimControls();
   const plan = simulate();
   const svg = $('#sim-svg');
-  const W = 900, H = 430, L = 62, R = 18, T = 20, B = 36;
+  const W = 900, H = 430, L = 80, R = 18, T = 22, B = 38;
   svg.replaceChildren();
 
   const price = data.price;
@@ -2326,7 +2372,7 @@ function renderSimulation() {
   for (let i = 0; i <= 4; i += 1) {
     const v = lo + ((hi - lo) * i) / 4;
     svg.append(svgEl('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: 'var(--line-soft)', 'stroke-width': 1 }));
-    const label = svgEl('text', { x: L - 8, y: y(v) + 4, 'text-anchor': 'end', fill: 'var(--muted)', 'font-size': 11 });
+    const label = svgEl('text', { x: L - 8, y: y(v) + 4, 'text-anchor': 'end', fill: 'var(--muted)', 'font-size': 13 });
     label.textContent = fmtMoney(v, data.currency);
     svg.append(label);
   }
@@ -2372,14 +2418,14 @@ function renderSimulation() {
     const t = t0 + ((t1 - t0) * i) / 4;
     const label = svgEl('text', {
       x: x(t), y: H - B + 18, 'text-anchor': i === 0 ? 'start' : i === 4 ? 'end' : 'middle',
-      fill: 'var(--muted)', 'font-size': 11,
+      fill: 'var(--muted)', 'font-size': 13,
     });
     label.textContent = fmtDate(t);
     svg.append(label);
   }
 
   // Legend
-  const legend = svgEl('text', { x: L, y: T - 4, fill: 'var(--muted)', 'font-size': 11 });
+  const legend = svgEl('text', { x: L, y: T - 5, fill: 'var(--muted)', 'font-size': 13 });
   legend.textContent = SIM.backtest
     ? `price · projection disabled · backtest from ${SIM.backtest.date}`
     : `price · projection to ${fmtMoney(target, data.currency)}`;
@@ -2389,9 +2435,9 @@ function renderSimulation() {
   const cross = svgEl('line', { y1: T, y2: H - B, stroke: 'var(--muted)', 'stroke-width': 1, opacity: 0 });
   const dot = svgEl('circle', { r: 3.5, fill: 'var(--accent)', opacity: 0 });
   const tip = svgEl('g', { opacity: 0 });
-  tip.append(svgEl('rect', { width: 176, height: 46, rx: 6, fill: 'var(--surface-2)', stroke: 'var(--line)' }));
-  const tipDate = svgEl('text', { x: 9, y: 18, fill: 'var(--muted)', 'font-size': 11 });
-  const tipPrice = svgEl('text', { x: 9, y: 35, fill: 'var(--text)', 'font-size': 12 });
+  tip.append(svgEl('rect', { width: 206, height: 52, rx: 6, fill: 'var(--surface-2)', stroke: 'var(--line)' }));
+  const tipDate = svgEl('text', { x: 10, y: 20, fill: 'var(--muted)', 'font-size': 13 });
+  const tipPrice = svgEl('text', { x: 10, y: 40, fill: 'var(--text)', 'font-size': 14 });
   tip.append(tipDate, tipPrice);
   svg.append(cross, dot, tip);
 
@@ -2409,7 +2455,7 @@ function renderSimulation() {
     dot.setAttribute('opacity', 1);
     tipDate.textContent = fmtDate(best.t) + (best.t > now.getTime() ? ' · projected' : '');
     tipPrice.textContent = fmtMoney(best.p, data.currency);
-    const tx = Math.min(Math.max(x(best.t) - 88, L), W - R - 176);
+    const tx = Math.min(Math.max(x(best.t) - 103, L), W - R - 206);
     tip.setAttribute('transform', `translate(${tx},16)`);
     tip.setAttribute('opacity', 1);
   };
