@@ -229,6 +229,14 @@
     .sim-form { grid-template-columns:1fr 1fr; }
   }
 
+  /* Graph tab: one pinned ticker, its screener line, charts below. */
+  .graph-progress { margin:0; color:var(--muted); font-size:13px; overflow:hidden;
+                    text-overflow:ellipsis; white-space:nowrap; }
+  .graph-progress:empty { display:none; }
+  .graph-summary { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:0 20px; }
+  .graph-progress.is-error { color:var(--badge-error-fg); white-space:pre-wrap; }
+  .panel-btn[hidden] { display:none; }
+
   /* Terminal body: same panel chrome, monospace log. */
   .term-body { max-height:360px; overflow:auto;
                font:15px/1.7 var(--mono); color:var(--text); }
@@ -353,7 +361,7 @@
 
 <main>
   <div class="tabs">
-    <button id="tab-run" class="active" onclick="showTab('run')">Run</button>
+    <button id="tab-graph" class="active" onclick="showTab('graph')">Graph</button>
     <button id="tab-insiders" onclick="showTab('insiders')">Insiders</button>
     <button id="tab-screener" onclick="showTab('screener')">Screener</button>
     <button id="tab-simulation" onclick="showTab('simulation')">Simulation</button>
@@ -365,24 +373,30 @@
     </button>
   </div>
 
-  <!-- Run tab -->
-  <section id="pane-run">
-    <section class="panel" id="terminal">
+  <!-- Graph tab: the pinned ticker stays until it is removed or replaced. -->
+  <section id="pane-graph">
+    <section class="panel" id="graph-panel">
       <div class="panel-head">
-        <span class="panel-title">Run</span>
+        <span class="panel-title" id="graph-title">Graph</span>
         <span class="panel-actions">
-          <button class="panel-btn" onclick="refreshRun()">refresh</button>
+          <span id="graph-state"></span>
+          <button class="panel-btn" id="graph-log-btn" hidden onclick="toggleLog()">log</button>
+          <button class="panel-btn" id="graph-refresh-btn" hidden onclick="refreshGraph()">refresh</button>
+          <button class="panel-btn" id="graph-remove-btn" hidden onclick="removeGraph()"
+                  title="Clear this ticker from the Graph tab — no files are deleted">remove</button>
         </span>
       </div>
-      <div class="panel-body term-body" id="term-body">
-        <pre id="term-log" class="term-log" role="log" aria-live="polite">stocky 1.0 · SEC 10-K dashboard
-reads EDGAR filings, extracts XBRL, charts the ratios
-────────────────────────────────────────────────────
-ready. enter a ticker above and press Run.
-the pipeline log streams into this terminal.</pre>
+      <div class="panel-body" id="graph-body">
+        <p class="muted" id="graph-empty">No ticker yet. Enter one above and press Run — its graphs and
+          screener data stay here until you remove it or open another. Several tickers run the screener only.</p>
+        <p class="graph-progress" id="graph-progress"></p>
+        <div id="graph-summary"></div>
+      </div>
+      <div class="panel-body term-body hidden" id="term-body">
+        <pre id="term-log" class="term-log" role="log" aria-live="polite"></pre>
       </div>
     </section>
-    <div id="results-run"></div>
+    <div id="results-graph"></div>
   </section>
 
   <!-- Insiders tab -->
@@ -416,7 +430,6 @@ the pipeline log streams into this terminal.</pre>
         <ul id="recent" class="recent"><li class="muted">Loading…</li></ul>
       </div>
     </div>
-    <div id="results-recent"></div>
   </section>
 
   <!-- Screener tab -->
@@ -533,8 +546,16 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>'
 let timer = null;
 let identityCache = '';
 let ACTIVE_TICKER = '';
-let TERM_TICKER = '';
 const POLL_TIMERS = {};
+const TICKER_RE = /^[A-Z][A-Z0-9.\-]{0,9}$/;
+
+// The Graph tab shows one pinned ticker. It survives reloads and cancel, and
+// changes only when a single ticker is run or opened, or it is removed.
+const GRAPH = { ticker: '', state: '', log: false };
+try {
+  const saved = localStorage.getItem('stocky-graph') || '';
+  if (TICKER_RE.test(saved)) GRAPH.ticker = saved;
+} catch {}
 const LIVE = {};
 
 // All requests go through this wrapper so "cancel" can abort every in-flight
@@ -570,12 +591,6 @@ function pickActive() {
   if (running || queued) ACTIVE_TICKER = running || queued;
 }
 
-const WELCOME = `stocky 1.0 · SEC 10-K dashboard
-reads EDGAR filings, extracts XBRL, charts the ratios
-────────────────────────────────────────────────────
-ready. enter a ticker above and press Run.
-the pipeline log streams into this terminal.`;
-
 /* Cancel + full interface reset -------------------------------------------- */
 
 function cancelAll() {
@@ -600,15 +615,12 @@ function resetUi() {
   timer = null;
   for (const key of Object.keys(LIVE)) delete LIVE[key];
   ACTIVE_TICKER = '';
-  TERM_TICKER = '';
 
   $('#ticker').value = '';
   updateMode();
   $('#filings').value = '20';
   $('#run-btn').disabled = false;
   setStatus('idle', 'idle');
-  setTermLog(WELCOME);
-  $('#results-run').innerHTML = '';
   $('#insider-status').textContent = '';
   $('#insider-body').innerHTML = '';
   $('#insider-more').textContent = '';
@@ -616,7 +628,6 @@ function resetUi() {
   insiderSelect.innerHTML = '';
   delete insiderSelect.dataset.loaded;
   $('#recent').innerHTML = '';
-  $('#results-recent').innerHTML = '';
   $('#screen-progress').textContent = '';
   $('#screen-notes').innerHTML = '';
   SCREEN.items = [];
@@ -630,7 +641,11 @@ function resetUi() {
   toggleUser(false);
   $('#user-msg').textContent = '';
   $('#user-input').value = '';
-  showTab('run');
+  showTab('graph');
+  // The pinned graph is kept; re-read its state now that the jobs are gone.
+  GRAPH.log = false;
+  renderGraph();
+  refreshGraph();
   window.scrollTo({ top: 0, behavior: 'auto' });
 }
 
@@ -742,28 +757,144 @@ function setTermLog(text) {
   body.scrollTop = body.scrollHeight;
 }
 
-async function refreshRun() {
-  const ticker = $('#ticker').value.trim().toUpperCase();
+/* Graph tab --------------------------------------------------------------- */
+
+function setGraph(ticker) {
+  GRAPH.ticker = ticker;
+  GRAPH.state = '';
+  try {
+    if (ticker) localStorage.setItem('stocky-graph', ticker);
+    else localStorage.removeItem('stocky-graph');
+  } catch {}
+  $('#results-graph').innerHTML = '';
+  $('#graph-summary').innerHTML = '';
+  setGraphProgress('');
+  setTermLog('');
+  renderGraph();
+}
+
+function renderGraph() {
+  const { ticker, state } = GRAPH;
+  $('#graph-title').textContent = ticker ? `Graph · ${ticker}` : 'Graph';
+  $('#graph-empty').classList.toggle('hidden', !!ticker);
+  for (const id of ['#graph-log-btn', '#graph-refresh-btn', '#graph-remove-btn']) $(id).hidden = !ticker;
+  $('#graph-log-btn').textContent = GRAPH.log ? 'hide log' : 'log';
+  $('#term-body').classList.toggle('hidden', !(ticker && GRAPH.log));
+  const cls = state === 'cancelled' ? 'idle' : state;
+  $('#graph-state').innerHTML = ticker && state && state !== 'done'
+    ? `<span class="badge ${esc(cls)}">${esc(state)}</span>` : '';
+}
+
+function setGraphProgress(text, isError = false) {
+  const line = $('#graph-progress');
+  line.textContent = text;
+  line.classList.toggle('is-error', isError);
+}
+
+function toggleLog() {
+  GRAPH.log = !GRAPH.log;
+  renderGraph();
+  if (GRAPH.log) { const body = $('#term-body'); body.scrollTop = body.scrollHeight; }
+}
+
+function removeGraph() {
+  // Only clears the view: the files stay (Recent → remove deletes them), and a
+  // running job keeps going in the background.
+  GRAPH.log = false;
+  setGraph('');
+}
+
+function openGraph(ticker) {
+  if (ticker !== GRAPH.ticker) setGraph(ticker);
+  showTab('graph');
+  refreshGraph();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function showGraphJob(job) {
+  GRAPH.state = job.status;
+  renderGraph();
+  if (job.log) setTermLog(job.log);
+  const live = job.status === 'queued' || job.status === 'running';
+  if (live) {
+    const lines = String(job.log || '').split('\n').map(line => line.trim()).filter(Boolean);
+    setGraphProgress(lines.length ? lines[lines.length - 1] : `${job.status}…`);
+  } else if (job.status === 'error') {
+    setGraphProgress(`error: ${job.error || 'the pipeline failed — open the log for details'}`, true);
+  } else if (job.status === 'idle') {
+    setGraphProgress(`No results for ${job.ticker || GRAPH.ticker} yet. Press Run to generate them.`);
+  } else {
+    setGraphProgress('');
+  }
+}
+
+async function refreshGraph() {
+  const ticker = GRAPH.ticker;
   if (!ticker) return;
   try {
-    const job = await (await fetch(`/api/status/${ticker}`)).json();
-    LIVE[ticker] = job.status;
-    pickActive();
-    ACTIVE_TICKER = ticker;
-    TERM_TICKER = ticker;
-    setStatus(job.status, job.status);
-    if (job.log) setTermLog(job.log);
-    if (job.status === 'done') loadResults(ticker, '#results-run');
-    if (job.status === 'queued' || job.status === 'running') poll(ticker);
+    const job = await (await fetch(`/api/status/${encodeURIComponent(ticker)}`)).json();
+    if (ticker !== GRAPH.ticker) return;
+    showGraphJob(job);
+    if (job.status === 'queued' || job.status === 'running') {
+      LIVE[ticker] = job.status;
+      pickActive();
+      if (ticker === ACTIVE_TICKER) setStatus(job.status, job.status);
+      poll(ticker);
+    } else if (job.status !== 'idle') {
+      loadGraph(ticker);
+    }
   } catch {
-    setStatus('error', 'error');
+    if (ticker !== GRAPH.ticker) return;
+    GRAPH.state = 'error';
+    renderGraph();
+    setGraphProgress('Could not reach the server.', true);
   }
+}
+
+async function loadGraph(ticker) {
+  await Promise.all([loadResults(ticker), loadGraphSummary(ticker)]);
+}
+
+// The screener line for the pinned ticker. Also refreshes the Screener tab's
+// data, since every graph run produces screener data too.
+async function loadGraphSummary(ticker) {
+  try {
+    const res = await fetch('/api/screener');
+    const data = await res.json();
+    if (!res.ok) return;
+    SCREEN.items = Array.isArray(data.items) ? data.items : [];
+    SCREEN.pipeline = data.pipeline || null;
+    renderScreener();
+    if (ticker !== GRAPH.ticker) return;
+    const row = SCREEN.items.find(item => item.ticker === ticker);
+    const target = $('#graph-summary');
+    if (!row) { target.innerHTML = ''; return; }
+    if (row.has_evaluation === false) {
+      target.innerHTML = `<p class="muted">No valuation data for ${esc(ticker)} — usually Yahoo prices were
+        unreachable. Open the log and look for <code>[!] valuation skipped</code>.</p>`;
+      return;
+    }
+    const ranked = SCREEN.items.filter(item => item.greenblatt_rank).length;
+    const stat = (label, value) => `<div class="stat"><span>${label}</span><b>${value}</b></div>`;
+    target.innerHTML = `<div class="graph-summary">
+      ${stat('FY', esc(row.fiscal_year ?? '—'))}
+      ${stat('F-score', scoreCell(row.f_score, 7, 3))}
+      ${stat('Z-score', scoreCell(row.z_score, 2.99, 1.81))}
+      ${stat('P/E', fmtNum(row.pe, 1))}
+      ${stat('EV/EBIT', fmtNum(row.ev_ebit, 1))}
+      ${stat('Earnings yield', fmtRatio(row.earnings_yield))}
+      ${stat('Return on capital', fmtRatio(row.return_on_capital))}
+      ${stat('Magic rank', row.greenblatt_rank ? `#${row.greenblatt_rank} of ${ranked}` : '—')}
+      ${stat('FCF yield', fmtRatio(row.fcf_yield))}
+      ${stat('P/E pct', fmtPctPoints(row.pe_percentile))}
+    </div>`;
+  } catch { /* the charts still render without the screener line */ }
 }
 
 /* ------------------------------------------------------------------------ */
 
 function showTab(name) {
-  for (const tab of ['run', 'insiders', 'recent', 'screener', 'simulation']) {
+  for (const tab of ['graph', 'insiders', 'recent', 'screener', 'simulation']) {
     const active = tab === name;
     $(`#pane-${tab}`).classList.toggle('hidden', !active);
     $(`#tab-${tab}`).classList.toggle('active', active);
@@ -777,24 +908,25 @@ function showTab(name) {
 function setStatus(text, cls) {
   const live = cls === 'queued' || cls === 'running';
   const badge = live
-    ? `<span class="badge ${cls} badge-link" role="button" tabindex="0" title="Go to this run" onclick="gotoRun()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();gotoRun();}">${text}</span>`
+    ? `<span class="badge ${cls} badge-link" role="button" tabindex="0" title="Go to this run" onclick="gotoActive()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();gotoActive();}">${text}</span>`
     : `<span class="badge ${cls}">${text}</span>`;
   const status = $('#status');
   status.innerHTML = badge;
   status.dataset.ticker = live ? ACTIVE_TICKER : '';
 }
 
-function gotoRun() {
+// The pinned ticker's run lives in the Graph tab; anything else is a screener job.
+function gotoActive() {
   const ticker = $('#status').dataset.ticker || ACTIVE_TICKER;
   if (!ticker) return;
   ACTIVE_TICKER = ticker;
-  TERM_TICKER = ticker;
-  showTab('run');
-  $('#ticker').value = ticker;
-  updateMode();
-  refreshRun();
-  const term = $('#terminal');
-  if (term && term.scrollIntoView) term.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (ticker === GRAPH.ticker) {
+    showTab('graph');
+    refreshGraph();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  } else {
+    showTab('screener');
+  }
 }
 
 async function runTicker(rawTicker) {
@@ -803,12 +935,14 @@ async function runTicker(rawTicker) {
   $('#ticker').value = ticker;
   LIVE[ticker] = 'queued';
   ACTIVE_TICKER = ticker;
-  TERM_TICKER = ticker;
   const filings = Number($('#filings').value);
   $('#run-btn').disabled = true;
-  $('#results-run').innerHTML = '';
+  setGraph(ticker);
+  GRAPH.state = 'queued';
+  renderGraph();
   setStatus('queued', 'queued');
-  showTab('run');
+  showTab('graph');
+  setGraphProgress('starting pipeline…');
   setTermLog(`$ stocky run ${ticker} --filings ${filings}\nstarting pipeline…`);
   try {
     const res = await fetch('/api/run', {
@@ -823,6 +957,10 @@ async function runTicker(rawTicker) {
   } catch (err) {
     setStatus('error', 'error');
     $('#run-btn').disabled = false;
+    if (ticker !== GRAPH.ticker) return;
+    GRAPH.state = 'error';
+    renderGraph();
+    setGraphProgress(`error: ${err.message}`, true);
     setTermLog(`$ stocky run ${ticker} --filings ${filings}\nerror: ${err.message}`);
   }
 }
@@ -837,12 +975,13 @@ function poll(ticker) {
       LIVE[ticker] = job.status;
       pickActive();
       if (ticker === ACTIVE_TICKER) setStatus(job.status, job.status);
-      if (job.log && ticker === TERM_TICKER) setTermLog(job.log);
+      const pinned = ticker === GRAPH.ticker;
+      if (pinned) showGraphJob(job);
       if (job.status === 'done') {
         delete LIVE[ticker];
         pickActive();
         $('#run-btn').disabled = false;
-        loadResults(ticker, '#results-run');
+        if (pinned) loadGraph(ticker);
       } else if (job.status === 'error' || job.status === 'cancelled') {
         delete LIVE[ticker];
         pickActive();
@@ -850,7 +989,8 @@ function poll(ticker) {
         if (job.status === 'cancelled') {
           setStatus('cancelled', 'idle');
         }
-        if (job.error) setTermLog((job.log ? job.log + '\n' : '') + `error: ${job.error}`);
+        if (pinned && job.error) setTermLog((job.log ? job.log + '\n' : '') + `error: ${job.error}`);
+        if (pinned) loadGraph(ticker);
       } else {
         poll(ticker);
       }
@@ -863,14 +1003,15 @@ function poll(ticker) {
   }, 2000);
 }
 
-async function loadResults(ticker, target) {
-  const res = await fetch(`/api/files/${ticker}`);
+async function loadResults(ticker, target = '#results-graph') {
+  const res = await fetch(`/api/files/${encodeURIComponent(ticker)}`);
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    renderResultsError(ticker, data, target);
+    if (ticker === GRAPH.ticker) renderResultsError(ticker, data, target);
     return;
   }
-  renderResults(await res.json(), target);
+  const data = await res.json();
+  if (ticker === GRAPH.ticker) renderResults(data, target);
 }
 
 function renderResultsError(ticker, data, target) {
@@ -894,6 +1035,18 @@ function renderResultsError(ticker, data, target) {
 }
 
 function renderResults(data, target) {
+  if (!data.charts.length) {
+    // A screener run writes the data but no charts.
+    $(target).innerHTML = `
+      <div class="card">
+        <div class="row" style="justify-content:space-between">
+          <strong>${esc(data.ticker)} — no graphs yet</strong>
+          <button class="primary" onclick="runTicker('${esc(data.ticker)}')">Generate graphs</button>
+        </div>
+        <p class="muted">Screener runs collect the data only. Generate graphs runs the full pipeline.</p>
+      </div>`;
+    return;
+  }
   const grid = data.charts.map(name => `
     <figure>
       <a href="/files/${esc(data.ticker)}/${esc(name)}" target="_blank">
@@ -978,7 +1131,7 @@ async function loadRecent() {
   if (!items.length) { list.innerHTML = '<li class="muted">No runs yet.</li>'; return; }
   list.innerHTML = items.map(it => `
     <li>
-      <span class="t" onclick="openRecent('${esc(it.ticker)}')">${esc(it.ticker)}</span>
+      <span class="t" onclick="openGraph('${esc(it.ticker)}')">${esc(it.ticker)}</span>
       <span class="muted">${it.charts.length} charts · ${fmtDate(it.modified)}
         · <a href="/download/${esc(it.ticker)}">zip</a>
         · <a href="#" onclick="removeRecent('${esc(it.ticker)}');return false">remove</a></span>
@@ -1001,14 +1154,8 @@ async function removeRecent(ticker) {
     $('#sim-status').textContent = `${ticker} removed.`;
   }
   $('#sim-run').dataset.loaded = '';
-  $('#results-recent').innerHTML = '';
+  if (GRAPH.ticker === ticker) setGraph('');
   loadRecent();
-}
-
-function openRecent(ticker) {
-  $('#ticker').value = ticker;
-  loadResults(ticker, '#results-recent');
-  $('#results-recent').scrollIntoView({ behavior: 'smooth' });
 }
 
 /* Screener ----------------------------------------------------------------- */
@@ -1124,7 +1271,14 @@ function sortScreen(key) {
   renderScreener();
 }
 
-function generateGraphs(ticker) {
+// Open the ticker's graphs; run the pipeline only when none exist yet
+// (screener runs skip charts).
+async function generateGraphs(ticker) {
+  try {
+    const res = await fetch(`/api/files/${encodeURIComponent(ticker)}`);
+    const data = res.ok ? await res.json() : null;
+    if (data && Array.isArray(data.charts) && data.charts.length) { openGraph(ticker); return; }
+  } catch { /* fall through to a run */ }
   $('#ticker').value = ticker;
   updateMode();
   runTicker(ticker);
@@ -1158,7 +1312,7 @@ function renderScreener() {
   const notes = [];
   if (pipelineNote) notes.push(pipelineNote);
   if (stale) notes.push(`${stale} ticker(s) have results but no <code>evaluation.csv</code> — the pipeline wrote no
-        valuation data. Check that ticker's log in the Run tab: <code>[!] valuation skipped</code> means Yahoo
+        valuation data. Open it with <b>graphs</b> and check its log: <code>[!] valuation skipped</code> means Yahoo
         price data was unreachable from the container (SEC works, Yahoo often does not). Re-run once it can reach it.`);
   $('#screen-notes').innerHTML = notes.join('<br>');
   const { key, dir } = SCREEN.sort;
@@ -1676,20 +1830,20 @@ document.querySelectorAll('#sim-ranges button').forEach(button => {
 });
 
 
-// If a run is already in progress when the page loads, resume watching it.
+// Restore the pinned graph, then resume watching any other run in progress.
 applyTheme(document.documentElement.dataset.theme || 'dark');
 loadIdentity();
+renderGraph();
+refreshGraph();
 (async () => {
   const { items } = await (await fetch('/api/recent')).json();
   for (const it of items) {
-    const job = await (await fetch(`/api/status/${it.ticker}`)).json();
+    if (it.ticker === GRAPH.ticker) continue;
+    const job = await (await fetch(`/api/status/${encodeURIComponent(it.ticker)}`)).json();
     if (job.status === 'queued' || job.status === 'running') {
-      if (!$('#ticker').value.trim()) {
-        $('#ticker').value = it.ticker;
-        ACTIVE_TICKER = it.ticker;
-        TERM_TICKER = it.ticker;
-        updateMode();
-      }
+      LIVE[it.ticker] = job.status;
+      pickActive();
+      setStatus(job.status, job.status);
       poll(it.ticker);
       break;
     }
