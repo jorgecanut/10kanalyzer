@@ -109,7 +109,8 @@
   .toolbar { padding:8px 20px; border-top:1px solid var(--line-soft); background:var(--bg); }
   .toolbar-inner { max-width:1100px; margin:0 auto; display:flex; gap:8px; flex-wrap:wrap;
                    align-items:center; justify-content:center; }
-  .head-actions .status { font-size:13px; }
+  /* Fixed width so idle/running/cancelled never shift the centred bar. */
+  #status { font-size:13px; min-width:92px; display:flex; justify-content:flex-end; }
   #ticker { flex:0 1 360px; width:360px; min-width:240px; height:44px; border-color:var(--line-strong); }
   /* The filings count is secondary: smaller and quieter, label kept. */
   #filings { height:32px; padding:4px 8px; font-size:12px; color:var(--muted); }
@@ -245,7 +246,7 @@
     .term-body { font-size:14px; }
     header { padding:10px 14px; }
     .toolbar { padding:8px 14px; }
-    #ticker { flex:1 1 100%; width:auto; }
+    #ticker { flex:1 1 100%; width:auto; order:-1; }   /* status drops to the second row */
     .user-id { max-width:130px; }
   }
 
@@ -368,7 +369,6 @@
         <h1>Stocky</h1>
       </div>
       <div class="head-actions">
-        <span id="status" class="status"><span class="badge idle">idle</span></span>
         <button id="theme-btn" class="theme-btn" onclick="toggleTheme()" title="Switch colour theme" aria-label="Switch colour theme">
           <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true">
             <g fill="none">
@@ -408,6 +408,7 @@
 
   <div class="toolbar">
     <div class="toolbar-inner">
+      <span id="status" class="status"><span class="badge idle">idle</span></span>
       <input id="ticker" type="text" placeholder="AAPL, MSFT, NVDA" maxlength="120" aria-label="Tickers"
              oninput="updateMode()" onkeydown="if(event.key==='Enter')handlePrimary()">
       <select id="filings" title="Number of 10-K filings">
