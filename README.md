@@ -55,7 +55,9 @@ financial_graphs/
 │   ├── insider.json         # open-market insider buys/sells, last 6 months
 │   ├── statements.csv       # every dimension-free primary-statement line
 │   ├── facts.csv            # every fact for each period, dimensions included
-│   └── notes.csv            # key schedules: debt, segments, EPS, taxes, shares
+│   ├── notes.csv            # key schedules: debt, segments, EPS, taxes, shares
+│   ├── 01_…png … 08_…png    # charts (light)
+│   └── dark/                # the same charts drawn for dark mode
 ├── AAPL/   # same CSVs
 └── MSFT/   # same CSVs
 ```

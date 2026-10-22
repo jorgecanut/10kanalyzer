@@ -158,7 +158,16 @@
   .badge-link:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:14px; }
   figure { margin:0; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:10px; }
-  figure img { width:100%; border-radius:6px; display:block; background:#fff; }
+  figure img { width:100%; border-radius:6px; display:block; background:var(--surface); }
+  /* Charts: an index, then each chart as wide as the screen allows (or a grid). */
+  .chart-index-head { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:10px; }
+  .chart-index ol { margin:0; padding-left:22px; columns:2 260px; column-gap:28px; font-size:14px; line-height:1.9; }
+  .chart-index li { break-inside:avoid; }
+  .chart-index .windows { color:var(--muted); }
+  .view-toggle { display:flex; gap:6px; }
+  .charts-full { display:flex; flex-direction:column; gap:16px; position:relative; left:50%;
+                 width:min(calc(100vw - 40px), 1600px); transform:translateX(-50%); }
+  .charts-full figure, .grid figure { scroll-margin-top:150px; }
   figcaption { display:flex; justify-content:space-between; font-size:12px; color:var(--muted);
                margin-top:8px; }
   a { color:var(--accent); text-decoration:none; }
@@ -814,7 +823,9 @@ const TICKER_RE = /^[A-Z][A-Z0-9.\-]{0,9}$/;
 
 // The Graph tab shows one pinned ticker. It survives reloads and cancel, and
 // changes only when a single ticker is run or opened, or it is removed.
-const GRAPH = { ticker: '', state: '', log: false };
+const GRAPH = { ticker: '', state: '', log: false, results: null };
+let CHART_VIEW = 'full';
+try { CHART_VIEW = localStorage.getItem('stocky-chart-view') || 'full'; } catch {}
 try {
   const saved = localStorage.getItem('stocky-graph') || '';
   if (TICKER_RE.test(saved)) GRAPH.ticker = saved;
@@ -955,6 +966,8 @@ function applyTheme(theme) {
   }
   $('#opt-dark').classList.toggle('active', theme === 'dark');
   $('#opt-light').classList.toggle('active', theme === 'light');
+  // Swap the charts to the copies drawn for this theme.
+  if (GRAPH.results) renderResults(GRAPH.results, '#results-graph');
 }
 
 function setTheme(theme) {
@@ -1251,6 +1264,7 @@ function setGraph(ticker) {
     else localStorage.removeItem('stocky-graph');
   } catch {}
   $('#results-graph').innerHTML = '';
+  GRAPH.results = null;
   $('#graph-summary').innerHTML = '';
   setGraphProgress('');
   setTermLog('');
@@ -1534,6 +1548,7 @@ async function loadResults(ticker, target = '#results-graph') {
 }
 
 function renderResultsError(ticker, data, target) {
+  GRAPH.results = null;
   const d = data.diagnostics || {};
   const detail = [
     d.graph_dir ? `reads: ${esc(d.graph_dir)}` : '',
@@ -1554,6 +1569,7 @@ function renderResultsError(ticker, data, target) {
 }
 
 function renderResults(data, target) {
+  GRAPH.results = null;
   if (!data.charts.length) {
     // A screener run writes the data but no charts.
     $(target).innerHTML = `
@@ -1566,14 +1582,70 @@ function renderResults(data, target) {
       </div>`;
     return;
   }
+  GRAPH.results = data;
   const grid = data.charts.map(name => `
-    <figure>
-      <a href="/files/${esc(data.ticker)}/${esc(name)}" target="_blank">
-        <img src="/files/${esc(data.ticker)}/${esc(name)}" alt="${esc(name)}" loading="lazy"></a>
+    <figure id="${esc(chartId(name))}">
+      <a href="${chartSrc(data, name)}" target="_blank">
+        <img src="${chartSrc(data, name)}" alt="${esc(name)}" loading="lazy"></a>
       <figcaption><span>${esc(name.replace(/^\d+_/, '').replace('.png','').replaceAll('_',' '))}</span>
         <a href="/download/${esc(data.ticker)}/${esc(name)}">download</a></figcaption>
     </figure>`).join('');
-  $(target).innerHTML = `<div class="grid">${grid}</div>`;
+  const view = CHART_VIEW === 'grid' ? 'grid' : 'charts-full';
+  $(target).innerHTML = `${chartIndex(data.charts)}<div class="${view}">${grid}</div>`;
+}
+
+// Chart files are NN_name[_YYYY_YYYY].png: one index line per NN, with a link
+// per year window.
+function chartIndex(charts) {
+  const groups = new Map();
+  for (const name of charts) {
+    const base = name.replace(/\.png$/, '');
+    const key = base.split('_')[0];
+    const windowMatch = base.match(/_(\d{4})_(\d{4})$/);
+    const title = base.replace(/^\d+_/, '').replace(/_(\d{4})_(\d{4})$/, '').replace(/_full$/, '').replaceAll('_', ' ');
+    if (!groups.has(key)) groups.set(key, { title, items: [] });
+    groups.get(key).items.push({ name, label: windowMatch ? `${windowMatch[1]}–${windowMatch[2]}` : '' });
+  }
+  const link = (name, text) => `<a href="#${chartId(name)}" onclick="jumpToChart(event, '${esc(chartId(name))}')">${esc(text)}</a>`;
+  const lines = [...groups.values()].map(({ title, items }) => {
+    const label = title.charAt(0).toUpperCase() + title.slice(1);
+    if (items.length === 1) return `<li>${link(items[0].name, label)}</li>`;
+    return `<li>${esc(label)} <span class="windows">${items.map(it => link(it.name, it.label || it.name)).join(' · ')}</span></li>`;
+  }).join('');
+  const toggle = (view, title, icon) => `<button class="panel-btn icon-btn" onclick="setChartView('${view}')" title="${title}"
+      aria-label="${title}" aria-pressed="${CHART_VIEW === view}">${icon}</button>`;
+  const fullIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+      <rect x="3.5" y="4" width="17" height="7" rx="1.5" fill="currentColor" fill-opacity=".2" /><rect x="3.5" y="13" width="17" height="7" rx="1.5" /></g></svg>`;
+  const gridIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+      <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" fill="currentColor" fill-opacity=".2" /><rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
+      <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" /><rect x="13.5" y="13.5" width="7" height="7" rx="1.5" /></g></svg>`;
+  return `<div class="card chart-index">
+      <div class="chart-index-head"><strong>Charts</strong>
+        <span class="view-toggle">${toggle('full', 'Full-width charts', fullIcon)}${toggle('grid', 'Grid of charts', gridIcon)}</span>
+      </div>
+      <ol>${lines}</ol>
+    </div>`;
+}
+
+const chartId = name => 'chart-' + name.replace(/\.png$/, '').replace(/[^\w-]/g, '_');
+
+function jumpToChart(event, id) {
+  event.preventDefault();
+  const el = document.getElementById(id);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function setChartView(view) {
+  CHART_VIEW = view;
+  try { localStorage.setItem('stocky-chart-view', view); } catch {}
+  if (GRAPH.results) renderResults(GRAPH.results, '#results-graph');
+}
+
+// Dark copies exist for runs made after dark charts were added.
+function chartSrc(data, name) {
+  const dark = document.documentElement.dataset.theme === 'dark'
+    && Array.isArray(data.dark_charts) && data.dark_charts.includes(name);
+  return `/files/${esc(data.ticker)}/${dark ? 'dark/' : ''}${esc(name)}`;
 }
 
 // Run selectors follow the pinned Graph ticker whenever the pin changes (or the
