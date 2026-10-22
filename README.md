@@ -38,6 +38,7 @@ set_identity("Data Analyst analyst@example.com")   # replace with your name/emai
 ```bash
 python edgar_dashboard.py                 # defaults to NFLX
 python edgar_dashboard.py --ticker AAPL --filings 10
+python edgar_dashboard.py --ticker AAPL --no-charts   # data only (screener mode)
 ```
 
 ## Output
@@ -95,7 +96,7 @@ Routes:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/` | The UI (Run / Insiders / Screener / Simulation tabs) |
+| `GET` | `/` | The UI (Graph / Insiders / Screener / Simulation tabs) |
 | `POST` | `/api/run` | `{"ticker":"NFLX","filings":10}` → queues a run |
 | `POST` | `/api/cancel` | Cancels every queued/running job; keeps all files |
 | `GET` | `/api/status/<ticker>` | queued / running / done / error + log tail |
@@ -113,14 +114,24 @@ Routes:
 | `GET` | `/download/<ticker>/<name>` | One file |
 | `GET` | `/healthz` | Health probe |
 
+The ticker bar decides the mode. **One ticker** runs the full pipeline: graphs
+plus screener data. It is pinned to the **Graph** tab with its screener line
+(scores, ratios, Magic rank) and stays there until you press **remove** (clears
+the view only, never files) or run/open another ticker; the pin survives page
+reloads and cancel. The Graph tab is empty until then, and the pipeline log is
+hidden behind a **log** button. **Several tickers** switch to screener mode:
+data only, no charts (`--no-charts`), and the pinned graph is left as is.
+Running a single ticker that is queued as a screener job upgrades it to a graph
+run; if it is already running, a graph run is queued after it.
+
 The **Screener** tab posts up to 25 tickers, shows a sortable table of scores and
 ratios, and caches each ticker's result for 7 days. Tickers with no cached data
 are queued through the same serialized worker as `/api/run`. It ranks the
 watchlist with Joel Greenblatt's Magic Formula: **earnings yield** (EBIT / EV)
 and **return on capital** (EBIT / (total assets − current liabilities)); the
 combined rank is 1 + 1 for the best of both, lower is better. Each row has a
-**graphs** button that queues a full run for that ticker and switches to the
-Run tab. Older `evaluation.csv` files without `return_on_capital` are repaired
+**graphs** button that opens the ticker in the Graph tab, running the full
+pipeline first only if it has no charts yet. Older `evaluation.csv` files without `return_on_capital` are repaired
 on the fly from `financial_data.csv` + `statements.csv`.
 
 The **Insiders** tab lists every open-market Form 4 buy/sell in the last 6
@@ -148,7 +159,7 @@ Estimates only; no taxes or fees.
 
 The red-X **cancel** button beside **Run** stops every queued/running pipeline
 job, aborts in-flight browser requests, and resets the interface to its initial
-state. It never deletes generated files; run logs and partial results stay in
+state, except for the pinned graph. It never deletes generated files; run logs and partial results stay in
 `financial_graphs/`.
 
 ## Deploy on push (direct, no GitHub)

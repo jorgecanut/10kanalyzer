@@ -571,6 +571,10 @@ def main() -> None:
         "--filings", type=int, default=NUM_FILINGS,
         help="Number of 10-K filings to use (default: %(default)s)",
     )
+    parser.add_argument(
+        "--no-charts", action="store_true",
+        help="Write the CSV/valuation data only; skip chart rendering (screener mode)",
+    )
     args = parser.parse_args()
 
     if not TICKER_RE.match(args.ticker.upper()):
@@ -636,6 +640,11 @@ def main() -> None:
                 print(f"[+] Wrote insider transactions ({trades} trades)")
     except Exception as exc:  # noqa: BLE001 - optional artifact must never abort
         print(f"[!] insider data skipped: {type(exc).__name__}: {exc}")
+
+    if args.no_charts:
+        print("[*] Charts skipped (screener mode)")
+        print(f"\n[+] Done. CSV data written to '{os.path.abspath(OUTPUT_DIR)}/'.")
+        return
 
     print("[*] Rendering charts")
     rendered = charts.render_all(TICKER, OUTPUT_DIR, df, statements, facts)

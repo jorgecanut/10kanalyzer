@@ -239,6 +239,8 @@ def _worker(ticker: str, filings: int, job_id: str) -> None:
 
     The job id guards against stale worker threads: a cancelled or superseded
     job must never overwrite the state of a newer run for the same ticker.
+    Screener jobs (``charts: False``) skip chart rendering; the flag is read at
+    launch, so a single-ticker run can still upgrade a queued screener job.
     """
     with RUN_LOCK:
         with JOBS_LOCK:
@@ -273,14 +275,18 @@ def _worker(ticker: str, filings: int, job_id: str) -> None:
             if job.get("cancel_requested"):
                 return
             job.update(status="running", started=_now())
+            with_charts = job.get("charts", True)
 
         proc = None
         status, code = "error", -1
         try:
             env = {**os.environ, "EDGAR_IDENTITY": _get_identity(), "PYTHONUNBUFFERED": "1"}
+            command = [sys.executable, str(DASHBOARD), "--ticker", ticker, "--filings", str(filings)]
+            if not with_charts:
+                command.append("--no-charts")
             with log_path.open("w") as log:
                 proc = subprocess.Popen(
-                    [sys.executable, str(DASHBOARD), "--ticker", ticker, "--filings", str(filings)],
+                    command,
                     cwd=str(BASE_DIR),
                     stdout=log,
                     stderr=subprocess.STDOUT,
@@ -328,6 +334,7 @@ def _worker(ticker: str, filings: int, job_id: str) -> None:
                     if PROCS.get(ticker) is proc:
                         PROCS.pop(ticker, None)
 
+        followup = None
         with JOBS_LOCK:
             job = JOBS.get(ticker)
             if job and job.get("id") == job_id:
@@ -335,6 +342,14 @@ def _worker(ticker: str, filings: int, job_id: str) -> None:
                     job.update(status="cancelled", finished=_now(), returncode=code)
                 else:
                     job.update(status=status, finished=_now(), returncode=code)
+                    followup = job.get("followup_filings")
+                    if followup:
+                        # A graph run was requested while this screener job ran.
+                        followup_id = secrets.token_hex(8)
+                        JOBS[ticker] = {"id": followup_id, "ticker": ticker, "status": "queued",
+                                        "queued": _now(), "charts": True}
+    if followup:
+        threading.Thread(target=_worker, args=(ticker, followup, followup_id), daemon=True).start()
 
 
 # --------------------------------------------------------------------------- #
@@ -439,11 +454,18 @@ def run():
     with JOBS_LOCK:
         job = JOBS.get(ticker)
         if job and job["status"] in ("queued", "running"):
+            if not job.get("charts", True):
+                # A screener job is pending for this ticker: make it render
+                # charts if it has not started, else queue a graph run after it.
+                if job["status"] == "queued":
+                    job["charts"] = True
+                else:
+                    job["followup_filings"] = filings
             return jsonify(status=job["status"], ticker=ticker, message="Already running"), 200
 
     with JOBS_LOCK:
         job_id = secrets.token_hex(8)
-        JOBS[ticker] = {"id": job_id, "ticker": ticker, "status": "queued", "queued": _now()}
+        JOBS[ticker] = {"id": job_id, "ticker": ticker, "status": "queued", "queued": _now(), "charts": True}
 
     threading.Thread(target=_worker, args=(ticker, filings, job_id), daemon=True).start()
     return jsonify(status="queued", ticker=ticker), 202
@@ -892,7 +914,7 @@ def screener_run():
                 items.append({"ticker": ticker, "status": job["status"]})
                 continue
             job_id = secrets.token_hex(8)
-            JOBS[ticker] = {"id": job_id, "ticker": ticker, "status": "queued", "queued": _now()}
+            JOBS[ticker] = {"id": job_id, "ticker": ticker, "status": "queued", "queued": _now(), "charts": False}
         threading.Thread(target=_worker, args=(ticker, 10, job_id), daemon=True).start()
         queued.append(ticker)
         items.append({"ticker": ticker, "status": "queued"})
