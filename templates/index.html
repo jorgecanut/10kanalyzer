@@ -108,7 +108,7 @@
             display:flex; align-items:center; justify-content:center; font-weight:700; font-size:calc(var(--fs) * 16);
             text-transform:uppercase; }
   .user-meta { display:flex; flex-direction:column; min-width:0; }
-  .user-label { font-size:calc(var(--fs) * 13); color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
+  .user-label { font-size:calc(var(--fs) * 13); color:var(--muted); }
   .user-id { font-size:calc(var(--fs) * 15); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:230px; }
 
   /* Ticker bar: always visible under the title bar. */
@@ -162,7 +162,12 @@
   .idle { background:var(--badge-idle-bg); color:var(--badge-idle-fg); }
   .badge-link { cursor:pointer; }
   .badge-link:hover { text-decoration:underline; }
-  .badge-link:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  /* Keyboard focus: one visible ring for every control (mouse clicks stay clean). */
+  :where(button, a, select, input, textarea, [tabindex]):focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  @media (prefers-reduced-motion: reduce) {
+    .dropbar, .dropbar.open { transition:none; }
+    .dropbar.open .dropbar-progress { animation:none; }
+  }
   .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:14px; }
   figure { margin:0; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:10px; }
   figure img { width:100%; border-radius:6px; display:block; background:var(--surface); }
@@ -218,8 +223,7 @@
 
   /* Simulation: market data left of the chart, projection underneath. */
   .sim-row { display:grid; grid-template-columns:minmax(0,1fr) 250px; gap:20px; align-items:start; }
-  .sim-section h3, .sim-market h3 { margin:0 0 12px; font-size:calc(var(--fs) * 14); color:var(--muted); font-weight:600;
-                                    text-transform:uppercase; letter-spacing:.04em; }
+  .sim-section h3, .sim-market h3 { margin:0 0 12px; font-size:calc(var(--fs) * 16); color:var(--text); font-weight:700; }
   .sim-meta { color:var(--muted); font-size:calc(var(--fs) * 14); margin:0 0 10px; }
   .sim-chart svg { display:block; width:100%; height:auto; cursor:crosshair; touch-action:none; }
   .sim-controls { display:flex; gap:6px; flex-wrap:wrap; margin-top:12px; }
@@ -247,6 +251,8 @@
   .stat:last-child { border-bottom:0; }
   .stat span:first-child { color:var(--muted); }
   .stat b { font-weight:600; }
+  .up { color:var(--badge-done-fg); }
+  .down { color:var(--badge-error-fg); }
   .stat[title], td[title] { cursor:help; }
   .sim-section { margin-top:20px; padding-top:18px; border-top:1px solid var(--line); }
   .sim-form { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; align-items:end; }
@@ -309,7 +315,7 @@
   table.data { width:100%; border-collapse:collapse; font-size:calc(var(--fs) * 15); }
   table.data th, table.data td { padding:8px 10px; text-align:right; white-space:nowrap;
                                  border-bottom:1px solid var(--line-soft); }
-  table.data th { color:var(--muted); font-size:calc(var(--fs) * 14); font-weight:600; text-transform:uppercase;
+  table.data th { color:var(--muted); font-size:calc(var(--fs) * 14); font-weight:600;
                   letter-spacing:.03em; cursor:pointer; user-select:none; }
   table.data th:hover { color:var(--text); }
   table.data th:first-child, table.data td:first-child { text-align:left; }
@@ -348,8 +354,7 @@
   .opt-tabs button:hover { color:var(--text); }
   .opt-tabs button.active { background:var(--accent); color:var(--on-accent); font-weight:600; }
   .opt-panes { flex:1; min-width:0; overflow:auto; padding:14px 18px; }
-  .opt-pane h2 { margin:0 0 4px; font-size:calc(var(--fs) * 14); font-weight:600; text-transform:uppercase;
-                 letter-spacing:.04em; color:var(--muted); }
+  .opt-pane h2 { margin:0 0 4px; font-size:calc(var(--fs) * 16); font-weight:700; color:var(--text); }
   .opt-pane + .opt-pane { margin-top:18px; }
   .opt-row { padding:10px 0; border-bottom:1px solid var(--line-soft); }
   .opt-row:last-child { border-bottom:0; }
@@ -412,15 +417,16 @@
   .home-title b { font-size:calc(var(--fs) * 24); }
   .home-grid { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr); gap:0 28px; }
   .home-block { margin-top:18px; padding-top:14px; border-top:1px solid var(--line); }
-  .home-block h3 { margin:0 0 10px; font-size:calc(var(--fs) * 14); color:var(--muted); font-weight:600;
-                   text-transform:uppercase; letter-spacing:.04em; }
+  .home-block h3 { margin:0 0 10px; font-size:calc(var(--fs) * 16); color:var(--text); font-weight:700; }
   .home-stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:0 20px; }
   .home-rank { list-style:none; margin:0 0 8px; padding:0; }
   .home-rank li { display:flex; gap:12px; padding:6px 10px; border-radius:7px; }
   .home-rank li .r { color:var(--muted); min-width:3.5em; font-variant-numeric:tabular-nums; }
   .home-rank li.me { background:var(--accent-soft); font-weight:700; }
   .home-rank a { color:var(--text); }
-  .home-more { font-size:calc(var(--fs) * 15); color:var(--muted); }
+  .home-more { font-size:calc(var(--fs) * 15); color:var(--muted); text-decoration:underline;
+               text-underline-offset:3px; text-decoration-color:var(--line-strong); }
+  .home-more:hover { color:var(--text); }
   .home-charts { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:10px; }
   .home-charts figure { padding:6px; cursor:pointer; }
   .home-charts figure:hover { border-color:var(--muted); }
@@ -573,14 +579,14 @@
             <div class="home-block">
               <h3>Screener ranking</h3>
               <ol id="home-rank" class="home-rank"></ol>
-              <a href="#" class="home-more" onclick="showTab('screener');return false">full ranking →</a>
+              <a href="#" class="home-more" onclick="showTab('screener');return false">Full ranking</a>
             </div>
           </div>
           <div class="home-block">
             <h3>News</h3>
             <p class="sim-meta" id="home-news-status"></p>
             <ol id="home-news" class="news-list"></ol>
-            <a href="#" class="home-more" onclick="showTab('news');return false">more news →</a>
+            <a href="#" class="home-more" onclick="showTab('news');return false">More news</a>
           </div>
           <div class="home-block">
             <h3>Charts</h3>
@@ -1052,6 +1058,8 @@ const HELP = {
   sim_dividend: 'Dividends per share paid over a year at the current rate.',
   sim_yield: 'Annual dividend / current price.',
 };
+// Scrolling jumps instead of gliding when the viewer asks for reduced motion.
+const SMOOTH = matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
 const tip = key => HELP[key] ? ` title="${esc(HELP[key])}"` : '';
 let timer = null;
 let ACCOUNT = null;
@@ -1656,7 +1664,7 @@ function openGraph(ticker) {
   if (ticker !== GRAPH.ticker) setGraph(ticker);
   showTab('graph');
   refreshGraph();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  window.scrollTo({ top: 0, behavior: SMOOTH });
 }
 
 function showGraphJob(job) {
@@ -1822,7 +1830,7 @@ function openHome(ticker) {
 function openChart(id) {
   showTab('graph');
   const el = document.getElementById(id);
-  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (el) el.scrollIntoView({ behavior: SMOOTH, block: 'start' });
 }
 
 /* ------------------------------------------------------------------------ */
@@ -1845,7 +1853,7 @@ function showTab(name) {
   const tabs = $('.tabs');
   const button = $(`#tab-${name}`);
   if (button.offsetLeft < tabs.scrollLeft || button.offsetLeft + button.offsetWidth > tabs.scrollLeft + tabs.clientWidth) {
-    tabs.scrollTo({ left: button.offsetLeft - 8, behavior: 'smooth' });
+    tabs.scrollTo({ left: button.offsetLeft - 8, behavior: SMOOTH });
   }
   if (name === 'home') initHome();
   if (name === 'recent') loadRecent();
@@ -1878,7 +1886,7 @@ function gotoActive() {
   if (ticker === GRAPH.ticker) {
     showTab('graph');
     refreshGraph();
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    window.scrollTo({ top: 0, behavior: SMOOTH });
   } else {
     showTab('screener');
   }
@@ -2057,7 +2065,7 @@ const chartId = name => 'chart-' + name.replace(/\.png$/, '').replace(/[^\w-]/g,
 function jumpToChart(event, id) {
   event.preventDefault();
   const el = document.getElementById(id);
-  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (el) el.scrollIntoView({ behavior: SMOOTH, block: 'start' });
 }
 
 function setChartView(view) {
@@ -2466,6 +2474,9 @@ function applySimPrefs() {
     .forEach(button => button.classList.toggle('active', button.dataset.range === SIM.range));
 }
 
+// Direction class for a signed result: gains green, losses red, zero plain.
+const tone = v => (Number(v) > 0 ? 'up' : Number(v) < 0 ? 'down' : '');
+
 const fmtMoney = (v, currency = 'USD') => {
   if (v === null || v === undefined || Number.isNaN(v)) return '—';
   const symbol = currency === 'USD' ? '$' : esc(currency) + ' ';
@@ -2609,7 +2620,7 @@ function renderStats() {
   $('#sim-title').textContent = `${data.ticker} market data`;
   $('#sim-stats').innerHTML = `
     <div class="stat"${tip('sim_price')}><span>Stock price</span><b>${fmtMoney(price, data.currency)}</b></div>
-    <div class="stat"${tip('sim_change')}><span>Period change</span><b>${change === null ? '—' : (change >= 0 ? '+' : '') + fmtNum(change) + '%'}</b></div>
+    <div class="stat"${tip('sim_change')}><span>Period change</span><b class="${tone(change)}">${change === null ? '—' : (change >= 0 ? '+' : '') + fmtNum(change) + '%'}</b></div>
     <div class="stat"${tip('sim_high')}><span>Period high</span><b>${fmtMoney(high, data.currency)}</b></div>
     <div class="stat"${tip('sim_low')}><span>Period low</span><b>${fmtMoney(low, data.currency)}</b></div>
     <div class="stat"${tip('sim_pe')}><span>Trailing P/E</span><b>${fmtNum(data.trailing_pe)}</b></div>
@@ -2894,7 +2905,7 @@ function renderSimulation() {
         <div class="stat"><span>Shares</span><b>${fmtNum(past.shares, 4)}</b></div>
         <div class="stat"><span>${past.reinvest ? 'Dividends reinvested' : 'Dividends received'}</span><b>${past.dividends ? fmtMoney(past.dividends, data.currency) : 'No dividends'}</b></div>
         <div class="stat"><span>Value today</span><b>${fmtMoney(past.value, data.currency)}</b></div>
-        <div class="stat"><span>Profit</span><b>${signed(past.profit)} · ${past.returnPct === null ? '—' : (past.returnPct >= 0 ? '+' : '') + fmtNum(past.returnPct) + '%'}</b></div>
+        <div class="stat"><span>Profit</span><b class="${tone(past.profit)}">${signed(past.profit)} · ${past.returnPct === null ? '—' : (past.returnPct >= 0 ? '+' : '') + fmtNum(past.returnPct) + '%'}</b></div>
       </div>
       <div class="sim-table">
         <div class="table-wrap">
@@ -2914,8 +2925,8 @@ function renderSimulation() {
                   <td>${esc(row.label)}</td>
                   <td>${fmtMoney(row.dividends, data.currency)}</td>
                   <td>${fmtMoney(row.value, data.currency)}</td>
-                  <td>${signed(row.yearGain)}</td>
-                  <td>${signed(row.totalGain)}</td>
+                  <td class="${tone(row.yearGain)}">${signed(row.yearGain)}</td>
+                  <td class="${tone(row.totalGain)}">${signed(row.totalGain)}</td>
                 </tr>`).join('')}
             </tbody>
           </table>
@@ -2930,7 +2941,7 @@ function renderSimulation() {
       <div class="stat"><span>Market value</span><b>${fmtMoney(plan.marketValue, data.currency)}</b></div>
       <div class="stat"><span>Dividend gains</span><b>${plan.annual ? fmtMoney(plan.dividendGain, data.currency) : 'No dividends'}</b></div>
       <div class="stat"><span>Total value</span><b>${fmtMoney(plan.total, data.currency)}</b></div>
-      <div class="stat"><span>Profit</span><b>${fmtMoney(plan.profit, data.currency)}</b></div>
+      <div class="stat"><span>Profit</span><b class="${tone(plan.profit)}">${fmtMoney(plan.profit, data.currency)}</b></div>
     </div>
     <div class="sim-years">
       ${plan.rows.map(row => `
