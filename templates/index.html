@@ -153,35 +153,46 @@
 
   /* Ticker bar: always visible under the title bar. */
   .toolbar { padding:8px 20px; border-top:1px solid var(--line-soft); background:var(--bg); }
-  .toolbar-inner { max-width:1100px; margin:0 auto; display:flex; gap:8px; flex-wrap:wrap;
-                   align-items:center; justify-content:center; }
+  /* One row: ticker bar left, tabs right; as wide as the page column below. */
+  .toolbar-inner { max-width:1060px; margin:0 auto; display:flex; gap:8px 16px; flex-wrap:nowrap;
+                   align-items:center; justify-content:space-between; }
+  .bar-left { display:flex; gap:8px; align-items:center; flex:0 1 auto; min-width:0; }
+  /* On one row the tabs and buttons keep their width; the ticker box gives way. */
+  .toolbar .tabs, #filings, #run-btn, #cancel-btn, #tab-recent { flex:none; }
   /* Run state sits beside the title, a step smaller, on the title's baseline. */
   .brand-name { display:flex; align-items:baseline; gap:10px; }
   #status { display:inline-block; }
   #status .badge { font-size:calc(var(--fs) * 15); line-height:20px; padding:0 8px; }
-  #ticker { flex:0 1 360px; width:360px; min-width:240px; height:44px; border-color:var(--line-strong); }
+  #ticker { flex:0 1 300px; width:300px; min-width:160px; height:44px; border-color:var(--line-strong); }
   #filings { height:44px; padding:0 10px; font-size:calc(var(--fs) * 17); }
   #run-btn { height:44px; min-width:96px; padding:0 22px; font-size:calc(var(--fs) * 17); }
   #cancel-btn { width:44px; height:44px; }
   #ticker:focus { border-color:var(--accent); }
 
-  main { max-width:1100px; margin:0 auto; padding:18px 20px 40px; }
+  main { max-width:1100px; margin:0 auto; padding:20px 20px 40px; }
   /* Tabs slide sideways when they do not fit (phones); the scrollbar is
      hidden and an edge fade shows there is more. */
-  .tabs { position:relative; display:flex; gap:6px; margin-bottom:16px; overflow-x:auto; overscroll-behavior-x:contain;
+  .tabs { position:relative; display:flex; gap:4px; flex:0 1 auto; min-width:0; overflow-x:auto; overscroll-behavior-x:contain;
           scrollbar-width:none; scroll-snap-type:x proximity; }
   .tabs::-webkit-scrollbar { display:none; }
   .tabs.more-right { mask-image:linear-gradient(to right, #000 calc(100% - 40px), transparent); }
   .tabs.more-left { mask-image:linear-gradient(to right, transparent, #000 40px); }
   .tabs.more-left.more-right { mask-image:linear-gradient(to right, transparent, #000 40px,
                                                           #000 calc(100% - 40px), transparent); }
-  .tabs button { flex:none; white-space:nowrap; scroll-snap-align:start; border:0; background:none; padding:8px 14px; border-radius:var(--radius);
-                 cursor:pointer; font-size:calc(var(--fs) * 16); color:var(--muted); }
-  .tabs button:hover { color:var(--text); background:var(--hover); }
-  .tabs button.active { background:var(--accent-soft); color:var(--text); font-weight:600; }
-  .tabs button.tab-icon { display:flex; align-items:center; justify-content:center; padding:8px 11px; }
-  .tabs #tab-recent { margin-left:auto; }
-  .tabs button.tab-icon svg { width:22px; height:22px; display:block; }
+  .tabs button, .nav-btn { flex:none; white-space:nowrap; scroll-snap-align:start; border:0; background:none; padding:8px 12px;
+                 border-radius:var(--radius); cursor:pointer; font-size:calc(var(--fs) * 16); color:var(--muted); }
+  .tabs button:hover, .nav-btn:hover { color:var(--text); background:var(--hover); }
+  .tabs button.active, .nav-btn.active { background:var(--accent-soft); color:var(--text); font-weight:600; }
+  .tabs button.tab-icon, .nav-btn.tab-icon { display:flex; align-items:center; justify-content:center; padding:8px 11px; }
+  /* Home and Recent: same 24-unit line icons, same size. */
+  .tab-icon svg { width:22px; height:22px; display:block; }
+  /* Not enough room for one row: the tabs move to their own row. */
+  @media (max-width:1100px) {
+    .toolbar-inner { flex-wrap:wrap; }
+    .bar-left { flex:1 1 100%; justify-content:center; }
+    .toolbar .tabs { flex:1 1 100%; }
+    html { scroll-padding-top:180px; }
+  }
   .card { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-lg); padding:18px; margin-bottom:16px; }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
   input[type=text] { flex:1; min-width:160px; padding:10px 12px; border:1px solid var(--line);
@@ -342,9 +353,8 @@
     header { padding:10px 14px; }
     .toolbar { padding:8px 14px; }
     /* One row on phones: the ticker box takes what is left. */
-    .toolbar-inner { flex-wrap:nowrap; }
     #ticker { flex:1 1 auto; width:auto; min-width:0; }
-    #filings, #run-btn, #cancel-btn { flex:none; }
+    #filings, #run-btn, #cancel-btn, #tab-recent { flex:none; }
     #run-btn { min-width:0; padding:0 16px; }
     /* Profile shows only the avatar; it still opens Account. */
     .user-btn { padding:4px; gap:0; }
@@ -486,6 +496,12 @@
   .home-charts figure { padding:6px; cursor:pointer; }
   .home-charts figure:hover { border-color:var(--line-strong); }
   .home-charts figcaption { margin-top:4px; font-size:calc(var(--fs) * 13); }
+  /* Recent tab: download and delete as icons. */
+  .recent-meta { display:inline-flex; align-items:center; gap:6px; }
+  .icon-link { display:inline-flex; padding:4px; border-radius:var(--radius-sm); color:var(--muted); }
+  .icon-link:hover { color:var(--text); background:var(--hover); }
+  .icon-link.danger:hover { color:var(--badge-error-fg); background:var(--badge-error-bg); }
+  .icon-link svg { width:18px; height:18px; display:block; }
   .fig-dl { display:flex; padding:2px; border-radius:var(--radius-sm); color:var(--muted); }
   .fig-dl:hover { color:var(--text); background:var(--hover); }
   .fig-dl svg { width:18px; height:18px; display:block; }
@@ -510,6 +526,12 @@
     <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
       <path d="M4 15.5v2A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5v-2H4" fill="currentColor" opacity=".2" stroke="none" />
       <path d="M4 15.5v2A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5v-2M12 4v11m-4.5-4.5L12 15l4.5-4.5" />
+    </g>
+  </symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24">
+    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
+      <path d="M6.5 7.5l.9 11.1A2 2 0 0 0 9.4 20.5h5.2a2 2 0 0 0 2-1.9l.9-11.1z" fill="currentColor" opacity=".2" stroke="none" />
+      <path d="M4.5 7.5h15M9.5 7.5V5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v2.5M6.5 7.5l.9 11.1A2 2 0 0 0 9.4 20.5h5.2a2 2 0 0 0 2-1.9l.9-11.1M10.5 11v6M13.5 11v6" />
     </g>
   </symbol>
   <symbol id="i-refresh" viewBox="0 0 24 24">
@@ -574,51 +596,58 @@
 
   <div class="toolbar">
     <div class="toolbar-inner">
-      <input id="ticker" type="text" placeholder="AAPL, MSFT, NVDA" maxlength="120" aria-label="Tickers"
-             oninput="updateMode()" onkeydown="if(event.key==='Enter')handlePrimary()">
-      <select id="filings" title="Number of 10-K filings" aria-label="Number of 10-K filings">
-        <option value="3">3</option>
-        <option value="5">5</option>
-        <option value="10">10</option>
-        <option value="20" selected>20</option>
-      </select>
-      <button id="run-btn" class="primary" onclick="handlePrimary()">Run</button>
-      <button id="cancel-btn" class="btn-cancel" onclick="cancelAll()" hidden
-              title="Cancel running work and reset the interface — no files are deleted"
-              aria-label="Cancel running work and reset the interface">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8">
-            <path d="M6 6l12 12M18 6L6 18" />
-          </g>
-        </svg>
-      </button>
+      <!-- Left: recent runs and the ticker bar; right: the tabs. -->
+      <div class="bar-left">
+        <button id="tab-recent" class="tab-icon nav-btn" onclick="showTab('recent')"
+                title="Recent runs" aria-label="Recent runs">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
+              <circle cx="12" cy="12.2" r="8.6" fill="currentColor" opacity=".2" stroke="none" />
+              <circle cx="12" cy="12.2" r="8.6" />
+              <path d="M12 7.6v4.6l3.2 2" />
+            </g>
+          </svg>
+        </button>
+        <input id="ticker" type="text" placeholder="AAPL, MSFT, NVDA" maxlength="120" aria-label="Tickers"
+               oninput="updateMode()" onkeydown="if(event.key==='Enter')handlePrimary()">
+        <select id="filings" title="Number of 10-K filings" aria-label="Number of 10-K filings">
+          <option value="3">3</option>
+          <option value="5">5</option>
+          <option value="10">10</option>
+          <option value="20" selected>20</option>
+        </select>
+        <button id="run-btn" class="primary" onclick="handlePrimary()">Run</button>
+        <button id="cancel-btn" class="btn-cancel" onclick="cancelAll()" hidden
+                title="Cancel running work and reset the interface — no files are deleted"
+                aria-label="Cancel running work and reset the interface">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8">
+              <path d="M6 6l12 12M18 6L6 18" />
+            </g>
+          </svg>
+        </button>
+      </div>
+      <nav class="tabs" aria-label="Tabs">
+        <button id="tab-home" class="tab-icon active" onclick="showTab('home')" title="Home" aria-label="Home">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
+              <path d="M5 10L12 4.3L19 10v9a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19z" fill="currentColor" opacity=".2" stroke="none" />
+              <path d="M2.5 11.8L12 4l9.5 7.8M5 10v9a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19v-9" />
+              <path d="M8 17l2.5-2.5l2 1.5l3.5-3.5" />
+            </g>
+          </svg>
+        </button>
+        <button id="tab-graph" onclick="showTab('graph')">Charts</button>
+        <button id="tab-insiders" onclick="showTab('insiders')">Insiders</button>
+        <button id="tab-screener" onclick="showTab('screener')">Screener</button>
+        <button id="tab-simulation" onclick="showTab('simulation')">Simulation</button>
+        <button id="tab-news" onclick="showTab('news')">News</button>
+      </nav>
     </div>
   </div>
 </div>
 
 <main>
-  <div class="tabs">
-    <button id="tab-home" class="tab-icon active" onclick="showTab('home')" title="Home" aria-label="Home">
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
-          <path d="M5 10L12 4.3L19 10v9a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19z" fill="currentColor" opacity=".2" stroke="none" />
-          <path d="M2.5 11.8L12 4l9.5 7.8M5 10v9a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19v-9" />
-          <path d="M8 17l2.5-2.5l2 1.5l3.5-3.5" />
-        </g>
-      </svg>
-    </button>
-    <button id="tab-graph" onclick="showTab('graph')">Charts</button>
-    <button id="tab-insiders" onclick="showTab('insiders')">Insiders</button>
-    <button id="tab-screener" onclick="showTab('screener')">Screener</button>
-    <button id="tab-simulation" onclick="showTab('simulation')">Simulation</button>
-    <button id="tab-news" onclick="showTab('news')">News</button>
-    <button id="tab-recent" class="tab-icon" onclick="showTab('recent')"
-            title="Recent runs" aria-label="Recent runs">
-      <svg viewBox="0 0 2048 2048" aria-hidden="true">
-        <path fill="currentColor" d="M1024 2048q-142 0-272-36t-245-103t-207-160t-160-208t-103-245t-37-272q0-141 36-272t103-245t160-207t208-160T752 37t272-37q141 0 272 36t245 103t207 160t160 208t103 245t37 272q0 142-36 272t-103 245t-160 207t-208 160t-245 103t-272 37m0-1920q-123 0-237 32t-214 90t-182 141t-140 181t-91 214t-32 238q0 123 32 237t90 214t141 182t181 140t214 91t238 32q123 0 237-32t214-90t182-141t140-181t91-214t32-238q0-123-32-237t-90-214t-141-182t-181-140t-214-91t-238-32m0 896V384H896v768h512v-128z" />
-      </svg>
-    </button>
-  </div>
 
   <!-- Home: an overview of the latest search (the pinned ticker). -->
   <section id="pane-home">
@@ -1246,7 +1275,7 @@ function applyPrefs(changed = '') {
   }
   if (all || changed === 'tabOrder') {
     const strip = $('.tabs');
-    for (const tab of PREFS.tabOrder) strip.insertBefore($(`#tab-${tab}`), $('#tab-recent'));
+    for (const tab of PREFS.tabOrder) strip.appendChild($(`#tab-${tab}`));
     syncTabFades();
   }
   if (all || changed === 'filings') $('#filings').value = PREFS.filings;
@@ -2086,7 +2115,8 @@ function showTab(name) {
   // Slide the strip (horizontally only) so the selected tab is visible.
   const tabs = $('.tabs');
   const button = $(`#tab-${name}`);
-  if (button.offsetLeft < tabs.scrollLeft || button.offsetLeft + button.offsetWidth > tabs.scrollLeft + tabs.clientWidth) {
+  if (tabs.contains(button) && (button.offsetLeft < tabs.scrollLeft
+      || button.offsetLeft + button.offsetWidth > tabs.scrollLeft + tabs.clientWidth)) {
     tabs.scrollTo({ left: button.offsetLeft - 8, behavior: SMOOTH });
   }
   if (name === 'home') initHome();
@@ -2504,9 +2534,11 @@ async function loadRecent() {
   list.innerHTML = items.map(it => `
     <li>
       <span class="t" onclick="openGraph('${esc(it.ticker)}')">${esc(it.ticker)}</span>
-      <span class="muted">${it.charts.length} charts · ${fmtDate(it.modified)}
-        · <a href="/download/${esc(it.ticker)}">zip</a>
-        · <a href="#" onclick="removeRecent('${esc(it.ticker)}');return false">remove</a></span>
+      <span class="muted recent-meta">${it.charts.length} charts · ${fmtDate(it.modified)}
+        <a class="icon-link" href="/download/${esc(it.ticker)}" title="Download ${esc(it.ticker)} (.zip)"
+           aria-label="Download ${esc(it.ticker)} (.zip)"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download" /></svg></a>
+        <a class="icon-link danger" href="#" onclick="removeRecent('${esc(it.ticker)}');return false"
+           title="Delete ${esc(it.ticker)}'s results" aria-label="Delete ${esc(it.ticker)}'s results"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-trash" /></svg></a></span>
     </li>`).join('');
 }
 
