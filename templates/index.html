@@ -109,8 +109,9 @@
   .toolbar { padding:8px 20px; border-top:1px solid var(--line-soft); background:var(--bg); }
   .toolbar-inner { max-width:1100px; margin:0 auto; display:flex; gap:8px; flex-wrap:wrap;
                    align-items:center; justify-content:center; }
-  /* Run state sits beside the title, a step smaller. */
-  #status { display:flex; }
+  /* Run state sits beside the title, a step smaller, on the title's baseline. */
+  .brand-name { display:flex; align-items:baseline; gap:10px; }
+  #status { display:inline-block; }
   #status .badge { font-size:13px; line-height:18px; padding:0 8px; }
   #ticker { flex:0 1 360px; width:360px; min-width:240px; height:44px; border-color:var(--line-strong); }
   #filings { height:44px; padding:0 10px; font-size:15px; }
@@ -220,6 +221,7 @@
   .stat:last-child { border-bottom:0; }
   .stat span:first-child { color:var(--muted); }
   .stat b { font-weight:600; }
+  .stat[title], td[title] { cursor:help; }
   .sim-section { margin-top:20px; padding-top:18px; border-top:1px solid var(--line); }
   .sim-form { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; align-items:end; }
   .sim-form label { display:block; font-size:12px; color:var(--muted); margin:0 0 5px; }
@@ -387,8 +389,10 @@
             <path fill="currentColor" d="M18.1 7.35a.5.5 0 1 1-1 0a.5.5 0 0 1 1 0" />
           </g>
         </svg>
-        <h1>Stocky</h1>
-        <span id="status" class="status"><span class="badge idle">idle</span></span>
+        <div class="brand-name">
+          <h1>Stocky</h1>
+          <span id="status" class="status"><span class="badge idle">idle</span></span>
+        </div>
       </div>
       <div class="head-actions">
         <button id="theme-btn" class="theme-btn" onclick="toggleTheme()" title="Switch colour theme" aria-label="Switch colour theme">
@@ -473,6 +477,15 @@
         <span class="panel-title" id="graph-title">Graph</span>
         <span class="panel-actions">
           <span id="graph-state"></span>
+          <button class="panel-btn icon-btn" id="graph-download-btn" hidden onclick="downloadGraph()"
+                  title="Download all charts and data (.zip)" aria-label="Download all charts and data">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
+                <path d="M4 15.5v2A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5v-2H4" fill="currentColor" opacity=".2" stroke="none" />
+                <path d="M4 15.5v2A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5v-2M12 4v11m-4.5-4.5L12 15l4.5-4.5" />
+              </g>
+            </svg>
+          </button>
           <button class="panel-btn icon-btn" id="graph-log-btn" hidden onclick="toggleLog()"
                   title="Show log" aria-label="Show log" aria-pressed="false">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -769,6 +782,30 @@
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// Hover descriptions for the numbers in the Graph, Screener and Simulation tabs.
+const HELP = {
+  ticker: 'Stock symbol.',
+  fiscal_year: 'Fiscal year of the latest 10-K the values below come from.',
+  f_score: 'Piotroski F-score, 0–9: nine yes/no checks on profitability, debt, liquidity and efficiency. 7+ is strong (green), 3 or less is weak (red).',
+  z_score: 'Altman Z-score: bankruptcy-risk estimate from working capital, retained earnings, EBIT, market value and sales. Above 2.99 is safe (green), below 1.81 is distress (red).',
+  pe: 'Price / earnings: share price divided by earnings per share. Lower means cheaper per dollar of profit.',
+  ev_ebit: 'Enterprise value / EBIT: what the whole business (market cap + debt − cash) costs per dollar of operating profit. Lower is cheaper.',
+  earnings_yield: 'Greenblatt earnings yield: EBIT / enterprise value. Higher is cheaper.',
+  return_on_capital: 'Greenblatt return on capital: EBIT / (total assets − current liabilities). Higher means a better business.',
+  greenblatt_rank: 'Greenblatt Magic Formula rank among your screened tickers: earnings-yield rank + return-on-capital rank. Lower is better.',
+  fcf_yield: 'Free cash flow / enterprise value: cash the business generates per dollar of its value. Higher is cheaper.',
+  pe_percentile: "Where this year's P/E sits in the company's own P/E history: 0% is its cheapest year, 100% its most expensive.",
+  modified: 'When this ticker was last run.',
+  sim_price: 'Latest share price from Yahoo Finance.',
+  sim_change: 'Price change from the start of the selected period to now.',
+  sim_high: 'Highest daily close in the selected period.',
+  sim_low: 'Lowest daily close in the selected period.',
+  sim_pe: 'Trailing P/E: price / earnings per share over the last 12 months (Yahoo Finance).',
+  sim_dividend: 'Dividends per share paid over a year at the current rate.',
+  sim_yield: 'Annual dividend / current price.',
+};
+const tip = key => HELP[key] ? ` title="${esc(HELP[key])}"` : '';
 let timer = null;
 let ACCOUNT = null;
 let ACTIVE_TICKER = '';
@@ -1224,7 +1261,7 @@ function renderGraph() {
   const { ticker, state } = GRAPH;
   $('#graph-title').textContent = ticker ? `Graph · ${ticker}` : 'Graph';
   $('#graph-empty').classList.toggle('hidden', !!ticker);
-  for (const id of ['#graph-log-btn', '#graph-refresh-btn', '#graph-remove-btn']) $(id).hidden = !ticker;
+  for (const id of ['#graph-download-btn', '#graph-log-btn', '#graph-refresh-btn', '#graph-remove-btn']) $(id).hidden = !ticker;
   const logBtn = $('#graph-log-btn');
   logBtn.title = GRAPH.log ? 'Hide log' : 'Show log';
   logBtn.setAttribute('aria-label', logBtn.title);
@@ -1239,6 +1276,10 @@ function setGraphProgress(text, isError = false) {
   const line = $('#graph-progress');
   line.textContent = text;
   line.classList.toggle('is-error', isError);
+}
+
+function downloadGraph() {
+  if (GRAPH.ticker) location.href = `/download/${encodeURIComponent(GRAPH.ticker)}`;
 }
 
 function toggleLog() {
@@ -1325,18 +1366,18 @@ async function loadGraphSummary(ticker) {
       return;
     }
     const ranked = SCREEN.items.filter(item => item.greenblatt_rank).length;
-    const stat = (label, value) => `<div class="stat"><span>${label}</span><b>${value}</b></div>`;
+    const stat = (label, value, key) => `<div class="stat"${tip(key)}><span>${label}</span><b>${value}</b></div>`;
     target.innerHTML = `<div class="graph-summary">
-      ${stat('FY', esc(row.fiscal_year ?? '—'))}
-      ${stat('F-score', scoreCell(row.f_score, 7, 3))}
-      ${stat('Z-score', scoreCell(row.z_score, 2.99, 1.81))}
-      ${stat('P/E', fmtNum(row.pe, 1))}
-      ${stat('EV/EBIT', fmtNum(row.ev_ebit, 1))}
-      ${stat('Earnings yield', fmtRatio(row.earnings_yield))}
-      ${stat('Return on capital', fmtRatio(row.return_on_capital))}
-      ${stat('Magic rank', row.greenblatt_rank ? `#${row.greenblatt_rank} of ${ranked}` : '—')}
-      ${stat('FCF yield', fmtRatio(row.fcf_yield))}
-      ${stat('P/E pct', fmtPctPoints(row.pe_percentile))}
+      ${stat('FY', esc(row.fiscal_year ?? '—'), 'fiscal_year')}
+      ${stat('F-score', scoreCell(row.f_score, 7, 3), 'f_score')}
+      ${stat('Z-score', scoreCell(row.z_score, 2.99, 1.81), 'z_score')}
+      ${stat('P/E', fmtNum(row.pe, 1), 'pe')}
+      ${stat('EV/EBIT', fmtNum(row.ev_ebit, 1), 'ev_ebit')}
+      ${stat('Earnings yield', fmtRatio(row.earnings_yield), 'earnings_yield')}
+      ${stat('Return on capital', fmtRatio(row.return_on_capital), 'return_on_capital')}
+      ${stat('Magic rank', row.greenblatt_rank ? `#${row.greenblatt_rank} of ${ranked}` : '—', 'greenblatt_rank')}
+      ${stat('FCF yield', fmtRatio(row.fcf_yield), 'fcf_yield')}
+      ${stat('P/E pct', fmtPctPoints(row.pe_percentile), 'pe_percentile')}
     </div>`;
   } catch { /* the charts still render without the screener line */ }
 }
@@ -1532,14 +1573,7 @@ function renderResults(data, target) {
       <figcaption><span>${esc(name.replace(/^\d+_/, '').replace('.png','').replaceAll('_',' '))}</span>
         <a href="/download/${esc(data.ticker)}/${esc(name)}">download</a></figcaption>
     </figure>`).join('');
-  $(target).innerHTML = `
-    <div class="card">
-      <div class="row" style="justify-content:space-between">
-        <strong>${esc(data.ticker)} — ${data.charts.length} charts</strong>
-        <span><a href="/download/${esc(data.ticker)}">Download all (.zip)</a></span>
-      </div>
-    </div>
-    <div class="grid">${grid}</div>`;
+  $(target).innerHTML = `<div class="grid">${grid}</div>`;
 }
 
 // Run selectors follow the pinned Graph ticker whenever the pin changes (or the
@@ -1785,6 +1819,7 @@ function renderScreener() {
   const body = $('#screen-body');
   document.querySelectorAll('#screen-table th[data-key]').forEach(th => {
     th.textContent = th.dataset.label + (th.dataset.key === SCREEN.sort.key ? (SCREEN.sort.dir > 0 ? ' ▲' : ' ▼') : '');
+    if (HELP[th.dataset.key]) th.title = HELP[th.dataset.key];
   });
   if (!SCREEN.items.length) {
     body.innerHTML = '<tr><td colspan="13" class="muted">No screened tickers yet.</td></tr>';
@@ -1817,17 +1852,17 @@ function renderScreener() {
   });
   body.innerHTML = rows.map(row => `<tr>
       <td><strong>${esc(row.ticker)}</strong></td>
-      <td>${row.has_evaluation === false ? '—' : esc(row.fiscal_year ?? '—')}</td>
-      <td>${row.has_evaluation === false ? '<span class="badge queued">no valuation</span>' : scoreCell(row.f_score, 7, 3)}</td>
-      <td>${scoreCell(row.z_score, 2.99, 1.81)}</td>
-      <td>${fmtNum(row.pe, 1)}</td>
-      <td>${fmtNum(row.ev_ebit, 1)}</td>
-      <td>${fmtRatio(row.earnings_yield)}</td>
-      <td>${fmtRatio(row.return_on_capital)}</td>
-      <td>${row.greenblatt_rank ? '#' + row.greenblatt_rank : '—'}</td>
-      <td>${fmtRatio(row.fcf_yield)}</td>
-      <td>${fmtPctPoints(row.pe_percentile)}</td>
-      <td>${fmtDate(row.modified)}</td>
+      <td${tip('fiscal_year')}>${row.has_evaluation === false ? '—' : esc(row.fiscal_year ?? '—')}</td>
+      <td${tip('f_score')}>${row.has_evaluation === false ? '<span class="badge queued">no valuation</span>' : scoreCell(row.f_score, 7, 3)}</td>
+      <td${tip('z_score')}>${scoreCell(row.z_score, 2.99, 1.81)}</td>
+      <td${tip('pe')}>${fmtNum(row.pe, 1)}</td>
+      <td${tip('ev_ebit')}>${fmtNum(row.ev_ebit, 1)}</td>
+      <td${tip('earnings_yield')}>${fmtRatio(row.earnings_yield)}</td>
+      <td${tip('return_on_capital')}>${fmtRatio(row.return_on_capital)}</td>
+      <td${tip('greenblatt_rank')}>${row.greenblatt_rank ? '#' + row.greenblatt_rank : '—'}</td>
+      <td${tip('fcf_yield')}>${fmtRatio(row.fcf_yield)}</td>
+      <td${tip('pe_percentile')}>${fmtPctPoints(row.pe_percentile)}</td>
+      <td${tip('modified')}>${fmtDate(row.modified)}</td>
       <td><button class="panel-btn row-btn" onclick="generateGraphs('${esc(row.ticker)}')">graphs</button></td>
     </tr>`).join('');
 }
@@ -1976,13 +2011,13 @@ function renderStats() {
   const yieldPct = price ? (annual / price) * 100 : null;
   $('#sim-title').textContent = `${data.ticker} market data`;
   $('#sim-stats').innerHTML = `
-    <div class="stat"><span>Stock price</span><b>${fmtMoney(price, data.currency)}</b></div>
-    <div class="stat"><span>Period change</span><b>${change === null ? '—' : (change >= 0 ? '+' : '') + fmtNum(change) + '%'}</b></div>
-    <div class="stat"><span>Period high</span><b>${fmtMoney(high, data.currency)}</b></div>
-    <div class="stat"><span>Period low</span><b>${fmtMoney(low, data.currency)}</b></div>
-    <div class="stat"><span>Trailing P/E</span><b>${fmtNum(data.trailing_pe)}</b></div>
-    <div class="stat"><span>Annual dividend</span><b>${fmtMoney(annual, data.currency)}</b></div>
-    <div class="stat"><span>Dividend yield</span><b>${yieldPct === null ? '—' : fmtNum(yieldPct) + '%'}</b></div>`;
+    <div class="stat"${tip('sim_price')}><span>Stock price</span><b>${fmtMoney(price, data.currency)}</b></div>
+    <div class="stat"${tip('sim_change')}><span>Period change</span><b>${change === null ? '—' : (change >= 0 ? '+' : '') + fmtNum(change) + '%'}</b></div>
+    <div class="stat"${tip('sim_high')}><span>Period high</span><b>${fmtMoney(high, data.currency)}</b></div>
+    <div class="stat"${tip('sim_low')}><span>Period low</span><b>${fmtMoney(low, data.currency)}</b></div>
+    <div class="stat"${tip('sim_pe')}><span>Trailing P/E</span><b>${fmtNum(data.trailing_pe)}</b></div>
+    <div class="stat"${tip('sim_dividend')}><span>Annual dividend</span><b>${fmtMoney(annual, data.currency)}</b></div>
+    <div class="stat"${tip('sim_yield')}><span>Dividend yield</span><b>${yieldPct === null ? '—' : fmtNum(yieldPct) + '%'}</b></div>`;
 }
 
 function svgEl(name, attrs = {}) {
