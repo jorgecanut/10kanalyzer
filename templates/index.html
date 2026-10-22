@@ -133,7 +133,8 @@
   .tabs button { flex:none; white-space:nowrap; scroll-snap-align:start; border:1px solid var(--line); background:var(--surface); padding:8px 16px; border-radius:8px;
                  cursor:pointer; font-size:16px; color:var(--muted); }
   .tabs button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
-  .tabs button.tab-icon { margin-left:auto; display:flex; align-items:center; justify-content:center; padding:8px 11px; }
+  .tabs button.tab-icon { display:flex; align-items:center; justify-content:center; padding:8px 11px; }
+  .tabs #tab-recent { margin-left:auto; }
   .tabs button.tab-icon svg { width:18px; height:18px; display:block; }
   .card { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:18px; margin-bottom:16px; }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
@@ -387,6 +388,26 @@
   .dropbar.open .dropbar-progress { animation:drain 3s linear forwards; }
   @keyframes drain { to { transform:scaleX(0); } }
 
+  /* Home: the latest search at a glance. */
+  .home-title { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:6px; }
+  .home-title b { font-size:24px; }
+  .home-grid { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr); gap:0 28px; }
+  .home-block { margin-top:18px; padding-top:14px; border-top:1px solid var(--line); }
+  .home-block h3 { margin:0 0 10px; font-size:14px; color:var(--muted); font-weight:600;
+                   text-transform:uppercase; letter-spacing:.04em; }
+  .home-stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:0 20px; }
+  .home-rank { list-style:none; margin:0 0 8px; padding:0; }
+  .home-rank li { display:flex; gap:12px; padding:6px 10px; border-radius:7px; }
+  .home-rank li .r { color:var(--muted); min-width:3.5em; font-variant-numeric:tabular-nums; }
+  .home-rank li.me { background:var(--accent-soft); font-weight:700; }
+  .home-rank a { color:var(--text); }
+  .home-more { font-size:15px; color:var(--muted); }
+  .home-charts { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:10px; }
+  .home-charts figure { padding:6px; cursor:pointer; }
+  .home-charts figure:hover { border-color:var(--muted); }
+  .home-charts figcaption { margin-top:4px; font-size:13px; }
+  @media (max-width:820px) { .home-grid { grid-template-columns:1fr; } }
+
   /* Insider trades reuse the stat rows for a compact list. */
   .insider-list .stat { align-items:center; gap:10px; flex-wrap:wrap; }
   .news-list { list-style:none; margin:0; padding:0; }
@@ -487,7 +508,16 @@
 
 <main>
   <div class="tabs">
-    <button id="tab-graph" class="active" onclick="showTab('graph')">Charts</button>
+    <button id="tab-home" class="tab-icon active" onclick="showTab('home')" title="Home" aria-label="Home">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
+          <path d="M5 10L12 4.3L19 10v9a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19z" fill="currentColor" opacity=".2" stroke="none" />
+          <path d="M2.5 11.8L12 4l9.5 7.8M5 10v9a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19v-9" />
+          <path d="M8 17l2.5-2.5l2 1.5l3.5-3.5" />
+        </g>
+      </svg>
+    </button>
+    <button id="tab-graph" onclick="showTab('graph')">Charts</button>
     <button id="tab-insiders" onclick="showTab('insiders')">Insiders</button>
     <button id="tab-screener" onclick="showTab('screener')">Screener</button>
     <button id="tab-simulation" onclick="showTab('simulation')">Simulation</button>
@@ -500,8 +530,50 @@
     </button>
   </div>
 
+  <!-- Home: an overview of the latest search (the pinned ticker). -->
+  <section id="pane-home">
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">Home</span>
+        <span class="panel-actions">
+          <button class="panel-btn icon-btn" onclick="initHome(true)" title="Refresh" aria-label="Refresh">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh" /></svg>
+          </button>
+        </span>
+      </div>
+      <div class="panel-body">
+        <p class="muted" id="home-empty">No search yet. Enter a ticker above and press Run — its overview shows up here.</p>
+        <div id="home-main" class="hidden">
+          <div class="home-title"><b id="home-ticker"></b><span class="muted" id="home-company"></span></div>
+          <p class="graph-progress" id="home-progress"></p>
+          <div class="home-grid">
+            <div class="home-block">
+              <h3>Key numbers</h3>
+              <div id="home-stats"></div>
+            </div>
+            <div class="home-block">
+              <h3>Screener ranking</h3>
+              <ol id="home-rank" class="home-rank"></ol>
+              <a href="#" class="home-more" onclick="showTab('screener');return false">full ranking →</a>
+            </div>
+          </div>
+          <div class="home-block">
+            <h3>News</h3>
+            <p class="sim-meta" id="home-news-status"></p>
+            <ol id="home-news" class="news-list"></ol>
+            <a href="#" class="home-more" onclick="showTab('news');return false">more news →</a>
+          </div>
+          <div class="home-block">
+            <h3>Charts</h3>
+            <div id="home-charts" class="home-charts"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- Charts tab: the pinned ticker stays until it is removed or replaced. -->
-  <section id="pane-graph">
+  <section id="pane-graph" class="hidden">
     <section class="panel" id="graph-panel">
       <div class="panel-head">
         <span class="panel-title">Charts</span>
@@ -979,7 +1051,7 @@ function resetUi() {
   resetSimulation();
   closeDropbar();
   suggestTickers();
-  showTab('graph');
+  showTab('home');
   // The pinned graph is kept; re-read its state now that the jobs are gone.
   GRAPH.log = false;
   renderGraph();
@@ -1332,6 +1404,7 @@ function setGraph(ticker) {
   setGraphProgress('');
   setTermLog('');
   renderGraph();
+  if (!$('#pane-home').classList.contains('hidden')) initHome();
 }
 
 function renderGraph() {
@@ -1347,6 +1420,7 @@ function renderGraph() {
   $('#graph-state').innerHTML = ticker && state && state !== 'done'
     ? `<span class="badge ${esc(cls)}">${esc(state)}</span>` : '';
   syncChartView();
+  renderHome();
 }
 
 function syncChartView() {
@@ -1358,9 +1432,10 @@ function syncChartView() {
 }
 
 function setGraphProgress(text, isError = false) {
-  const line = $('#graph-progress');
-  line.textContent = text;
-  line.classList.toggle('is-error', isError);
+  for (const line of [$('#graph-progress'), $('#home-progress')]) {
+    line.textContent = text;
+    line.classList.toggle('is-error', isError);
+  }
 }
 
 function downloadGraph() {
@@ -1440,7 +1515,117 @@ async function loadScreenerData() {
     SCREEN.items = Array.isArray(data.items) ? data.items : [];
     SCREEN.pipeline = data.pipeline || null;
     renderScreener();
+    renderHome();
   } catch { /* the charts still render without it */ }
+}
+
+/* Home -------------------------------------------------------------------- */
+
+// Overview of the pinned ticker: its numbers, where it sits in the screener
+// ranking, a few headlines and every chart as a thumbnail.
+const HOME = { news: null, newsTicker: '', newsError: '' };
+
+function initHome(force = false) {
+  const ticker = GRAPH.ticker;
+  renderHome();
+  if (!ticker) return;
+  if (force) refreshGraph();
+  else if (!SCREEN.items.length) loadScreenerData();
+  if (force || HOME.newsTicker !== ticker) loadHomeNews(ticker, force);
+}
+
+async function loadHomeNews(ticker, fresh = false) {
+  HOME.newsTicker = ticker;
+  HOME.news = null;
+  HOME.newsError = '';
+  renderHome();
+  try {
+    const res = await fetch(`/api/news/${encodeURIComponent(ticker)}${fresh ? '?fresh=1' : ''}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || data.message || 'News unavailable.');
+    if (ticker !== HOME.newsTicker) return;
+    HOME.news = data;
+  } catch (err) {
+    if (ticker !== HOME.newsTicker) return;
+    HOME.newsError = err.message;
+  }
+  renderHome();
+}
+
+function renderHome() {
+  const ticker = GRAPH.ticker;
+  $('#home-empty').classList.toggle('hidden', !!ticker);
+  $('#home-main').classList.toggle('hidden', !ticker);
+  if (!ticker) return;
+  const news = HOME.newsTicker === ticker ? HOME.news : null;
+  $('#home-ticker').textContent = ticker;
+  const row = SCREEN.items.find(item => item.ticker === ticker);
+  $('#home-company').textContent = [news && news.company !== ticker ? news.company : '',
+    row && row.modified ? `last run ${fmtDate(row.modified)}` : ''].filter(Boolean).join(' · ');
+
+  // Key numbers: this company only.
+  const stat = (label, value, key) => `<div class="stat"${tip(key)}><span>${label}</span><b>${value}</b></div>`;
+  const ranked = SCREEN.items.filter(item => item.greenblatt_rank).sort((a, b) => a.greenblatt_rank - b.greenblatt_rank);
+  if (!row) {
+    $('#home-stats').innerHTML = '<p class="muted">No numbers yet — they appear when the run finishes.</p>';
+  } else if (row.has_evaluation === false) {
+    $('#home-stats').innerHTML = `<p class="muted">No valuation data for ${esc(ticker)} — usually Yahoo prices were
+      unreachable. Open the log in the Charts tab and look for <code>[!] valuation skipped</code>.</p>`;
+  } else {
+    $('#home-stats').innerHTML = `<div class="home-stats">
+      ${stat('FY', esc(row.fiscal_year ?? '—'), 'fiscal_year')}
+      ${stat('F-score', scoreCell(row.f_score, 7, 3), 'f_score')}
+      ${stat('Z-score', scoreCell(row.z_score, 2.99, 1.81), 'z_score')}
+      ${stat('P/E', fmtNum(row.pe, 1), 'pe')}
+      ${stat('EV/EBIT', fmtNum(row.ev_ebit, 1), 'ev_ebit')}
+      ${stat('Earnings yield', fmtRatio(row.earnings_yield), 'earnings_yield')}
+      ${stat('Return on capital', fmtRatio(row.return_on_capital), 'return_on_capital')}
+      ${stat('Magic rank', row.greenblatt_rank ? `#${row.greenblatt_rank} of ${ranked.length}` : '—', 'greenblatt_rank')}
+      ${stat('FCF yield', fmtRatio(row.fcf_yield), 'fcf_yield')}
+      ${stat('P/E pct', fmtPctPoints(row.pe_percentile), 'pe_percentile')}
+    </div>`;
+  }
+
+  // Ranking: two above, the company, two below. Names only, no numbers.
+  const at = ranked.findIndex(item => item.ticker === ticker);
+  $('#home-rank').innerHTML = at < 0
+    ? '<li class="muted">Not ranked yet — the Magic Formula rank needs valuation data.</li>'
+    : ranked.slice(Math.max(0, at - 2), at + 3).map(item => item.ticker === ticker
+      ? `<li class="me"><span class="r">#${item.greenblatt_rank}</span><span>${esc(item.ticker)}</span></li>`
+      : `<li><span class="r">#${item.greenblatt_rank}</span><a href="#" onclick="openHome('${esc(item.ticker)}');return false">${esc(item.ticker)}</a></li>`
+    ).join('');
+
+  // News: the top five.
+  const articles = news && Array.isArray(news.articles) ? news.articles.slice(0, 5) : [];
+  $('#home-news-status').textContent = HOME.newsTicker !== ticker || (!news && !HOME.newsError)
+    ? 'Looking for articles…'
+    : HOME.newsError || (articles.length ? '' : `No articles in the last ${news.days} days.`);
+  $('#home-news').innerHTML = articles.map(a => `<li>
+      <a href="${esc(a.link)}" target="_blank" rel="noopener noreferrer">${esc(a.title)}</a>
+      <div class="news-meta">${esc([a.source, fmtAgo(a.published)].filter(Boolean).join(' · '))}</div>
+    </li>`).join('');
+
+  // Charts: small thumbnails; a click opens that chart in the Charts tab.
+  const data = GRAPH.results && GRAPH.results.ticker === ticker ? GRAPH.results : null;
+  const live = GRAPH.state === 'queued' || GRAPH.state === 'running';
+  $('#home-charts').innerHTML = data
+    ? data.charts.map(name => `<figure onclick="openChart('${esc(chartId(name))}')" title="Open in the Charts tab">
+        <img src="${chartSrc(data, name)}" alt="${esc(name)}" loading="lazy">
+        <figcaption><span>${esc(chartLabel(name))}</span></figcaption>
+      </figure>`).join('')
+    : `<p class="muted">${live ? 'Charts appear when the run finishes.' : 'No charts for this ticker yet.'}</p>`;
+}
+
+function openHome(ticker) {
+  if (ticker !== GRAPH.ticker) setGraph(ticker);
+  showTab('home');
+  refreshGraph();
+}
+
+function openChart(id) {
+  showTab('graph');
+  const el = document.getElementById(id);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 /* ------------------------------------------------------------------------ */
@@ -1454,7 +1639,7 @@ function syncTabFades() {
 }
 
 function showTab(name) {
-  for (const tab of ['graph', 'insiders', 'recent', 'screener', 'simulation', 'news']) {
+  for (const tab of ['home', 'graph', 'insiders', 'recent', 'screener', 'simulation', 'news']) {
     const active = tab === name;
     $(`#pane-${tab}`).classList.toggle('hidden', !active);
     $(`#tab-${tab}`).classList.toggle('active', active);
@@ -1465,6 +1650,7 @@ function showTab(name) {
   if (button.offsetLeft < tabs.scrollLeft || button.offsetLeft + button.offsetWidth > tabs.scrollLeft + tabs.clientWidth) {
     tabs.scrollTo({ left: button.offsetLeft - 8, behavior: 'smooth' });
   }
+  if (name === 'home') initHome();
   if (name === 'recent') loadRecent();
   if (name === 'insiders') initInsiders();
   if (name === 'screener') loadScreener();
@@ -1513,7 +1699,7 @@ async function runTicker(rawTicker, { fresh = false } = {}) {
   GRAPH.state = 'queued';
   renderGraph();
   setStatus('queued', 'queued');
-  showTab('graph');
+  showTab('home');
   setGraphProgress('starting pipeline…');
   setTermLog(`$ stocky run ${ticker} --filings ${filings}\nstarting pipeline…`);
   try {
@@ -1637,13 +1823,14 @@ function renderResults(data, target) {
     <figure id="${esc(chartId(name))}">
       <a href="${chartSrc(data, name)}" target="_blank">
         <img src="${chartSrc(data, name)}" alt="${esc(name)}" loading="lazy"></a>
-      <figcaption><span>${esc(name.replace(/^\d+_/, '').replace('.png','').replaceAll('_',' '))}</span>
+      <figcaption><span>${esc(chartLabel(name))}</span>
         <a href="/download/${esc(data.ticker)}/${esc(name)}">download</a></figcaption>
     </figure>`).join('');
   const view = CHART_VIEW === 'grid' ? 'grid' : 'charts-full';
   $('#chart-index').innerHTML = chartIndex(data.charts);
   $(target).innerHTML = `<div class="${view}">${grid}</div>`;
   syncChartView();
+  renderHome();
 }
 
 // Chart files are NN_name[_YYYY_YYYY].png: one index line per NN, with a link
@@ -1667,6 +1854,7 @@ function chartIndex(charts) {
   return `<ol>${lines}</ol>`;
 }
 
+const chartLabel = name => name.replace(/^\d+_/, '').replace('.png', '').replaceAll('_', ' ');
 const chartId = name => 'chart-' + name.replace(/\.png$/, '').replace(/[^\w-]/g, '_');
 
 function jumpToChart(event, id) {
@@ -1983,6 +2171,7 @@ async function loadScreener() {
     SCREEN.items = Array.isArray(data.items) ? data.items : [];
     SCREEN.pipeline = data.pipeline || null;
     renderScreener();
+    renderHome();
   } catch {
     $('#screen-notes').innerHTML = '';
     $('#screen-body').innerHTML = '<tr><td colspan="13" class="muted">Could not load screened tickers.</td></tr>';
@@ -2565,6 +2754,7 @@ suggestTickers();
 setInterval(() => { if (!$('#ticker').value) suggestTickers(); }, 6000);
 renderGraph();
 refreshGraph();
+showTab('home');
 (async () => {
   const { jobs, batch } = await (await fetch('/api/jobs')).json();
   for (const job of jobs) {
