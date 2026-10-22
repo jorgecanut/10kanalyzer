@@ -8,7 +8,9 @@
 > on anything.
 
 Connect to SEC EDGAR, download the last ten 10-K filings for a company,
-extract the XBRL financial data, and write it as CSV into `financial_graphs/`.
+extract the XBRL financial data, and write it as CSV. The command line writes
+into `financial_graphs/`; the web app keeps each user's results apart under
+`data/users/<id>/`.
 The run form accepts 3, 5, 10 or 20 filings; the API accepts any value 1–20.
 Charts are rendered as PNGs next to the CSVs; `--no-charts` skips them.
 
@@ -20,16 +22,16 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-`edgar_dashboard.py` sets the SEC-required identity at import time:
+The SEC requires a contact (name + email) in the User-Agent of every request.
+In the web app that is the signed-in user's account name and email; nothing to
+configure. On the command line, set it in the environment:
 
-```python
-from edgar import set_identity
-set_identity("Data Analyst analyst@example.com")   # replace with your name/email
+```bash
+export EDGAR_IDENTITY="Jane Doe jane@example.com"
 ```
 
-> The SEC asks that you use a real contact email in the User-Agent so they can
-> reach you if your requests cause problems. Update the placeholder before
-> running at any volume.
+> The SEC asks for a real contact so it can reach you if your requests cause
+> problems. Without `EDGAR_IDENTITY` the CLI falls back to a placeholder.
 
 ## Run
 
@@ -37,6 +39,7 @@ set_identity("Data Analyst analyst@example.com")   # replace with your name/emai
 python edgar_dashboard.py                 # defaults to NFLX
 python edgar_dashboard.py --ticker AAPL --filings 10
 python edgar_dashboard.py --ticker AAPL --no-charts   # data only (screener mode)
+python edgar_dashboard.py --ticker AAPL --output-dir /tmp/out   # writes /tmp/out/AAPL/
 ```
 
 ## Output
@@ -56,6 +59,10 @@ financial_graphs/
 ├── AAPL/   # same CSVs
 └── MSFT/   # same CSVs
 ```
+
+The web app uses the same per-ticker layout inside each user's folder,
+`data/users/<id>/<TICKER>/`, plus a `run.json` recording the last successful
+run (filings, charts or not, finish time) for the same-day cache.
 
 `statements.csv` / `facts.csv` / `notes.csv` are the data-first, XBRL-driven
 artifacts: no metric is hard-coded, so a new filer needs no code change.
@@ -82,8 +89,17 @@ python edgar_dashboard.py --ticker MSFT
 
 A small local web front-end wraps the pipeline: type a ticker, watch the run,
 then view or download the charts. Runs are queued and executed one at a time
-(SEC is rate-limited); results persist in `financial_graphs/`, so they are
-available later from the **Recent** tab. No accounts, no database.
+(SEC is rate-limited); results persist in `data/users/<id>/`, so they are
+available later from the **Recent** tab.
+
+**Accounts are local.** The first page is a sign-in form; **Create account**
+asks for a name, email and password. Accounts live in `data/stocky.db`
+(SQLite, passwords hashed) and the session key in `data/secret_key`: delete
+`data/` (or the app) and every account and result is gone. Users never see one
+another's runs, jobs or files; each user has an internal id, never shown, that
+names their folder. The account's name and email are the SEC identity for that
+user's runs, so there is nothing to put in Docker or `.env`. Set
+`STOCKY_DATA_DIR` to keep `data/` somewhere else.
 
 ```bash
 pip install -r requirements.txt
@@ -94,13 +110,19 @@ Routes:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/` | The UI (Graph / Insiders / Screener / Simulation tabs) |
-| `POST` | `/api/run` | `{"ticker":"NFLX","filings":10}` → queues a run |
-| `POST` | `/api/cancel` | Cancels every queued/running job; keeps all files |
+| `GET` | `/` | The UI (Graph / Insiders / Screener / Simulation tabs); redirects to `/login` when signed out |
+| `GET` | `/login` | Sign-in / create-account page |
+| `POST` | `/api/signup` | `{"name","email","password"}` → creates the account and signs in |
+| `POST` | `/api/login` | `{"email","password"}` → signs in |
+| `POST` | `/api/logout` | Signs out |
+| `GET` | `/api/account` | The signed-in user's name, email and SEC identity (never the id) |
+| `PATCH` | `/api/account` | Change `name` / `email` / `new_password` (email and password need `current_password`) |
+| `DELETE` | `/api/account` | `{"confirm":"DELETE","password"}` → deletes the account and all its data |
+| `DELETE` | `/api/data` | `{"confirm":"DELETE"}` → deletes all of the user's results; the account stays |
+| `POST` | `/api/run` | `{"ticker":"NFLX","filings":10,"fresh":false}` → queues a run, or `status: "cached"` |
+| `POST` | `/api/cancel` | Cancels the user's queued/running jobs; keeps all files |
 | `GET` | `/api/status/<ticker>` | queued / running / done / error + log tail |
 | `GET` | `/api/jobs` | Active jobs (with `charts` flag) + last screener batch |
-| `GET` | `/api/identity` | Current SEC identity (name + email) |
-| `POST` | `/api/identity` | `{"identity":"Jane Doe jane@example.com"}` → save it |
 | `GET` | `/api/recent` | Tickers with results, newest first |
 | `DELETE` | `/api/recent/<ticker>` | Deletes that ticker's results folder |
 | `GET` | `/api/files/<ticker>` | Chart list for a ticker |
@@ -127,6 +149,30 @@ run; if it is already running, a graph run is queued after it. The **Insiders**
 and **Simulation** selectors switch to the pinned ticker whenever the pin
 changes. A reloaded page resumes the pinned run, other graph runs and the
 screener batch's progress (`/api/jobs`).
+
+**Same-day cache.** Asking for graphs a ticker already got today, with the same
+number of filings, shows that generation instead of re-running the pipeline. A
+bar drops from the top saying so, with a **Generate fresh** button and a
+visible 3-second countdown, then closes itself. Each successful run records
+what it produced in `run.json` next to its files; a screener run (no charts)
+never counts as cached graphs. The ticker bar's placeholder suggests a few
+random well-known tickers and changes every few seconds.
+
+### Options
+
+The gear button right of the theme button opens **Options**: a small dialog in
+the middle of the screen with a search box on top, vertical tabs on the left
+and their sections on the right. Searching shows every matching option across
+all tabs. Clicking your name in the header opens it on the **Account** tab.
+
+- **Account**: change name, email or password (email and password need the
+  current password), see the SEC identity, sign out, delete the account.
+- **Appearance**: dark or light theme.
+- **Data**: what is stored, and **Remove all data**.
+
+Removing all data and deleting the account both open a confirmation screen
+listing exactly what goes, and need `DELETE` typed (plus the password, for the
+account) before the button enables. Both stop the user's running jobs first.
 
 The **Screener** tab posts up to 25 tickers, shows a sortable table of scores and
 ratios, and caches each ticker's result for 7 days. Tickers with no cached data
@@ -155,7 +201,7 @@ so they need no network and finish in a few seconds.
 ### Simulation tab
 
 The **Simulation** tab charts the selected ticker's price from Yahoo (separate
-from EDGAR; it never writes to `financial_graphs/`). It has two modes:
+from EDGAR; it never writes to `data/`). It has two modes:
 
 - **Projection** — set a target price, an investment amount, and a horizon. The
   dashed line projects the price, with dividends either paid in cash or
@@ -170,10 +216,10 @@ dividends received that year, portfolio value, gain in that year, and the
 running total gain. Clicking a future point or **reset** returns to projection.
 Estimates only; no taxes or fees.
 
-The red-X **cancel** button beside **Run** stops every queued/running pipeline
-job, aborts in-flight browser requests, and resets the interface to its initial
-state, except for the pinned graph. It never deletes generated files; run logs and partial results stay in
-`financial_graphs/`.
+The red-X **cancel** button beside **Run** stops your queued/running pipeline
+jobs, aborts in-flight browser requests, and resets the interface to its initial
+state, except for the pinned graph. It never deletes generated files; run logs
+and partial results stay in `data/users/<id>/`.
 
 ## Docker
 
@@ -193,7 +239,6 @@ docker compose up -d --build     # http://localhost:${HTTP_PORT:-8053}
 1. Put this project (or at least `docker-compose.yml` + `.env`) in a stack
    directory Dockge manages.
 2. `cp .env.example .env` and edit it:
-   - `EDGAR_IDENTITY` — your name/email (the SEC requires a real contact).
    - `HTTP_PORT` — the host port to publish (default 8053); or just edit the
      `ports:` line in the compose file directly.
 3. Deploy in Dockge. If the compose file is not next to the Dockerfile, point
@@ -230,16 +275,14 @@ sudo htpasswd -c /etc/nginx/.htpasswd you
 
 ### Notes
 
-- `./financial_graphs` is bind-mounted so results also land on the host; the
+- `./data` (accounts and results) is bind-mounted to `/app/data`; the
   container runs as uid 10001, so that directory must be writable by it (see
-  "Container permissions" below).
-- Edit the host side of the `volumes:` paths in `docker-compose.yml` for your
-  machine.
+  "Container permissions" below). Change it with `STOCKY_DATA` in `.env`.
 - edgartools' raw SEC downloads are cached on the host: the compose file
-  bind-mounts `/path/to/stocky/edgar_cache` and `/path/to/stocky/edgar_data`
+  bind-mounts `./edgar_cache` and `./edgar_data` (`EDGAR_CACHE` / `EDGAR_DATA`)
   to `/home/appuser/.edgar_cache` and `/home/appuser/.edgar`, making repeat runs much faster.
 - The app listens on `0.0.0.0:8000` inside the container (override with `PORT`).
-  It has **no authentication** — keep it behind nginx or a private network.
+  Its sign-in is meant for a private machine or network, not the internet.
 - Runs are serialized (one at a time); ~1–3 minutes per ticker the first time.
 
 ### Rebuilding / clean redeploy (Dockge)
@@ -259,7 +302,7 @@ docker compose up -d                # start it again
 - Code-only changes usually just need `docker compose up -d --build`.
 - `docker builder prune` clears leftover build cache if you want the space back.
 - The SEC download cache lives on host bind paths, not named volumes, so
-  `docker compose down -v` leaves it (and `./financial_graphs`) untouched.
+  `docker compose down -v` leaves it (and `./data`) untouched.
 - If you removed `image:` from the compose file, check the generated name with
   `docker compose images`.
 
@@ -270,24 +313,23 @@ host path bind-mounted into it must be writable by that uid, or the pipeline
 runs, reports success in its own log, and the app still sees nothing:
 
 ```bash
-sudo chown -R 10001:10001 /path/to/stocky/financial_graphs \
-                           /path/to/stocky/edgar_cache \
-                           /path/to/stocky/edgar_data
+mkdir -p data edgar_cache edgar_data      # Docker would create them root-owned
+sudo chown -R 10001:10001 data edgar_cache edgar_data
 ```
 
 - The SEC cache is written to `~/.edgar` / `~/.edgar_cache`, so the compose file
   sets `EDGAR_LOCAL_DATA_DIR` / `EDGAR_CACHE_DIR` to `/home/appuser/...` — keep
   those env values and the mount targets in sync if you move them.
-- Diagnose in one request: `curl -s localhost:8053/healthz` prints a `graph`
-  block — `graph_dir`, `exists`, `readable`, `writable`, `uid`, and the ticker
-  folders the app can actually see. `readable: false` or an `error` there is
-  your answer.
+- Diagnose in one request: `curl -s localhost:8053/healthz` prints a `data`
+  block — `graph_dir`, `exists`, `readable`, `writable` and `uid` for the data
+  directory (no tickers: those are per user). `writable: false` there is your
+  answer; sign-up also fails then, because the account database cannot be written.
 - The UI does the same: if a run finishes but `/api/files/<ticker>` finds
-  nothing, the results area shows a card with that path, the uid and the visible
-  tickers instead of staying blank. A run that cannot even create its output
+  nothing, the results area shows a card with the user's folder, the uid and the
+  visible tickers instead of staying blank. A run that cannot even create its output
   directory fails immediately with
   `cannot write results dir <path>: PermissionError … (uid=10001; check the
-  financial_graphs bind mount ownership)` rather than hanging on *queued*.
+  data bind mount ownership)` rather than hanging on *queued*.
 
 ### Deploy checklist (read this before adding a module)
 
@@ -311,16 +353,14 @@ curl -s localhost:8053/healthz
 ```json
 {"status":"ok","version":"dev","features":["valuation","insider"],
  "pipeline_sha1":"…","charts_sha1":"…",
- "graph":{"graph_dir":"/app/financial_graphs","exists":true,"readable":true,
-          "writable":true,"uid":10001,"tickers":["AAPL","NFLX"]}}
+ "data":{"graph_dir":"/app/data","exists":true,"readable":true,
+         "writable":true,"uid":10001}}
 ```
 
 - `features` missing `valuation` → the image was built without that module
   (wrong build context, or a stale/edited Dockerfile).
-- `graph.writable: false`, `graph.readable: false` or a `graph.error` → the bind
+- `data.writable: false` or `data.readable: false` → the bind
   mount is not usable by uid 10001; fix ownership (§ "Container permissions").
-- `graph.tickers` not containing a ticker you just ran → the app and the
-  pipeline are not looking at the same directory (mount/`build.context`).
 - `pipeline_sha1` / `charts_sha1` must equal
   `sha1sum edgar_dashboard.py charts.py` **in the build context directory**.
   Different hashes → the container is not running the code you pulled.
@@ -467,8 +507,11 @@ this project must not regress them.
   DENY`, `Referrer-Policy: no-referrer` and a CSP (`default-src 'self'`, inline
   script/style allowed for the single template).
 - The UI escapes server/API strings before `innerHTML` (`esc()` helper).
-- The app still has **no authentication**; nginx `auth_basic` is the intended
-  gate (see `nginx/dashboard.conf`).
+- Local accounts (2026-10): every route except `/login`, sign-up/sign-in,
+  `/healthz` and `/static` needs a signed-in session; passwords are hashed
+  (werkzeug), the session cookie is HttpOnly + SameSite=Lax, and destructive
+  endpoints need a JSON `{"confirm":"DELETE"}` body, which a cross-site form
+  cannot send. Jobs, files and cancel are scoped to the user.
 
 **Pipeline (`edgar_dashboard.py`, `xbrl_extract.py`, `charts.py`)**
 
@@ -521,8 +564,9 @@ this project must not regress them.
 - `requirements.txt` is pinned to exact tested versions (auto-deploy builds
   on every push; unpinned deps were unreviewed supply-chain exposure).
 
-Known remaining exposure: the app has no auth and no request-rate limiting of
-its own — keep it behind nginx `auth_basic` and never expose it directly.
+Known remaining exposure: the sign-in has no rate limiting or lockout and there
+is no HTTPS of its own — it is meant for a private machine or network. Put it
+behind nginx with TLS (and `auth_basic` if you like) before exposing it.
 
 ## License
 

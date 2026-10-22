@@ -575,6 +575,10 @@ def main() -> None:
         "--no-charts", action="store_true",
         help="Write the CSV/valuation data only; skip chart rendering (screener mode)",
     )
+    parser.add_argument(
+        "--output-dir", default=BASE_OUTPUT_DIR,
+        help="Parent directory for the per-ticker results (default: %(default)s)",
+    )
     args = parser.parse_args()
 
     if not TICKER_RE.match(args.ticker.upper()):
@@ -582,7 +586,7 @@ def main() -> None:
 
     # Point the module globals at a per-ticker output directory.
     TICKER = args.ticker.upper()
-    OUTPUT_DIR = os.path.join(BASE_OUTPUT_DIR, TICKER)
+    OUTPUT_DIR = os.path.join(args.output_dir, TICKER)
     DATA_CSV = os.path.join(OUTPUT_DIR, "financial_data.csv")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 

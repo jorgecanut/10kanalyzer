@@ -2,8 +2,11 @@
 """Minimal local web UI for the SEC EDGAR 10-K dashboard.
 
 Enter a ticker, watch the run, then view or download the generated charts.
-No auth, no database -- it shells out to ``edgar_dashboard.py`` and serves
-whatever lands in ``financial_graphs/<TICKER>/``.
+Local accounts only: users, sessions and results live under ``data/`` (or
+``$STOCKY_DATA_DIR``); delete that folder and everything is gone. Each user's
+results are kept apart in ``data/users/<id>/<TICKER>/`` and users never see
+one another's runs. The pipeline is ``edgar_dashboard.py``, run as a
+subprocess with the user's name and email as the SEC identity.
 
 Run locally:   python app.py            (http://localhost:8053)
 """
@@ -18,11 +21,14 @@ import os
 import re
 import secrets
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
 import time
+import uuid
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from http.cookiejar import CookieJar
 from pathlib import Path
@@ -34,38 +40,49 @@ import pandas as pd
 from flask import (
     Flask,
     abort,
+    g,
     jsonify,
+    redirect,
     render_template,
     request,
     send_file,
     send_from_directory,
+    session,
+    url_for,
 )
 from werkzeug.exceptions import HTTPException
+from werkzeug.security import check_password_hash, generate_password_hash
 
 BASE_DIR = Path(__file__).resolve().parent
-GRAPH_DIR = BASE_DIR / "financial_graphs"
 DASHBOARD = BASE_DIR / "edgar_dashboard.py"
 
-# The SEC identity (name + email) sent as the EDGAR User-Agent. Read from the
-# env var by default, but the UI can override it. The override is written here
-# so it survives restarts and (because ./financial_graphs is bind-mounted)
-# container rebuilds. The leading dot keeps it out of the graphs listing.
-IDENTITY_FILE = GRAPH_DIR / ".edgar_identity"
-DEFAULT_IDENTITY = "Data Analyst analyst@example.com"
+# Everything the app stores: the account database, the session key and each
+# user's results. Read through functions so tests can point it elsewhere.
+DATA_DIR = Path(os.environ.get("STOCKY_DATA_DIR", BASE_DIR / "data"))
+
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+MIN_PASSWORD = 8
 
 # Tickers: letters/digits plus the "." and "-" seen in symbols such as BRK.B.
 TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 ALLOWED_FILES = {".png", ".csv", ".log"}
 
 app = Flask(__name__)
-app.config["TEMPLATES_AUTO_RELOAD"] = True
+app.config.update(
+    TEMPLATES_AUTO_RELOAD=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+)
 
+# Jobs are keyed by "<user id>:<ticker>" (see _job_key) so users never share
+# or see each other's runs; the run lock below is still global (SEC limits).
 JOBS: dict[str, dict] = {}
-# Tickers of the latest screener request, so a reloaded page can resume its
-# progress. Guarded by JOBS_LOCK; cleared by cancel.
-SCREEN_BATCH: list[str] = []
+# Tickers of each user's latest screener request, so a reloaded page can
+# resume its progress. Guarded by JOBS_LOCK; cleared by cancel.
+SCREEN_BATCH: dict[str, list[str]] = {}
 JOBS_LOCK = threading.Lock()
-# Live child processes, keyed by ticker, so /api/cancel can stop them.
+# Live child processes, keyed like JOBS, so cancel can stop them.
 PROCS: dict[str, subprocess.Popen] = {}
 # SEC is rate-limited and the scrape is heavy; run one at a time.
 RUN_LOCK = threading.Lock()
@@ -86,36 +103,99 @@ def _normalise_ticker(raw: str) -> str:
     return ticker
 
 
-def _get_identity() -> str:
-    """Current SEC identity: UI override first, then env var, then default."""
+@contextmanager
+def _db():
+    """The local account database; commits on success and always closes."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DATA_DIR / "stocky.db")
     try:
-        saved = IDENTITY_FILE.read_text(encoding="utf-8").strip()
-    except (FileNotFoundError, OSError):
-        saved = ""
-    return saved or os.environ.get("EDGAR_IDENTITY", DEFAULT_IDENTITY).strip()
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS users ("
+            " id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE COLLATE NOCASE,"
+            " password_hash TEXT NOT NULL, created TEXT NOT NULL)"
+        )
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
 
 
-def _set_identity(raw: str) -> str:
-    """Validate and persist a new SEC identity; return the stored value."""
-    # Collapse whitespace so "Name   you@x.com" and stray newlines normalise.
-    identity = " ".join((raw or "").split())
-    if not identity:
-        abort(400, "Identity cannot be empty.")
-    if len(identity) > 200:
-        abort(400, "Identity is too long (max 200 characters).")
-    # SEC wants a reachable contact; require an email-looking token.
-    if "@" not in identity:
-        abort(400, "SEC requires a contact email, e.g. Jane Doe jane@example.com.")
+def _secret_key() -> bytes:
+    """Session signing key, created once and kept in the data directory.
+
+    If the directory is not writable the key lives in memory only: the app
+    still works, but every restart signs everyone out.
+    """
+    path = DATA_DIR / "secret_key"
     try:
-        IDENTITY_FILE.parent.mkdir(parents=True, exist_ok=True)
-        IDENTITY_FILE.write_text(identity + "\n", encoding="utf-8")
+        return path.read_bytes()
+    except FileNotFoundError:
+        pass
     except OSError as exc:
-        abort(500, f"Could not save identity: {exc}")
-    return identity
+        print(f"[!] cannot read {path}: {exc}; sessions will not survive a restart", file=sys.stderr)
+        return secrets.token_bytes(32)
+    key = secrets.token_bytes(32)
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(key)
+        path.chmod(0o600)
+    except OSError as exc:
+        print(f"[!] cannot write {path}: {exc}; sessions will not survive a restart", file=sys.stderr)
+    return key
 
 
-def _ticker_dir(ticker: str) -> Path:
-    return GRAPH_DIR / ticker
+def _get_user(uid: str | None) -> dict | None:
+    if not uid:
+        return None
+    with _db() as conn:
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
+    return dict(row) if row else None
+
+
+def _clean_name(raw) -> str:
+    name = " ".join(str(raw or "").split())
+    if not name:
+        abort(400, "Name cannot be empty.")
+    if len(name) > 100:
+        abort(400, "Name is too long (max 100 characters).")
+    return name
+
+
+def _clean_email(raw) -> str:
+    email = str(raw or "").strip()
+    if not EMAIL_RE.match(email) or len(email) > 200:
+        abort(400, "Enter a valid email address.")
+    return email
+
+
+def _clean_password(raw) -> str:
+    password = str(raw or "")
+    if len(password) < MIN_PASSWORD:
+        abort(400, f"Password must be at least {MIN_PASSWORD} characters.")
+    return password
+
+
+def _identity(user: dict) -> str:
+    """The SEC User-Agent contact: the account's name and email."""
+    return f"{user['name']} {user['email']}"
+
+
+def _public_user(user: dict) -> dict:
+    # The id is internal: it names the data folder and is never sent out.
+    return {"name": user["name"], "email": user["email"], "identity": _identity(user)}
+
+
+def _user_dir(uid: str | None = None) -> Path:
+    return DATA_DIR / "users" / (uid or g.user["id"])
+
+
+def _job_key(uid: str, ticker: str) -> str:
+    return f"{uid}:{ticker}"
+
+
+def _ticker_dir(ticker: str, uid: str | None = None) -> Path:
+    return _user_dir(uid) / ticker
 
 
 def _charts(ticker: str) -> list[str]:
@@ -237,23 +317,34 @@ def _current_quote(ticker: str) -> dict:
     return current
 
 
-def _worker(ticker: str, filings: int, job_id: str) -> None:
+def _worker(key: str, filings: int, job_id: str) -> None:
     """Run the dashboard in a subprocess, one at a time.
 
     The job id guards against stale worker threads: a cancelled or superseded
     job must never overwrite the state of a newer run for the same ticker.
     Screener jobs (``charts: False``) skip chart rendering; the flag is read at
     launch, so a single-ticker run can still upgrade a queued screener job.
+    ``key`` is ``_job_key(uid, ticker)``: results go to that user's directory
+    and the SEC identity is that account's name and email, read at launch.
     """
     with RUN_LOCK:
         with JOBS_LOCK:
-            job = JOBS.get(ticker)
+            job = JOBS.get(key)
             if not job or job.get("id") != job_id:
                 return
             if job.get("cancel_requested") or job.get("status") == "cancelled":
                 return
+            uid, ticker = job["uid"], job["ticker"]
 
-        directory = _ticker_dir(ticker)
+        user = _get_user(uid)
+        if user is None:
+            with JOBS_LOCK:
+                job = JOBS.get(key)
+                if job and job.get("id") == job_id:
+                    job.update(status="error", finished=_now(), returncode=-1,
+                               error="the account no longer exists")
+            return
+        directory = _ticker_dir(ticker, uid)
         try:
             directory.mkdir(parents=True, exist_ok=True)
             log_path = directory / "run.log"
@@ -263,16 +354,16 @@ def _worker(ticker: str, filings: int, job_id: str) -> None:
             # stuck on "queued" forever.
             message = (
                 f"cannot write results dir {directory}: {type(exc).__name__}: {exc} "
-                f"(uid={os.getuid()}; check the financial_graphs bind mount ownership)"
+                f"(uid={os.getuid()}; check the data bind mount ownership)"
             )
             with JOBS_LOCK:
-                job = JOBS.get(ticker)
+                job = JOBS.get(key)
                 if job and job.get("id") == job_id:
                     job.update(status="error", finished=_now(), returncode=-1, error=message)
             return
 
         with JOBS_LOCK:
-            job = JOBS.get(ticker)
+            job = JOBS.get(key)
             if not job or job.get("id") != job_id:
                 return
             if job.get("cancel_requested"):
@@ -283,8 +374,9 @@ def _worker(ticker: str, filings: int, job_id: str) -> None:
         proc = None
         status, code = "error", -1
         try:
-            env = {**os.environ, "EDGAR_IDENTITY": _get_identity(), "PYTHONUNBUFFERED": "1"}
-            command = [sys.executable, str(DASHBOARD), "--ticker", ticker, "--filings", str(filings)]
+            env = {**os.environ, "EDGAR_IDENTITY": _identity(user), "PYTHONUNBUFFERED": "1"}
+            command = [sys.executable, str(DASHBOARD), "--ticker", ticker, "--filings", str(filings),
+                       "--output-dir", str(_user_dir(uid))]
             if not with_charts:
                 command.append("--no-charts")
             with log_path.open("w") as log:
@@ -296,10 +388,10 @@ def _worker(ticker: str, filings: int, job_id: str) -> None:
                     env=env,
                 )
                 with JOBS_LOCK:
-                    job = JOBS.get(ticker)
+                    job = JOBS.get(key)
                     if job and job.get("id") == job_id:
                         job["pid"] = proc.pid
-                    PROCS[ticker] = proc
+                    PROCS[key] = proc
                     # Cancel may have landed between the status check and Popen.
                     cancel_now = bool(job and job.get("id") == job_id and job.get("cancel_requested"))
                 if cancel_now and proc.poll() is None:
@@ -314,7 +406,7 @@ def _worker(ticker: str, filings: int, job_id: str) -> None:
                     log.write(f"[{_now()}] killed after 30-minute timeout\n")
                     log.flush()
                 with JOBS_LOCK:
-                    job = JOBS.get(ticker)
+                    job = JOBS.get(key)
                     cancelled = bool(job and job.get("id") == job_id and job.get("cancel_requested"))
                 if cancelled:
                     log.write(f"[{_now()}] cancelled by user; files kept\n")
@@ -328,31 +420,62 @@ def _worker(ticker: str, filings: int, job_id: str) -> None:
             except OSError:
                 pass
             with JOBS_LOCK:
-                job = JOBS.get(ticker)
+                job = JOBS.get(key)
                 if job and job.get("id") == job_id:
                     job["error"] = message
         finally:
             if proc is not None:
                 with JOBS_LOCK:
-                    if PROCS.get(ticker) is proc:
-                        PROCS.pop(ticker, None)
+                    if PROCS.get(key) is proc:
+                        PROCS.pop(key, None)
 
         followup = None
         with JOBS_LOCK:
-            job = JOBS.get(ticker)
+            job = JOBS.get(key)
             if job and job.get("id") == job_id:
                 if job.get("cancel_requested"):
                     job.update(status="cancelled", finished=_now(), returncode=code)
                 else:
                     job.update(status=status, finished=_now(), returncode=code)
+                    if status == "done":
+                        _write_run_meta(directory, filings, with_charts)
                     followup = job.get("followup_filings")
                     if followup:
                         # A graph run was requested while this screener job ran.
                         followup_id = secrets.token_hex(8)
-                        JOBS[ticker] = {"id": followup_id, "ticker": ticker, "status": "queued",
-                                        "queued": _now(), "charts": True}
+                        JOBS[key] = _new_job(uid, ticker, followup_id, charts=True)
     if followup:
-        threading.Thread(target=_worker, args=(ticker, followup, followup_id), daemon=True).start()
+        threading.Thread(target=_worker, args=(key, followup, followup_id), daemon=True).start()
+
+
+def _new_job(uid: str, ticker: str, job_id: str, charts: bool) -> dict:
+    return {"id": job_id, "uid": uid, "ticker": ticker, "status": "queued",
+            "queued": _now(), "charts": charts}
+
+
+def _write_run_meta(directory: Path, filings: int, charts: bool) -> None:
+    """Record what the last successful run produced, for the same-day cache."""
+    try:
+        (directory / "run.json").write_text(json.dumps(
+            {"filings": filings, "charts": charts, "finished": _now()}))
+    except OSError:
+        pass
+
+
+def _cached_today(ticker: str, filings: int) -> str | None:
+    """Finish time of today's graph run with the same filings, if there is one."""
+    try:
+        meta = json.loads((_ticker_dir(ticker) / "run.json").read_text())
+        finished = datetime.fromisoformat(meta["finished"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not meta.get("charts") or meta.get("filings") != filings or not _charts(ticker):
+        return None
+    if finished.astimezone().date() != datetime.now().astimezone().date():
+        return None
+    return meta["finished"]
+
+
 
 
 # --------------------------------------------------------------------------- #
@@ -379,9 +502,77 @@ def set_security_headers(response):
     return response
 
 
+app.secret_key = _secret_key()
+
+# Everything else needs a signed-in user.
+PUBLIC_ENDPOINTS = {"login_page", "login", "signup", "healthz", "static"}
+
+
+@app.before_request
+def load_user():
+    g.user = _get_user(session.get("uid"))
+    if g.user is not None or request.endpoint in PUBLIC_ENDPOINTS:
+        return None
+    session.pop("uid", None)
+    if request.path.startswith("/api/"):
+        abort(401, "Sign in first.")
+    return redirect(url_for("login_page"))
+
+
+def _start_session(uid: str) -> None:
+    session.clear()
+    session["uid"] = uid
+    session.permanent = True
+
+
 @app.get("/")
 def index():
     return render_template("index.html")
+
+
+@app.get("/login")
+def login_page():
+    if g.user is not None:
+        return redirect(url_for("index"))
+    return render_template("login.html")
+
+
+@app.post("/api/signup")
+def signup():
+    payload = request.get_json(silent=True) or {}
+    name = _clean_name(payload.get("name"))
+    email = _clean_email(payload.get("email"))
+    password = _clean_password(payload.get("password"))
+    uid = uuid.uuid4().hex
+    try:
+        with _db() as conn:
+            conn.execute(
+                "INSERT INTO users (id, name, email, password_hash, created) VALUES (?, ?, ?, ?, ?)",
+                (uid, name, email, generate_password_hash(password), _now()),
+            )
+    except sqlite3.IntegrityError:
+        abort(409, "An account with that email already exists.")
+    _start_session(uid)
+    return jsonify(user=_public_user(_get_user(uid))), 201
+
+
+@app.post("/api/login")
+def login():
+    payload = request.get_json(silent=True) or {}
+    email = str(payload.get("email") or "").strip()
+    password = str(payload.get("password") or "")
+    with _db() as conn:
+        row = conn.execute("SELECT id, password_hash FROM users WHERE email = ?", (email,)).fetchone()
+    if row is None or not check_password_hash(row["password_hash"], password):
+        abort(401, "Wrong email or password.")
+    _start_session(row["id"])
+    return jsonify(ok=True)
+
+
+@app.post("/api/logout")
+def logout():
+    session.clear()
+    return jsonify(ok=True)
 
 
 @app.get("/healthz")
@@ -406,41 +597,103 @@ def build_info() -> dict:
             info[key] = hashlib.sha1(path.read_bytes()).hexdigest()
         except OSError:
             info[key] = None
-    info["graph"] = graph_diagnostics()
+    info["data"] = graph_diagnostics(DATA_DIR, list_tickers=False)
     return info
 
 
-def graph_diagnostics() -> dict:
+def graph_diagnostics(directory: Path, list_tickers: bool = True) -> dict:
     """Why results may be invisible: the path the app reads, and whether it can.
 
     A bind mount that is not writable by the container user (uid 10001) is the
-    usual cause of "the run says it wrote charts but nothing appears".
+    usual cause of "the run says it wrote charts but nothing appears". Public
+    callers (``/healthz``) pass ``list_tickers=False``: tickers are per user.
     """
     info = {
-        "graph_dir": str(GRAPH_DIR),
-        "exists": GRAPH_DIR.is_dir(),
-        "writable": os.access(GRAPH_DIR, os.W_OK) if GRAPH_DIR.is_dir() else False,
-        "readable": os.access(GRAPH_DIR, os.R_OK) if GRAPH_DIR.is_dir() else False,
+        "graph_dir": str(directory),
+        "exists": directory.is_dir(),
+        "writable": os.access(directory, os.W_OK) if directory.is_dir() else False,
+        "readable": os.access(directory, os.R_OK) if directory.is_dir() else False,
         "uid": os.getuid(),
     }
+    if not list_tickers:
+        return info
     try:
-        info["tickers"] = sorted(p.name for p in GRAPH_DIR.iterdir() if p.is_dir())
+        info["tickers"] = sorted(p.name for p in directory.iterdir() if p.is_dir()) if directory.is_dir() else []
     except OSError as exc:
         info["tickers"] = []
         info["error"] = f"{type(exc).__name__}: {exc}"
     return info
 
 
-@app.get("/api/identity")
-def get_identity():
-    return jsonify(identity=_get_identity())
+@app.get("/api/account")
+def account():
+    return jsonify(user=_public_user(g.user))
 
 
-@app.post("/api/identity")
-def update_identity():
+@app.patch("/api/account")
+def update_account():
+    """Change name, email and/or password; email and password need the current one."""
     payload = request.get_json(silent=True) or {}
-    identity = _set_identity(payload.get("identity", ""))
-    return jsonify(identity=identity)
+    user = g.user
+    name = _clean_name(payload.get("name", user["name"]))
+    email = _clean_email(payload.get("email", user["email"]))
+    new_password = str(payload.get("new_password") or "")
+    if email.lower() != user["email"].lower() or new_password:
+        if not check_password_hash(user["password_hash"], str(payload.get("current_password") or "")):
+            abort(403, "Enter your current password to change the email or password.")
+    password_hash = (generate_password_hash(_clean_password(new_password))
+                     if new_password else user["password_hash"])
+    try:
+        with _db() as conn:
+            conn.execute(
+                "UPDATE users SET name = ?, email = ?, password_hash = ? WHERE id = ?",
+                (name, email, password_hash, user["id"]),
+            )
+    except sqlite3.IntegrityError:
+        abort(409, "An account with that email already exists.")
+    return jsonify(user=_public_user(_get_user(user["id"])))
+
+
+def _require_confirm(payload) -> None:
+    # A JSON body is required, so a cross-site form post can never trigger this.
+    if not isinstance(payload, dict) or payload.get("confirm") != "DELETE":
+        abort(400, "Type DELETE to confirm.")
+
+
+def _wipe_user(uid: str) -> int:
+    """Stop the user's jobs and delete all their results; return tickers removed."""
+    _cancel_jobs(uid)
+    directory = _user_dir(uid)
+    try:
+        removed = sum(1 for p in directory.iterdir() if p.is_dir()) if directory.is_dir() else 0
+        if directory.exists():
+            shutil.rmtree(directory)
+    except OSError as exc:
+        abort(500, f"Could not remove data: {exc}")
+    with JOBS_LOCK:
+        for key in [key for key, job in JOBS.items() if job.get("uid") == uid]:
+            JOBS.pop(key, None)
+    return removed
+
+
+@app.delete("/api/data")
+def wipe_data():
+    _require_confirm(request.get_json(silent=True))
+    return jsonify(removed=_wipe_user(g.user["id"]))
+
+
+@app.delete("/api/account")
+def delete_account():
+    payload = request.get_json(silent=True)
+    _require_confirm(payload)
+    if not check_password_hash(g.user["password_hash"], str(payload.get("password") or "")):
+        abort(403, "Wrong password.")
+    uid = g.user["id"]
+    _wipe_user(uid)
+    with _db() as conn:
+        conn.execute("DELETE FROM users WHERE id = ?", (uid,))
+    session.clear()
+    return jsonify(deleted=True)
 
 
 @app.post("/api/run")
@@ -453,9 +706,11 @@ def run():
         abort(400, "filings must be a number")
     if not 1 <= filings <= 20:
         abort(400, "filings must be between 1 and 20")
+    uid = g.user["id"]
+    key = _job_key(uid, ticker)
 
     with JOBS_LOCK:
-        job = JOBS.get(ticker)
+        job = JOBS.get(key)
         if job and job["status"] in ("queued", "running"):
             if not job.get("charts", True):
                 # A screener job is pending for this ticker: make it render
@@ -466,29 +721,34 @@ def run():
                     job["followup_filings"] = filings
             return jsonify(status=job["status"], ticker=ticker, message="Already running"), 200
 
+    # Same graphs already generated today: serve them unless asked for fresh.
+    if not payload.get("fresh"):
+        generated = _cached_today(ticker, filings)
+        if generated:
+            return jsonify(status="cached", ticker=ticker, generated=generated), 200
+
     with JOBS_LOCK:
         job_id = secrets.token_hex(8)
-        JOBS[ticker] = {"id": job_id, "ticker": ticker, "status": "queued", "queued": _now(), "charts": True}
+        JOBS[key] = _new_job(uid, ticker, job_id, charts=True)
 
-    threading.Thread(target=_worker, args=(ticker, filings, job_id), daemon=True).start()
+    threading.Thread(target=_worker, args=(key, filings, job_id), daemon=True).start()
     return jsonify(status="queued", ticker=ticker), 202
 
 
-@app.post("/api/cancel")
-def cancel_all():
-    """Stop every queued/running job. Results on disk are never touched."""
+def _cancel_jobs(uid: str) -> list[str]:
+    """Stop every queued/running job of one user. Results on disk are kept."""
     procs: list[subprocess.Popen] = []
     tickers: list[str] = []
     with JOBS_LOCK:
-        SCREEN_BATCH.clear()
-        for ticker, job in JOBS.items():
-            if job.get("status") not in ("queued", "running"):
+        SCREEN_BATCH.pop(uid, None)
+        for key, job in JOBS.items():
+            if job.get("uid") != uid or job.get("status") not in ("queued", "running"):
                 continue
             job["cancel_requested"] = True
             job["status"] = "cancelled"
             job["finished"] = _now()
-            tickers.append(ticker)
-            proc = PROCS.get(ticker)
+            tickers.append(job["ticker"])
+            proc = PROCS.get(key)
             if proc is not None:
                 procs.append(proc)
 
@@ -508,19 +768,26 @@ def cancel_all():
                 proc.kill()
             except OSError:
                 pass
-    return jsonify(cancelled=tickers)
+    return tickers
+
+
+@app.post("/api/cancel")
+def cancel_all():
+    """Stop the signed-in user's queued/running jobs; files are never touched."""
+    return jsonify(cancelled=_cancel_jobs(g.user["id"]))
 
 
 @app.get("/api/jobs")
 def jobs():
     """Queued/running jobs plus the last screener batch, for resuming on reload."""
+    uid = g.user["id"]
     with JOBS_LOCK:
         active = [
-            {"ticker": ticker, "status": job["status"], "charts": job.get("charts", True)}
-            for ticker, job in JOBS.items()
-            if job.get("status") in ("queued", "running")
+            {"ticker": job["ticker"], "status": job["status"], "charts": job.get("charts", True)}
+            for job in JOBS.values()
+            if job.get("uid") == uid and job.get("status") in ("queued", "running")
         ]
-        batch = list(SCREEN_BATCH)
+        batch = list(SCREEN_BATCH.get(uid, []))
     return jsonify(jobs=active, batch=batch)
 
 
@@ -528,7 +795,8 @@ def jobs():
 def status(ticker: str):
     ticker = _normalise_ticker(ticker)
     with JOBS_LOCK:
-        job = dict(JOBS.get(ticker, {}))
+        job = dict(JOBS.get(_job_key(g.user["id"], ticker), {}))
+    job.pop("uid", None)
 
     if job:
         job["log"] = _log_tail(ticker)
@@ -545,8 +813,9 @@ def status(ticker: str):
 
 @app.get("/api/recent")
 def recent():
+    directory = _user_dir()
     try:
-        dirs = [d for d in GRAPH_DIR.iterdir() if d.is_dir()] if GRAPH_DIR.is_dir() else []
+        dirs = [d for d in directory.iterdir() if d.is_dir()] if directory.is_dir() else []
     except OSError:
         dirs = []
     items = [s for d in dirs for s in [_results_summary(d.name)] if s]
@@ -559,22 +828,23 @@ def recent():
 @app.delete("/api/recent/<ticker>")
 def remove_recent(ticker: str):
     ticker = _normalise_ticker(ticker)
+    key = _job_key(g.user["id"], ticker)
     with JOBS_LOCK:
-        job = JOBS.get(ticker)
+        job = JOBS.get(key)
         if job and job["status"] in ("queued", "running"):
             abort(409, "A run is active for that ticker.")
     directory = _ticker_dir(ticker)
     if not directory.is_dir():
         abort(404, "No results for that ticker yet.")
     with JOBS_LOCK:
-        job = JOBS.get(ticker)
+        job = JOBS.get(key)
         if job and job["status"] in ("queued", "running"):
             abort(409, "A run is active for that ticker.")
         try:
             shutil.rmtree(directory)
         except OSError as exc:
             abort(500, f"Could not remove results: {exc}")
-        JOBS.pop(ticker, None)
+        JOBS.pop(key, None)
     return jsonify(removed=ticker)
 
 
@@ -587,7 +857,7 @@ def files(ticker: str):
             error="No results for that ticker yet.",
             ticker=ticker,
             ticker_dir=str(_ticker_dir(ticker)),
-            diagnostics=graph_diagnostics(),
+            diagnostics=graph_diagnostics(_user_dir()),
         ), 404
     return jsonify(summary)
 
@@ -848,7 +1118,8 @@ def _roc_fallback(directory: Path, fiscal_year) -> float | None:
 def screener():
     items = []
     try:
-        directories = sorted(p for p in GRAPH_DIR.iterdir() if p.is_dir()) if GRAPH_DIR.is_dir() else []
+        root = _user_dir()
+        directories = sorted(p for p in root.iterdir() if p.is_dir()) if root.is_dir() else []
     except OSError:
         directories = []
     for directory in directories:
@@ -919,8 +1190,9 @@ def screener_run():
         abort(400, "filings must be a number")
     if not 1 <= filings <= 20:
         abort(400, "filings must be between 1 and 20")
+    uid = g.user["id"]
     with JOBS_LOCK:
-        SCREEN_BATCH[:] = tickers
+        SCREEN_BATCH[uid] = tickers
 
     queued: list[str] = []
     cached: list[str] = []
@@ -932,15 +1204,16 @@ def screener_run():
             cached.append(ticker)
             items.append({"ticker": ticker, "status": "cached"})
             continue
+        key = _job_key(uid, ticker)
         with JOBS_LOCK:
-            job = JOBS.get(ticker)
+            job = JOBS.get(key)
             if job and job["status"] in ("queued", "running"):
                 queued.append(ticker)
                 items.append({"ticker": ticker, "status": job["status"]})
                 continue
             job_id = secrets.token_hex(8)
-            JOBS[ticker] = {"id": job_id, "ticker": ticker, "status": "queued", "queued": _now(), "charts": False}
-        threading.Thread(target=_worker, args=(ticker, filings, job_id), daemon=True).start()
+            JOBS[key] = _new_job(uid, ticker, job_id, charts=False)
+        threading.Thread(target=_worker, args=(key, filings, job_id), daemon=True).start()
         queued.append(ticker)
         items.append({"ticker": ticker, "status": "queued"})
 

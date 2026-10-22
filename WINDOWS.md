@@ -1,7 +1,7 @@
 # Running the 10-K Dashboard on Windows 11
 
 This guide starts from a **clean Windows 11 install** and gets you to a working
-dashboard at `http://localhost:8000`. Everything runs locally on your PC —
+dashboard at `http://localhost:8053`. Everything runs locally on your PC —
 nothing is uploaded anywhere. You only need Docker; you do not need Python, Git,
 or any developer tools.
 
@@ -14,11 +14,11 @@ Total time: ~15 minutes (mostly downloads). Disk: ~5 GB free.
 ```powershell
 # in the project folder
 Copy-Item .env.example .env
-notepad .env                 # set EDGAR_IDENTITY to your name + email
+notepad .env                 # optional: change the port
 docker compose up -d --build
 ```
 
-Then open <http://localhost:8000>. If Docker isn't installed yet, keep reading.
+Then open <http://localhost:8053> and create an account. If Docker isn't installed yet, keep reading.
 
 ---
 
@@ -116,12 +116,12 @@ notepad .env
 Edit the file so it looks like:
 
 ```
-HTTP_PORT=8000
-EDGAR_IDENTITY=Your Name you@example.com
+HTTP_PORT=8053
 ```
 
 Save and close. (`HTTP_PORT` is the port you'll open in the browser — change it
-if 8000 is already in use.)
+if 8053 is already in use. There is no SEC contact to set here: the app asks
+for your name and email when you create your account.)
 
 ---
 
@@ -136,7 +136,7 @@ docker compose up -d --build
 The first build downloads a Linux image and the Python libraries — expect a few
 minutes and a few hundred MB. When it finishes, open:
 
-**<http://localhost:8000>**
+**<http://localhost:8053>**
 
 Type a ticker (e.g. `AAPL`), press **Run**, and wait. The first run for a ticker
 takes ~1–3 minutes; the **Recent** tab lists everything you've run and lets you
@@ -158,8 +158,8 @@ docker compose down -v     # ALSO delete the SEC cache volumes
 To **update** after getting new project files: replace the folder contents, then
 `docker compose up -d --build` again.
 
-Your charts also live on your PC under `financial_graphs\` in the project
-folder, next to the compose file.
+Your account and charts live on your PC under `data\` in the project folder,
+next to the compose file. Delete that folder and they are gone.
 
 ---
 
@@ -200,9 +200,9 @@ If it says Docker isn't running, start Docker Desktop and run it again.
 if you prefer cloning over a ZIP.
 
 **Does it connect to someone else's server?** No. It calls SEC EDGAR directly
-from your machine, using the contact you put in `EDGAR_IDENTITY`.
+from your machine, using your account's name and email as the contact.
 
-**Where do my charts go?** `financial_graphs\` in the project folder, and they're
+**Where do my charts go?** `data\users\` in the project folder, and they're
 downloadable from the web UI.
 
 **How do I change the port?** Set `HTTP_PORT` in `.env` and run

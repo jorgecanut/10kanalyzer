@@ -18,7 +18,7 @@ COPY *.py ./
 COPY templates ./templates
 COPY static ./static
 
-RUN useradd --create-home --uid 10001 appuser && mkdir -p /app/financial_graphs && chown -R appuser:appuser /app
+RUN useradd --create-home --uid 10001 appuser && mkdir -p /app/data && chown -R appuser:appuser /app
 
 USER appuser
 

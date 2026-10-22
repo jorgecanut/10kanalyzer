@@ -102,16 +102,6 @@
   .user-meta { display:flex; flex-direction:column; min-width:0; }
   .user-label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
   .user-id { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:230px; }
-  .user-pop { position:absolute; right:0; top:calc(100% + 8px); z-index:40; width:320px;
-              background:var(--surface-2); border:1px solid var(--line); border-radius:10px; padding:14px;
-              box-shadow:0 18px 44px rgba(0,0,0,.35); }
-  .user-pop label { display:block; font-size:12px; font-weight:600; margin-bottom:6px; }
-  .user-pop input { width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:8px;
-                    font-size:14px; text-transform:none; background:var(--bg); color:var(--text); }
-  .user-pop .muted { margin:8px 0 12px; }
-  .user-actions { display:flex; gap:8px; }
-  .user-actions button { padding:8px 14px; border:1px solid var(--line); border-radius:8px;
-                         font-size:14px; background:var(--surface); color:var(--text); cursor:pointer; }
 
   /* Ticker bar: always visible under the title bar. */
   .toolbar { padding:8px 20px; border-top:1px solid var(--line-soft); background:var(--bg); }
@@ -133,7 +123,7 @@
                      border-radius:8px; font-size:15px; text-transform:uppercase;
                      background:var(--surface); color:var(--text); }
   input[type=text]::placeholder { color:var(--muted); text-transform:none; }
-  input[type=text]:focus, select:focus, .user-pop input:focus { outline:none; border-color:var(--accent); }
+  input[type=text]:focus, select:focus { outline:none; border-color:var(--accent); }
   select, button.primary { padding:10px 12px; border:1px solid var(--line); border-radius:8px;
                            font-size:14px; background:var(--surface); color:var(--text); }
   button.primary { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600;
@@ -274,6 +264,81 @@
   .screen-notes:empty { display:none; }
   .row-btn { padding:3px 8px; font-size:12px; }
 
+  /* Options: a small centred dialog; vertical tabs left, sections right. */
+  .opt-backdrop { position:fixed; inset:0; z-index:60; display:flex; align-items:center; justify-content:center;
+                  padding:16px; background:rgba(0,0,0,.55); }
+  .opt-backdrop.hidden { display:none; }
+  .opt .hidden { display:none; }    /* beats the flex rules below */
+  .opt { width:min(720px, 100%); height:min(500px, calc(100vh - 32px)); display:flex; flex-direction:column;
+         background:var(--surface); border:1px solid var(--line); border-radius:12px; overflow:hidden;
+         box-shadow:0 24px 60px rgba(0,0,0,.45); }
+  .opt-top { display:flex; gap:8px; align-items:center; padding:10px 12px; background:var(--bar);
+             border-bottom:1px solid var(--line); }
+  .opt-top input { flex:1; min-width:0; padding:8px 11px; border:1px solid var(--line); border-radius:8px;
+                   background:var(--bg); color:var(--text); font-size:14px; }
+  .opt-top input::placeholder { color:var(--muted); }
+  .opt-top input:focus, .opt input:focus { outline:none; border-color:var(--accent); }
+  .opt-close { flex:none; display:flex; align-items:center; justify-content:center; width:36px; height:36px;
+               padding:0; border:1px solid var(--line); border-radius:8px; background:var(--surface);
+               color:var(--muted); cursor:pointer; }
+  .opt-close:hover { color:var(--text); border-color:var(--muted); }
+  .opt-close svg { width:16px; height:16px; }
+  .opt-main { flex:1; display:flex; min-height:0; }
+  .opt-tabs { flex:none; width:150px; display:flex; flex-direction:column; gap:4px; padding:12px 8px;
+              border-right:1px solid var(--line); background:var(--bar); }
+  .opt-tabs button { text-align:left; padding:8px 10px; border:0; border-radius:7px; background:none;
+                     color:var(--muted); font-size:13px; cursor:pointer; }
+  .opt-tabs button:hover { color:var(--text); }
+  .opt-tabs button.active { background:var(--accent); color:var(--on-accent); font-weight:600; }
+  .opt-panes { flex:1; min-width:0; overflow:auto; padding:14px 18px; }
+  .opt-pane h2 { margin:0 0 4px; font-size:12px; font-weight:600; text-transform:uppercase;
+                 letter-spacing:.04em; color:var(--muted); }
+  .opt-pane + .opt-pane { margin-top:18px; }
+  .opt-row { padding:10px 0; border-bottom:1px solid var(--line-soft); }
+  .opt-row:last-child { border-bottom:0; }
+  .opt-row label, .opt-label { display:block; font-size:12px; color:var(--muted); margin:0 0 5px; }
+  .opt input[type=text], .opt input[type=email], .opt input[type=password] {
+    width:100%; min-width:0; padding:8px 10px; border:1px solid var(--line); border-radius:7px;
+    background:var(--bg); color:var(--text); font-size:14px; text-transform:none; }
+  .opt-hint { margin:0 0 8px; color:var(--muted); font-size:12px; }
+  .opt-hint:last-child { margin-bottom:0; }
+  .opt-msg { font-size:12px; color:var(--muted); }
+  .opt-msg.is-error { color:var(--badge-error-fg); }
+  .opt-actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .danger-btn { padding:8px 14px; border:1px solid var(--badge-error-fg); border-radius:7px;
+                background:var(--badge-error-bg); color:var(--badge-error-fg); font-size:13px;
+                font-weight:600; cursor:pointer; }
+  .danger-btn:disabled { opacity:.45; cursor:not-allowed; }
+  .seg { display:flex; gap:6px; max-width:260px; }
+  .seg button { flex:1; padding:7px; border:1px solid var(--line); border-radius:7px; background:var(--bar);
+                color:var(--muted); font-size:13px; cursor:pointer; }
+  .seg button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
+  .opt-confirm { flex:1; overflow:auto; padding:22px 24px; }
+  .opt-confirm h2 { margin:0 0 8px; font-size:17px; color:var(--badge-error-fg); }
+  .opt-confirm p { margin:0 0 10px; font-size:13px; }
+  .opt-confirm ul { margin:0 0 16px; padding-left:18px; color:var(--muted); font-size:13px; }
+  .opt-confirm label { display:block; font-size:12px; color:var(--muted); margin:0 0 5px; }
+  .opt-confirm input { margin-bottom:12px; }
+  @media (max-width:600px) {
+    .opt-tabs { width:112px; }
+    .opt-panes { padding:12px 14px; }
+    .opt-confirm { padding:18px 16px; }
+  }
+
+  /* Drop-down notice bar (cached graphs) with a visible countdown. */
+  .dropbar { position:fixed; top:0; left:50%; z-index:70; width:min(580px, calc(100% - 32px));
+             transform:translate(-50%, -120%); visibility:hidden;
+             transition:transform .25s ease, visibility 0s linear .25s;
+             background:var(--surface-2); border:1px solid var(--line); border-radius:10px;
+             box-shadow:0 18px 44px rgba(0,0,0,.35); overflow:hidden; }
+  .dropbar.open { transform:translate(-50%, 12px); visibility:visible; transition:transform .25s ease; }
+  .dropbar-row { display:flex; align-items:center; gap:10px 12px; padding:10px 14px; font-size:13px; flex-wrap:wrap; }
+  .dropbar-text { flex:1; min-width:200px; }
+  .dropbar-count { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .dropbar-progress { height:3px; background:var(--accent); transform-origin:left; }
+  .dropbar.open .dropbar-progress { animation:drain 3s linear forwards; }
+  @keyframes drain { to { transform:scaleX(0); } }
+
   /* Insider trades reuse the stat rows for a compact list. */
   .insider-list .stat { align-items:center; gap:10px; flex-wrap:wrap; }
   .insider-list .stat:first-child { padding-top:0; }
@@ -311,25 +376,23 @@
             </g>
           </svg>
         </button>
+        <button id="options-btn" class="theme-btn" onclick="openOptions()" title="Options" aria-label="Options">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
+              <path fill="currentColor" opacity=".2" stroke="none" d="M9.81 4.93L10.47 2.52L13.53 2.52L14.19 4.93L15.45 5.45L17.62 4.22L19.78 6.38L18.55 8.55L19.07 9.81L21.48 10.47L21.48 13.53L19.07 14.19L18.55 15.45L19.78 17.62L17.62 19.78L15.45 18.55L14.19 19.07L13.53 21.48L10.47 21.48L9.81 19.07L8.55 18.55L6.38 19.78L4.22 17.62L5.45 15.45L4.93 14.19L2.52 13.53L2.52 10.47L4.93 9.81L5.45 8.55L4.22 6.38L6.38 4.22L8.55 5.45Z" />
+              <path d="M9.81 4.93L10.47 2.52L13.53 2.52L14.19 4.93L15.45 5.45L17.62 4.22L19.78 6.38L18.55 8.55L19.07 9.81L21.48 10.47L21.48 13.53L19.07 14.19L18.55 15.45L19.78 17.62L17.62 19.78L15.45 18.55L14.19 19.07L13.53 21.48L10.47 21.48L9.81 19.07L8.55 18.55L6.38 19.78L4.22 17.62L5.45 15.45L4.93 14.19L2.52 13.53L2.52 10.47L4.93 9.81L5.45 8.55L4.22 6.38L6.38 4.22L8.55 5.45Z" />
+              <circle cx="12" cy="12" r="3.1" />
+            </g>
+          </svg>
+        </button>
         <div class="user">
-          <button id="user-btn" class="user-btn" onclick="toggleUser()" title="SEC request identity">
+          <button id="user-btn" class="user-btn" onclick="openOptions('account')" title="Account settings">
             <span id="user-avatar" class="avatar">?</span>
             <span class="user-meta">
-              <span class="user-label">SEC identity</span>
-              <span id="user-id" class="user-id">loading…</span>
+              <span id="user-name" class="user-label">loading…</span>
+              <span id="user-id" class="user-id"></span>
             </span>
           </button>
-          <div id="user-pop" class="user-pop hidden">
-            <label for="user-input">SEC request identity</label>
-            <input id="user-input" type="text" maxlength="200" placeholder="Jane Doe jane@example.com"
-                   onkeydown="if(event.key==='Enter')saveIdentity()">
-            <p class="muted">Sent as the EDGAR User-Agent. Use a name and a reachable contact email.</p>
-            <div class="user-actions">
-              <button class="primary" onclick="saveIdentity()">Save</button>
-              <button onclick="toggleUser(false)">Cancel</button>
-            </div>
-            <div id="user-msg" class="muted"></div>
-          </div>
         </div>
       </div>
     </div>
@@ -337,7 +400,7 @@
 
   <div class="toolbar">
     <div class="toolbar-inner">
-      <input id="ticker" type="text" placeholder="AAPL, MSFT, NVDA, AMZN, GOOG" maxlength="120"
+      <input id="ticker" type="text" placeholder="AAPL, MSFT, NVDA" maxlength="120" aria-label="Tickers"
              oninput="updateMode()" onkeydown="if(event.key==='Enter')handlePrimary()">
       <select id="filings" title="Number of 10-K filings">
         <option value="3">3 filings</option>
@@ -540,11 +603,119 @@
   </section>
 </main>
 
+<!-- Options: search on top, vertical tabs left, sections right. -->
+<div id="opt-backdrop" class="opt-backdrop hidden" onclick="if (event.target === this) closeOptions()">
+  <div class="opt" role="dialog" aria-modal="true" aria-label="Options">
+    <div class="opt-top" id="opt-top">
+      <input id="opt-search" type="search" placeholder="Search options" autocomplete="off"
+             aria-label="Search options" oninput="searchOptions()">
+      <button class="opt-close" onclick="closeOptions()" title="Close" aria-label="Close options">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none"
+             stroke="currentColor" stroke-linecap="round" stroke-width="1.8" /></svg>
+      </button>
+    </div>
+    <div class="opt-main" id="opt-main">
+      <nav class="opt-tabs" role="tablist" aria-orientation="vertical">
+        <button data-tab="account" role="tab" onclick="showOptTab('account')">Account</button>
+        <button data-tab="appearance" role="tab" onclick="showOptTab('appearance')">Appearance</button>
+        <button data-tab="data" role="tab" onclick="showOptTab('data')">Data</button>
+      </nav>
+      <div class="opt-panes">
+        <section class="opt-pane" data-pane="account">
+          <h2>Account</h2>
+          <div class="opt-row" data-search="profile full name">
+            <label for="acc-name">Name</label>
+            <input id="acc-name" type="text" maxlength="100" autocomplete="name">
+          </div>
+          <div class="opt-row" data-search="profile mail contact sign in login">
+            <label for="acc-email">Email</label>
+            <input id="acc-email" type="email" maxlength="200" autocomplete="email">
+          </div>
+          <div class="opt-row" data-search="sec edgar user agent contact identity">
+            <span class="opt-label">SEC identity</span>
+            <p class="opt-hint">Sent to the SEC as the contact for your requests: <b id="acc-identity"></b></p>
+          </div>
+          <div class="opt-row" data-search="change password security">
+            <label for="acc-new">New password</label>
+            <input id="acc-new" type="password" autocomplete="new-password" placeholder="Leave empty to keep it">
+          </div>
+          <div class="opt-row" data-search="current password security confirm">
+            <label for="acc-current">Current password</label>
+            <input id="acc-current" type="password" autocomplete="current-password"
+                   placeholder="Needed to change the email or password">
+          </div>
+          <div class="opt-row opt-actions" data-search="save account profile">
+            <button class="primary" onclick="saveAccount()">Save changes</button>
+            <span id="acc-msg" class="opt-msg" role="status"></span>
+          </div>
+          <div class="opt-row" data-search="sign out log out logout session">
+            <span class="opt-label">Session</span>
+            <button class="panel-btn" onclick="signOut()">Sign out</button>
+          </div>
+          <div class="opt-row" data-search="delete account remove close erase">
+            <span class="opt-label">Delete account</span>
+            <p class="opt-hint">Removes your account and all of your data from this machine.</p>
+            <button class="danger-btn" onclick="openConfirm('account')">Delete account…</button>
+          </div>
+        </section>
+        <section class="opt-pane" data-pane="appearance">
+          <h2>Appearance</h2>
+          <div class="opt-row" data-search="theme dark light mode colour color">
+            <span class="opt-label">Theme</span>
+            <div class="seg">
+              <button id="opt-dark" onclick="setTheme('dark')">Dark</button>
+              <button id="opt-light" onclick="setTheme('light')">Light</button>
+            </div>
+          </div>
+        </section>
+        <section class="opt-pane" data-pane="data">
+          <h2>Data</h2>
+          <div class="opt-row" data-search="storage stored local tickers results disk">
+            <span class="opt-label">Stored results</span>
+            <p class="opt-hint" id="data-summary">…</p>
+          </div>
+          <div class="opt-row" data-search="remove all data delete wipe clear erase reset">
+            <span class="opt-label">Remove all data</span>
+            <p class="opt-hint">Deletes every ticker's graphs, CSVs and logs. Your account stays.</p>
+            <button class="danger-btn" onclick="openConfirm('data')">Remove all data…</button>
+          </div>
+        </section>
+        <p id="opt-empty" class="opt-hint hidden">No options match.</p>
+      </div>
+    </div>
+    <div class="opt-confirm hidden" id="opt-confirm" role="alertdialog" aria-labelledby="confirm-title">
+      <h2 id="confirm-title"></h2>
+      <p id="confirm-text"></p>
+      <ul id="confirm-list"></ul>
+      <div id="confirm-pass-row" class="hidden">
+        <label for="confirm-pass">Your password</label>
+        <input id="confirm-pass" type="password" autocomplete="current-password" oninput="syncConfirm()">
+      </div>
+      <label for="confirm-input">Type <b>DELETE</b> to confirm</label>
+      <input id="confirm-input" type="text" autocomplete="off" oninput="syncConfirm()">
+      <p id="confirm-msg" class="opt-msg is-error" role="alert"></p>
+      <div class="opt-actions">
+        <button class="panel-btn" onclick="closeConfirm()">Cancel</button>
+        <button id="confirm-btn" class="danger-btn" disabled onclick="runConfirm()"></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="dropbar" class="dropbar" role="status" aria-live="polite">
+  <div class="dropbar-row">
+    <span id="dropbar-text" class="dropbar-text"></span>
+    <button id="dropbar-fresh" class="panel-btn">Generate fresh</button>
+    <span id="dropbar-count" class="dropbar-count"></span>
+  </div>
+  <div class="dropbar-progress"></div>
+</div>
+
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let timer = null;
-let identityCache = '';
+let ACCOUNT = null;
 let ACTIVE_TICKER = '';
 const POLL_TIMERS = {};
 const TICKER_RE = /^[A-Z][A-Z0-9.\-]{0,9}$/;
@@ -570,6 +741,8 @@ window.fetch = (url, options = {}) => {
     rawFetch(url, { ...options, signal: controller.signal }).then(
       response => {
         INFLIGHT.delete(controller);
+        // Session gone (signed out elsewhere, account deleted): back to sign-in.
+        if (response.status === 401) { location.href = '/login'; return; }
         const json = response.json.bind(response);
         response.json = () => json().catch(err =>
           err && err.name === 'AbortError' ? new Promise(() => {}) : Promise.reject(err)
@@ -638,9 +811,8 @@ function resetUi() {
   SCREEN.pipeline = null;
   renderScreener();
   resetSimulation();
-  toggleUser(false);
-  $('#user-msg').textContent = '';
-  $('#user-input').value = '';
+  closeDropbar();
+  suggestTickers();
   showTab('graph');
   // The pinned graph is kept; re-read its state now that the jobs are gone.
   GRAPH.log = false;
@@ -689,63 +861,283 @@ function applyTheme(theme) {
     btn.setAttribute('title', label);
     btn.setAttribute('aria-label', label);
   }
+  $('#opt-dark').classList.toggle('active', theme === 'dark');
+  $('#opt-light').classList.toggle('active', theme === 'light');
+}
+
+function setTheme(theme) {
+  try { localStorage.setItem('stocky-theme', theme); } catch {}
+  applyTheme(theme);
 }
 
 function toggleTheme() {
-  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-  try { localStorage.setItem('stocky-theme', next); } catch {}
-  applyTheme(next);
+  setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 }
 
-/* Identity ---------------------------------------------------------------- */
+/* Account ----------------------------------------------------------------- */
 
-function setIdentity(id) {
-  identityCache = id;
-  $('#user-id').textContent = id;
-  $('#user-avatar').textContent = (id.trim()[0] || '?');
+function setAccount(user) {
+  ACCOUNT = user;
+  $('#user-name').textContent = user.name;
+  $('#user-id').textContent = user.email;
+  $('#user-avatar').textContent = (user.name.trim()[0] || '?');
+  $('#acc-identity').textContent = user.identity;
 }
 
-async function loadIdentity() {
+async function loadAccount() {
   try {
-    const { identity } = await (await fetch('/api/identity')).json();
-    setIdentity(identity);
-  } catch { setIdentity('unavailable'); }
+    const { user } = await (await fetch('/api/account')).json();
+    setAccount(user);
+  } catch { $('#user-name').textContent = 'unavailable'; }
 }
 
-function toggleUser(force) {
-  const pop = $('#user-pop');
-  const open = force === undefined ? pop.classList.contains('hidden') : force;
-  pop.classList.toggle('hidden', !open);
-  if (open) {
-    $('#user-input').value = identityCache;
-    $('#user-msg').textContent = '';
-    $('#user-input').focus();
-  }
+function fillAccountForm() {
+  if (!ACCOUNT) return;
+  $('#acc-name').value = ACCOUNT.name;
+  $('#acc-email').value = ACCOUNT.email;
+  $('#acc-new').value = '';
+  $('#acc-current').value = '';
 }
 
-async function saveIdentity() {
-  const identity = $('#user-input').value.trim();
-  if (!identity) { $('#user-msg').textContent = 'Identity cannot be empty.'; return; }
+function setOptMsg(target, text, isError = false) {
+  const el = $(target);
+  el.textContent = text;
+  el.classList.toggle('is-error', isError);
+}
+
+async function saveAccount() {
+  const body = {
+    name: $('#acc-name').value.trim(),
+    email: $('#acc-email').value.trim(),
+    current_password: $('#acc-current').value,
+  };
+  if ($('#acc-new').value) body.new_password = $('#acc-new').value;
+  setOptMsg('#acc-msg', 'Saving…');
   try {
-    const res = await fetch('/api/identity', {
-      method: 'POST',
+    const res = await fetch('/api/account', {
+      method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identity }),
+      body: JSON.stringify(body),
     });
     const data = await res.json();
-    if (!res.ok) { $('#user-msg').textContent = data.error || 'Could not save.'; return; }
-    setIdentity(data.identity);
-    toggleUser(false);
-  } catch {
-    $('#user-msg').textContent = 'Could not save.';
+    if (!res.ok) throw new Error(data.error || 'Could not save.');
+    setAccount(data.user);
+    fillAccountForm();
+    setOptMsg('#acc-msg', 'Saved.');
+  } catch (err) {
+    setOptMsg('#acc-msg', err.message, true);
   }
 }
 
-// Close the popover when clicking outside it.
-document.addEventListener('click', e => {
-  const user = document.querySelector('.user');
-  if (user && !user.contains(e.target)) toggleUser(false);
+async function signOut() {
+  await rawFetch('/api/logout', { method: 'POST' }).catch(() => {});
+  location.href = '/login';
+}
+
+/* Options ------------------------------------------------------------------- */
+
+const OPT = { tab: 'account', opener: null, confirm: null };
+
+function openOptions(tab = OPT.tab) {
+  OPT.opener = document.activeElement;
+  closeConfirm();
+  fillAccountForm();
+  setOptMsg('#acc-msg', '');
+  $('#opt-search').value = '';
+  $('#opt-backdrop').classList.remove('hidden');
+  showOptTab(tab);
+  $('#opt-search').focus();
+}
+
+function closeOptions() {
+  $('#opt-backdrop').classList.add('hidden');
+  if (OPT.opener && OPT.opener.focus) OPT.opener.focus();
+}
+
+function showOptTab(tab) {
+  OPT.tab = tab;
+  $('#opt-search').value = '';
+  searchOptions();
+  if (tab === 'data') loadDataSummary();
+}
+
+// An empty query shows the selected tab; a query shows every matching row
+// across all sections, with the tab highlight cleared.
+function searchOptions() {
+  const query = $('#opt-search').value.trim().toLowerCase();
+  let matches = 0;
+  document.querySelectorAll('.opt-pane').forEach(pane => {
+    let visible = 0;
+    pane.querySelectorAll('.opt-row').forEach(row => {
+      const text = (row.textContent + ' ' + (row.dataset.search || '')).toLowerCase();
+      const show = !query || text.includes(query);
+      row.classList.toggle('hidden', !show);
+      if (show) visible += 1;
+    });
+    const shown = query ? visible > 0 : pane.dataset.pane === OPT.tab;
+    pane.classList.toggle('hidden', !shown);
+    if (shown) matches += visible;
+  });
+  document.querySelectorAll('.opt-tabs button').forEach(button =>
+    button.classList.toggle('active', !query && button.dataset.tab === OPT.tab));
+  $('#opt-empty').classList.toggle('hidden', !query || matches > 0);
+  if (query && !$('.opt-pane[data-pane="data"]').classList.contains('hidden')) loadDataSummary();
+}
+
+async function loadDataSummary() {
+  try {
+    const { items } = await (await fetch('/api/recent')).json();
+    const charts = items.reduce((sum, item) => sum + item.charts.length, 0);
+    $('#data-summary').textContent = items.length
+      ? `${items.length} ticker(s), ${charts} chart(s), stored only on this machine.`
+      : 'Nothing stored yet.';
+    return items;
+  } catch {
+    $('#data-summary').textContent = 'Could not read stored results.';
+    return [];
+  }
+}
+
+const CONFIRMS = {
+  data: {
+    title: 'Remove all data?',
+    button: 'Remove all data',
+    text: 'This permanently deletes everything Stocky stored for you on this machine:',
+    list: count => [
+      `${count} ticker(s): graphs, CSVs, valuation, insider trades and logs`,
+      'any queued or running job (it is stopped first)',
+      'Your account and settings stay. This cannot be undone.',
+    ],
+  },
+  account: {
+    title: 'Delete your account?',
+    button: 'Delete account',
+    password: true,
+    text: 'This permanently deletes, from this machine:',
+    list: count => [
+      `your account (${ACCOUNT ? ACCOUNT.name + ', ' + ACCOUNT.email : 'name and email'})`,
+      `all of your data: ${count} ticker(s) and every queued or running job`,
+      'You will be signed out. This cannot be undone.',
+    ],
+  },
+};
+
+async function openConfirm(kind) {
+  const config = CONFIRMS[kind];
+  OPT.confirm = kind;
+  $('#opt-top').classList.add('hidden');
+  $('#opt-main').classList.add('hidden');
+  $('#opt-confirm').classList.remove('hidden');
+  $('#confirm-title').textContent = config.title;
+  $('#confirm-text').textContent = config.text;
+  $('#confirm-btn').textContent = config.button;
+  $('#confirm-pass-row').classList.toggle('hidden', !config.password);
+  $('#confirm-pass').value = '';
+  $('#confirm-input').value = '';
+  $('#confirm-msg').textContent = '';
+  $('#confirm-list').innerHTML = config.list('…').map(item => `<li>${esc(item)}</li>`).join('');
+  syncConfirm();
+  (config.password ? $('#confirm-pass') : $('#confirm-input')).focus();
+  const items = await loadDataSummary();
+  if (OPT.confirm === kind) {
+    $('#confirm-list').innerHTML = config.list(items.length).map(item => `<li>${esc(item)}</li>`).join('');
+  }
+}
+
+function closeConfirm() {
+  OPT.confirm = null;
+  $('#opt-confirm').classList.add('hidden');
+  $('#opt-top').classList.remove('hidden');
+  $('#opt-main').classList.remove('hidden');
+}
+
+function syncConfirm() {
+  const config = CONFIRMS[OPT.confirm];
+  const typed = $('#confirm-input').value.trim() === 'DELETE';
+  $('#confirm-btn').disabled = !typed || (config && config.password && !$('#confirm-pass').value);
+}
+
+async function runConfirm() {
+  const kind = OPT.confirm;
+  if (!kind) return;
+  $('#confirm-btn').disabled = true;
+  $('#confirm-msg').textContent = '';
+  const body = { confirm: 'DELETE' };
+  if (kind === 'account') body.password = $('#confirm-pass').value;
+  try {
+    const res = await rawFetch(kind === 'account' ? '/api/account' : '/api/data', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not delete.');
+    if (kind === 'account') { location.href = '/login'; return; }
+    // Everything is gone server-side: drop it from the page too.
+    setGraph('');
+    resetUi();
+    closeConfirm();
+    showOptTab('data');
+  } catch (err) {
+    $('#confirm-msg').textContent = err.message;
+    syncConfirm();
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || $('#opt-backdrop').classList.contains('hidden')) return;
+  if (OPT.confirm) closeConfirm();
+  else closeOptions();
 });
+
+/* Cached-graphs bar ---------------------------------------------------------- */
+
+const DROPBAR = { timer: null };
+
+function showCachedBar(ticker, generated) {
+  const bar = $('#dropbar');
+  clearInterval(DROPBAR.timer);
+  const time = new Date(generated);
+  const at = Number.isNaN(time.getTime()) ? 'earlier today'
+    : `today at ${time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  $('#dropbar-text').innerHTML = `<b>${esc(ticker)}</b> graphs were generated ${esc(at)}. Showing the cached copy.`;
+  $('#dropbar-fresh').onclick = () => { closeDropbar(); runTicker(ticker, { fresh: true }); };
+  let left = 3;
+  $('#dropbar-count').textContent = `closes in ${left}s`;
+  bar.classList.remove('open');
+  void bar.offsetWidth;  // restart the progress animation
+  bar.classList.add('open');
+  DROPBAR.timer = setInterval(() => {
+    left -= 1;
+    if (left <= 0) closeDropbar();
+    else $('#dropbar-count').textContent = `closes in ${left}s`;
+  }, 1000);
+}
+
+function closeDropbar() {
+  clearInterval(DROPBAR.timer);
+  DROPBAR.timer = null;
+  $('#dropbar').classList.remove('open');
+}
+
+/* Ticker suggestions ---------------------------------------------------------- */
+
+const SUGGESTIONS = [
+  'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOG', 'META', 'TSLA', 'BRK.B', 'JPM', 'V', 'MA', 'KO', 'PEP',
+  'COST', 'WMT', 'HD', 'MCD', 'NKE', 'DIS', 'NFLX', 'ADBE', 'CRM', 'ORCL', 'INTC', 'AMD', 'QCOM',
+  'TXN', 'IBM', 'CSCO', 'PG', 'JNJ', 'PFE', 'MRK', 'ABBV', 'LLY', 'UNH', 'CVX', 'XOM', 'CAT', 'DE',
+  'BA', 'GE', 'HON', 'UPS', 'LMT', 'T', 'VZ', 'SBUX', 'TGT', 'LOW', 'BKNG', 'PYPL', 'UBER', 'GS',
+  'MS', 'BAC', 'BLK', 'MMM', 'F', 'GM',
+];
+
+function suggestTickers() {
+  const pool = SUGGESTIONS.slice();
+  for (let i = pool.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  $('#ticker').placeholder = `Try ${pool.slice(0, 4).join(', ')}`;
+}
 
 /* Terminal ---------------------------------------------------------------- */
 
@@ -929,7 +1321,7 @@ function gotoActive() {
   }
 }
 
-async function runTicker(rawTicker) {
+async function runTicker(rawTicker, { fresh = false } = {}) {
   const ticker = String(rawTicker || $('#ticker').value).trim().toUpperCase();
   if (!ticker) return;
   $('#ticker').value = ticker;
@@ -948,11 +1340,20 @@ async function runTicker(rawTicker) {
     const res = await fetch('/api/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ticker, filings }),
+      body: JSON.stringify({ ticker, filings, fresh }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || data.message || 'Request failed');
     $('#run-btn').disabled = false;
+    if (data.status === 'cached') {
+      // Generated today with the same filings: show those, offer a fresh run.
+      delete LIVE[ticker];
+      pickActive();
+      setStatus('idle', 'idle');
+      refreshGraph();
+      showCachedBar(ticker, data.generated);
+      return;
+    }
     poll(ticker);
   } catch (err) {
     setStatus('error', 'error');
@@ -1843,7 +2244,9 @@ document.querySelectorAll('#sim-ranges button').forEach(button => {
 // Restore the pinned graph, then resume watching every other job in progress:
 // graph runs through the status badge, screener jobs through its progress.
 applyTheme(document.documentElement.dataset.theme || 'dark');
-loadIdentity();
+loadAccount();
+suggestTickers();
+setInterval(() => { if (!$('#ticker').value) suggestTickers(); }, 6000);
 renderGraph();
 refreshGraph();
 (async () => {

@@ -18,7 +18,7 @@ if errorlevel 1 (
 if not exist ".env" (
   echo [*] Creating .env from .env.example ...
   copy /y ".env.example" ".env" >nul
-  echo     Open .env and set EDGAR_IDENTITY to your name and email.
+  echo     Optional: open .env to change the port or the data folders.
   echo.
 )
 

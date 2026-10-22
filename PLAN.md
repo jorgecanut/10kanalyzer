@@ -16,7 +16,8 @@ A self-hosted SEC EDGAR 10-K extractor and dashboard.
 `edgar_dashboard.py` downloads the last N annual filings for a ticker, reads the
 filing's XBRL instance and presentation linkbase through `edgartools`, resolves
 each metric through a priority-ordered list of XBRL concepts, and writes four
-CSVs plus charts into `financial_graphs/<TICKER>/`. `app.py` is a Flask queue
+CSVs plus charts into `financial_graphs/<TICKER>/` (the web app passes
+`--output-dir data/users/<id>`). `app.py` is a Flask queue with local accounts
 around that CLI. `verify_facts.py` re-checks the result against SEC's own
 `companyconcept` API.
 
@@ -32,8 +33,15 @@ Break these and the repo loses its reason to exist.
    fallback lists, per-section error capture.
 4. **Runs are serialized.** SEC rate limits; one ticker at a time.
 5. **Output is per ticker.** `financial_graphs/<TICKER>/`; never write a shared
-   file that two runs can race on.
+   file that two runs can race on. In the web app it is also per user
+   (`data/users/<id>/<TICKER>/`), and users never see each other's data.
 6. **Numbers are USD millions in `financial_data.csv`, raw USD everywhere else.**
+7. **Never upload anything personal.** No commit or push may contain real
+   names, emails, passwords, hostnames, IPs, VPN/NAS details, `/mnt/...` or
+   home-directory paths, `.env`, or anything from `data/` (accounts, sessions,
+   results), `financial_graphs/` or the SEC caches. Use placeholders
+   (`Jane Doe`, `jane@example.com`, `/path/to/...`) and check
+   `git diff --cached` before every commit.
 
 ---
 
@@ -384,7 +392,8 @@ both:
 5. **One new dependency = one entry in `requirements-optional.txt`.** The base
    image must stay buildable without them.
 6. **Politeness.** SEC allows ~10 requests/second. Keep identity set
-   (`EDGAR_IDENTITY`), keep runs serialized, keep the `time.sleep` calls.
+   (the account's name + email in the web app, `EDGAR_IDENTITY` on the CLI),
+   keep runs serialized, keep the `time.sleep` calls.
 7. **No silent scope growth.** This repo answers "what did the company report".
    Ratios and scores are derived and labelled as such.
 
