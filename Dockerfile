@@ -19,7 +19,7 @@ COPY templates ./templates
 COPY static ./static
 
 # The deployed commit (.git is not in the build context); shown by /healthz,
-# Options > Data and Home's download. The deploy hook passes it.
+# Options > Data and Home's download. Optional: VERSION already names the release.
 ARG STOCKY_COMMIT=""
 ENV STOCKY_COMMIT=${STOCKY_COMMIT}
 

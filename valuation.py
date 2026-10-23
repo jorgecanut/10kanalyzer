@@ -715,7 +715,9 @@ def write_evaluation(ticker: str, evaluation: pd.DataFrame, output_dir: str) -> 
 # --------------------------------------------------------------------------- #
 
 def main() -> None:
-    ticker = (sys.argv[1] if len(sys.argv) > 1 else "NFLX").upper()
+    if len(sys.argv) < 2:
+        sys.exit("usage: python valuation.py TICKER")
+    ticker = sys.argv[1].upper()
     output_dir = os.path.join(BASE_OUTPUT_DIR, ticker)
 
     def load(name: str) -> pd.DataFrame:

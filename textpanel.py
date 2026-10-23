@@ -46,8 +46,6 @@ SECTIONS: dict[str, str] = {
     "segments": "segment_revenue",
 }
 
-DEFAULT_TICKERS = ["AAPL"]
-
 TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 
 
@@ -146,7 +144,7 @@ def collect(ticker: str, sections: list[str], year: int | None) -> dict:
 def main() -> None:
     sys.stdout.reconfigure(line_buffering=True)  # keep docker logs streaming
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("tickers", nargs="*", default=None)
+    parser.add_argument("tickers", nargs="+", help="one or more ticker symbols")
     parser.add_argument("--year", type=int, default=None, help="calendar year of the filing")
     parser.add_argument(
         "--sections",
@@ -157,7 +155,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    tickers = [t.upper() for t in (args.tickers or DEFAULT_TICKERS)]
+    tickers = [t.upper() for t in args.tickers]
     for ticker in tickers:
         if not TICKER_RE.match(ticker):
             print(f"invalid ticker: {ticker!r}", file=sys.stderr)
