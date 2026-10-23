@@ -203,13 +203,14 @@ class FakeNews:
 class FakeNewsCase(AppTestCase):
     def setUp(self):
         super().setUp()
-        self._news = (app._google_news, app._company_name)
+        self._news = (app._google_news, app._company_name, app._company_sector)
         self.fake = FakeNews()
         app._google_news, app._company_name = self.fake, lambda ticker: ("Acme Inc", "Acme")
+        app._company_sector = lambda ticker: ("Technology", "Software")
         app._NEWS_CACHE.clear()
 
     def tearDown(self):
-        app._google_news, app._company_name = self._news
+        app._google_news, app._company_name, app._company_sector = self._news
         app._NEWS_CACHE.clear()
         super().tearDown()
 
@@ -226,6 +227,44 @@ class NewsTests(FakeNewsCase):
         self.client.get("/api/news/AAA?limit=50&days=30")
         self.client.get("/api/news/AAA?limit=30&days=1")
         self.assertEqual(self.fake.calls, [('"Acme"', 30, 50), ('"Acme"', 1, 30)])
+
+    def test_market_scope_mixes_stock_sector_and_market_without_company_query(self):
+        data = self.client.get("/api/news/AAA?scope=market").get_json()
+        queries = [query for query, _, _ in self.fake.calls]
+        self.assertEqual(len(queries), 3)
+        self.assertNotIn('"Acme"', queries)
+        self.assertIn('"AAA"', queries[0])
+        self.assertIn('"Software stocks"', queries[1])
+        self.assertIn('"Technology sector"', queries[1])
+        self.assertEqual(queries[2], app.MARKET_QUERY)
+        self.assertEqual(data["scope"], "market")
+        self.assertEqual(len(data["articles"]), 20)
+        # The fake feeds share titles; repeats are skipped, never shown twice.
+        self.assertEqual(len({a["title"] for a in data["articles"]}), 20)
+        self.assertEqual([a["topic"] for a in data["articles"][:4]], list(app.MARKET_PATTERN))
+
+    def test_market_scope_interleaves_stock_first(self):
+        feeds = {"stock": ["S1", "S2", "S3"], "sector": ["X1"], "market": ["M1", "M2"]}
+        app._google_news = lambda query, days, limit: [
+            {"title": t, "source": "", "link": "https://example.com", "published": None}
+            for t in feeds[next(k for k, v in app._market_queries("AAA").items() if v == query)]]
+        titles = [a["title"] for a in app._market_news("AAA", 14, 20)]
+        self.assertEqual(titles, ["S1", "S2", "X1", "M1", "S3", "M2"])
+
+    def test_market_scope_keeps_the_industry_before_its_dash(self):
+        app._company_sector = lambda ticker: ("Financial Services", "Banks—Diversified")
+        self.assertIn('"Banks stocks"', app._market_queries("AAA")["sector"])
+
+    def test_market_scope_skips_sector_when_unknown(self):
+        app._company_sector = lambda ticker: ("", "")
+        self.assertEqual(list(app._market_queries("AAA")), ["stock", "market"])
+
+    def test_company_and_market_scopes_are_cached_apart(self):
+        self.client.get("/api/news/AAA")
+        self.client.get("/api/news/AAA?scope=market")
+        self.client.get("/api/news/AAA?scope=market")
+        self.assertEqual(len(self.fake.calls), 4)
+        self.assertEqual(self.client.get("/api/news/AAA?scope=other").status_code, 400)
 
     def test_rejects_other_limits_and_periods(self):
         self.assertEqual(self.client.get("/api/news/AAA?limit=99").status_code, 400)

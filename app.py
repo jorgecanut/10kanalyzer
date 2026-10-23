@@ -304,6 +304,8 @@ NEWS_DAYS = 14             # defaults; the News tab offers the choices below
 NEWS_LIMIT = 20
 NEWS_DAY_CHOICES = (1, 7, 14, 30)
 NEWS_LIMIT_CHOICES = (20, 30, 40, 50)
+NEWS_SCOPES = ("company", "market")   # News tab / Home
+_QUOTE_CACHE: dict = {}  # Yahoo search hits (name, sector) per ticker
 INSIDER_MONTH_CHOICES = (1, 3, 6, 12, 24, 36)
 
 
@@ -1211,26 +1213,44 @@ _NAME_SUFFIX = re.compile(
     r"holdings?|n\.v\.|s\.a\.|ag|se|l\.p\.)$", re.IGNORECASE)
 
 
+def _search_quote(ticker: str) -> dict:
+    """Yahoo's search hit for ``ticker`` ({} when unreachable); hits are cached per process."""
+    with _YAHOO_LOCK:
+        if ticker in _QUOTE_CACHE:
+            return _QUOTE_CACHE[ticker]
+    try:
+        url = "https://query1.finance.yahoo.com/v1/finance/search?" + urlencode(
+            {"q": ticker.replace(".", "-"), "quotesCount": 1, "newsCount": 0})
+        with urlopen(Request(url, headers={"User-Agent": YAHOO_UA}), timeout=10) as response:
+            quote = (json.load(response).get("quotes") or [{}])[0]
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, IndexError, AttributeError):
+        return {}                          # not cached, so the next call tries again
+    quote = quote if isinstance(quote, dict) else {}
+    with _YAHOO_LOCK:
+        _QUOTE_CACHE[ticker] = quote
+    return quote
+
+
 def _company_name(ticker: str) -> tuple[str, str]:
     """(full name, search name) from Yahoo's search; both fall back to the ticker.
 
     The search name drops "The" and legal suffixes so news queries match how
     outlets write it; the full name is for display.
     """
-    try:
-        url = "https://query1.finance.yahoo.com/v1/finance/search?" + urlencode(
-            {"q": ticker.replace(".", "-"), "quotesCount": 1, "newsCount": 0})
-        with urlopen(Request(url, headers={"User-Agent": YAHOO_UA}), timeout=10) as response:
-            quote = (json.load(response).get("quotes") or [{}])[0]
-        name = quote.get("longname") or quote.get("shortname") or ""
-    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, IndexError, AttributeError):
-        name = ""
-    full = name.strip()
+    quote = _search_quote(ticker)
+    full = (quote.get("longname") or quote.get("shortname") or "").strip()
     name = re.sub(r"^the\s+", "", full, flags=re.IGNORECASE)
     previous = None
     while name and name != previous:      # "Foo Holdings, Inc." -> "Foo"
         previous, name = name, _NAME_SUFFIX.sub("", name).strip()
     return full or ticker, name or ticker
+
+
+def _company_sector(ticker: str) -> tuple[str, str]:
+    """(sector, industry) from Yahoo's search; empty strings when unknown."""
+    quote = _search_quote(ticker)
+    return ((quote.get("sectorDisp") or quote.get("sector") or "").strip(),
+            (quote.get("industryDisp") or quote.get("industry") or "").strip())
 
 
 def _google_news(query: str, days: int, limit: int) -> list[dict]:
@@ -1273,20 +1293,62 @@ def _choice(name: str, choices: tuple[int, ...], default: int) -> int:
     return value
 
 
-def _news_payload(ticker: str, days: int, limit: int, fresh: bool = False) -> dict:
-    """Articles for one ticker and choice of period/count; cached per combination.
+# Home's headlines are about the stock, not the company's products: the ticker
+# with market words, its sector/industry, and the wider market and economy.
+# The pattern sets how the three feeds interleave (stock first and most often).
+MARKET_QUERY = '("stock market" OR "Wall Street" OR "Federal Reserve" OR inflation OR "interest rates")'
+MARKET_PATTERN = ("stock", "stock", "sector", "market")
 
-    Raises the network error when Google News is unreachable.
+
+def _market_queries(ticker: str) -> dict[str, str]:
+    """Google News queries per Home topic; sector is left out when Yahoo does not know it."""
+    sector, industry = _company_sector(ticker)
+    industry = re.split(r"\s*[—–-]\s*", industry)[0]   # "Banks—Diversified" -> "Banks"
+    queries = {"stock": f'"{ticker}" (stock OR shares OR "price target" OR analyst OR earnings)'}
+    terms = [f'"{industry} stocks"'] if industry else []
+    terms += [f'"{sector} sector"', f'"{sector} stocks"'] if sector else []
+    if terms:
+        queries["sector"] = f"({' OR '.join(terms)})"
+    queries["market"] = MARKET_QUERY
+    return queries
+
+
+def _market_news(ticker: str, days: int, limit: int) -> list[dict]:
+    """Stock, sector and market stories interleaved by MARKET_PATTERN, each tagged with its topic."""
+    feeds = {topic: _google_news(query, days, limit) for topic, query in _market_queries(ticker).items()}
+    articles, seen = [], set()
+    while len(articles) < limit and any(feeds.values()):
+        for topic in MARKET_PATTERN:
+            feed = feeds.get(topic)
+            while feed:
+                article = feed.pop(0)
+                if article["title"].lower() not in seen:
+                    seen.add(article["title"].lower())
+                    articles.append({**article, "topic": topic})
+                    break
+    return articles[:limit]
+
+
+def _news_payload(ticker: str, days: int, limit: int, fresh: bool = False,
+                  scope: str = "company") -> dict:
+    """Articles for one ticker and choice of period/count/scope; cached per combination.
+
+    ``company`` is everything about the company (the News tab); ``market`` is
+    Home's stock, sector and economy mix. Raises the network error when Google
+    News is unreachable.
     """
-    key = (ticker, days, limit)
+    key = (ticker, days, limit, scope)
     with _YAHOO_LOCK:
         cached = _NEWS_CACHE.get(key)
     if cached and time.time() - cached[0] < NEWS_TTL and not fresh:
         return cached[1]
     name, company = _company_name(ticker)
-    articles = _google_news(f'"{company}"' if company != ticker else f"{ticker} stock", days, limit)
+    if scope == "market":
+        articles = _market_news(ticker, days, limit)
+    else:
+        articles = _google_news(f'"{company}"' if company != ticker else f"{ticker} stock", days, limit)
     payload = {"ticker": ticker, "name": name, "company": company, "days": days, "limit": limit,
-               "fetched": _now(), "articles": articles}
+               "scope": scope, "fetched": _now(), "articles": articles}
     with _YAHOO_LOCK:
         _NEWS_CACHE[key] = (time.time(), payload)
     return payload
@@ -1297,12 +1359,16 @@ NEWS_ERRORS = (HTTPError, URLError, TimeoutError, ET.ParseError)
 
 @app.get("/api/news/<ticker>")
 def news(ticker: str):
-    """Recent articles about the company: headline, outlet, date and link only."""
+    """Recent articles: headline, outlet, date and link (plus topic for ``scope=market``)."""
     ticker = _normalise_ticker(ticker)
     days = _choice("days", NEWS_DAY_CHOICES, NEWS_DAYS)
     limit = _choice("limit", NEWS_LIMIT_CHOICES, NEWS_LIMIT)
+    scope = request.args.get("scope") or "company"
+    if scope not in NEWS_SCOPES:
+        abort(400, f"scope must be one of {', '.join(NEWS_SCOPES)}.")
     try:
-        return jsonify(_news_payload(ticker, days, limit, fresh=bool(request.args.get("fresh"))))
+        return jsonify(_news_payload(ticker, days, limit, fresh=bool(request.args.get("fresh")),
+                                     scope=scope))
     except NEWS_ERRORS as exc:
         abort(502, f"Could not reach Google News: {exc}")
 

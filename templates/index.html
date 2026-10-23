@@ -708,10 +708,10 @@
             </div>
           </div>
           <div class="home-block">
-            <h3>News</h3>
+            <h3>Market news</h3>
             <p class="sim-meta" id="home-news-status"></p>
             <ol id="home-news" class="news-list"></ol>
-            <a href="#" class="home-more" onclick="showTab('news');return false">More news</a>
+            <a href="#" class="home-more" onclick="showTab('news');return false">Company news</a>
           </div>
           <div class="home-block">
             <h3>Insider trades</h3>
@@ -2003,6 +2003,7 @@ async function loadScreenerData() {
 
 // Overview of the pinned ticker: its numbers, where it sits in the screener
 // ranking, a few headlines and every chart as a thumbnail.
+const NEWS_TOPICS = { stock: 'Stock', sector: 'Sector', market: 'Market' };
 const HOME = { news: null, newsTicker: '', newsError: '', insiders: null, insiderTicker: '' };
 
 function initHome(force = false) {
@@ -2038,7 +2039,7 @@ async function loadHomeNews(ticker, fresh = false) {
   HOME.newsError = '';
   renderHome();
   try {
-    const res = await fetch(`/api/news/${encodeURIComponent(ticker)}?${newsQuery()}${fresh ? '&fresh=1' : ''}`);
+    const res = await fetch(`/api/news/${encodeURIComponent(ticker)}?${newsQuery()}&scope=market${fresh ? '&fresh=1' : ''}`);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || data.message || 'News unavailable.');
     if (ticker !== HOME.newsTicker) return;
@@ -2098,14 +2099,15 @@ function renderHome() {
       : `<li><span class="r">#${item.greenblatt_rank}</span><a href="#" onclick="openHome('${esc(item.ticker)}');return false">${esc(item.ticker)}</a></li>`
     ).join('');
 
-  // News: the top five.
+  // News: the top five about the stock, its sector and the market (company
+  // news such as products stays in the News tab).
   const articles = news && Array.isArray(news.articles) ? news.articles.slice(0, 5) : [];
   $('#home-news-status').textContent = HOME.newsTicker !== ticker || (!news && !HOME.newsError)
     ? 'Looking for articles…'
     : HOME.newsError || (articles.length ? '' : `No articles in the last ${news.days} days.`);
   $('#home-news').innerHTML = articles.map(a => `<li>
       <a href="${esc(a.link)}" target="_blank" rel="noopener noreferrer">${esc(a.title)}</a>
-      <div class="news-meta">${esc([a.source, fmtAgo(a.published)].filter(Boolean).join(' · '))}</div>
+      <div class="news-meta">${esc([NEWS_TOPICS[a.topic], a.source, fmtAgo(a.published)].filter(Boolean).join(' · '))}</div>
     </li>`).join('');
 
   // Insider trades: the latest five, newest first.
