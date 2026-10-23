@@ -11,3 +11,6 @@ nginx/htpasswd
 .edgar_cache/
 README.local.md
 CLAUDE.local.md
+
+# Debug zips from Home's download (personal data)
+imports/
