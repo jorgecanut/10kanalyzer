@@ -16,6 +16,7 @@ import argparse
 import json
 import os
 import re
+import threading
 from typing import Iterable
 
 import numpy as np
@@ -334,6 +335,19 @@ def extract_metric(
     return np.nan
 
 
+def _report_date(filing) -> str:
+    """The filing's period end as ``YYYY-MM-DD``.
+
+    Comes from the submissions index (``report_date``), which needs no
+    download; ``period_of_report`` fetches and parses the whole submission, so
+    it is only the fallback when the index has no date.
+    """
+    report_date = getattr(filing, "report_date", None)
+    if report_date:
+        return str(report_date)
+    return str(filing.period_of_report or "")
+
+
 def build_dataset(ticker: str, n_filings: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Fetch the last ``n_filings`` annual filings and assemble the datasets.
 
@@ -371,7 +385,7 @@ def build_dataset(ticker: str, n_filings: int) -> tuple[pd.DataFrame, pd.DataFra
     period_filings: list[tuple[str, object]] = []
     for filing in all_filings:
         try:
-            period = str(filing.period_of_report or "")
+            period = _report_date(filing)
         except Exception as exc:  # noqa: BLE001 - skip filings with unreadable periods
             print(f"    [!] unreadable period ({exc.__class__.__name__}: {exc}); skipping filing")
             continue
@@ -393,8 +407,8 @@ def build_dataset(ticker: str, n_filings: int) -> tuple[pd.DataFrame, pd.DataFra
         # malformed filings (e.g. missing filing dates) and one bad filing
         # should not abort the whole run.
         try:
-            period_of_report = filing.period_of_report
-            if period_of_report is None:
+            period_of_report = _report_date(filing)
+            if not period_of_report:
                 continue
 
             # De-duplicate by the exact period end, NOT by calendar year.
@@ -562,6 +576,50 @@ def print_summary(df: pd.DataFrame) -> None:
     print("=" * 100 + "\n")
 
 
+def _start_insiders(ticker: str, output_dir: str) -> tuple[threading.Thread, dict]:
+    """Start writing ``insider.json`` in the background; ``_report_insiders`` collects it.
+
+    A daemon thread, so a failed 10-K step still ends the run at once.
+    """
+    result: dict = {}
+
+    def work() -> None:
+        try:
+            import insider
+
+            result["path"] = insider.write_insiders(ticker, output_dir)
+        except Exception as exc:  # noqa: BLE001 - optional artifact must never abort
+            result["error"] = exc
+
+    thread = threading.Thread(target=work, name="insiders", daemon=True)
+    thread.start()
+    return thread, result
+
+
+def _report_insiders(started: tuple[threading.Thread, dict]) -> None:
+    """Wait for the background insider step and print its outcome."""
+    thread, result = started
+    thread.join()
+    if "error" in result:
+        exc = result["error"]
+        print(f"[!] insider data skipped: {type(exc).__name__}: {exc}")
+        return
+    insider_path = result.get("path")
+    if not insider_path:
+        return
+    trades = None
+    try:
+        with open(insider_path, "r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+        trades = len(payload) if isinstance(payload, list) else len(payload.get("transactions", []))
+    except Exception:  # noqa: BLE001 - count is cosmetic only
+        trades = None
+    if trades is None:
+        print(f"[+] Wrote insider transactions ({insider_path})")
+    else:
+        print(f"[+] Wrote insider transactions ({trades} trades)")
+
+
 def main() -> None:
     global OUTPUT_DIR, DATA_CSV, TICKER
 
@@ -589,6 +647,10 @@ def main() -> None:
     OUTPUT_DIR = os.path.join(args.output_dir, TICKER)
     DATA_CSV = os.path.join(OUTPUT_DIR, "financial_data.csv")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    # Insider trades need nothing from the 10-Ks, so their Form 4 downloads
+    # run while the 10-Ks are fetched instead of after them.
+    insiders = _start_insiders(TICKER, OUTPUT_DIR)
 
     print(f"[*] Extracting {args.ticker} data from the last {args.filings} 10-K filings")
     raw, statements, facts = build_dataset(TICKER, args.filings)
@@ -625,25 +687,8 @@ def main() -> None:
     except Exception as exc:  # noqa: BLE001 - optional artifact must never abort
         print(f"[!] valuation skipped: {type(exc).__name__}: {exc}")
 
-    # Optional insider transactions; failure leaves the rest of the run intact.
-    try:
-        import insider
-
-        insider_path = insider.write_insiders(TICKER, OUTPUT_DIR)
-        if insider_path:
-            trades = None
-            try:
-                with open(insider_path, "r", encoding="utf-8") as fh:
-                    payload = json.load(fh)
-                trades = len(payload) if isinstance(payload, list) else len(payload.get("transactions", []))
-            except Exception:  # noqa: BLE001 - count is cosmetic only
-                trades = None
-            if trades is None:
-                print(f"[+] Wrote insider transactions ({insider_path})")
-            else:
-                print(f"[+] Wrote insider transactions ({trades} trades)")
-    except Exception as exc:  # noqa: BLE001 - optional artifact must never abort
-        print(f"[!] insider data skipped: {type(exc).__name__}: {exc}")
+    # Insider trades were fetched alongside the 10-Ks; report what came back.
+    _report_insiders(insiders)
 
     if args.no_charts:
         print("[*] Charts skipped (screener mode)")
