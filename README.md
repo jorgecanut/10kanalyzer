@@ -142,9 +142,10 @@ Routes:
 | `POST` | `/api/screener` | `{"tickers":[...],"filings":10}` (max 25) → data only, no charts |
 | `GET` | `/files/<ticker>/<name>` | View a chart inline |
 | `GET` | `/download/<ticker>` | Whole folder as a `.zip` |
-| `GET` | `/download/<ticker>/all` | Home's download: every file (dark charts too) plus `insiders.csv`, `news.csv` and `screener.csv`; `?months=`, `?news_limit=`, `?news_days=` follow the tabs' options |
+| `GET` | `/download/<ticker>/all` | Home's download: every file (dark charts too) plus `insiders.csv`, `news.csv`, `screener.csv` and a `_debug/` folder (see § Versions and bug reports); `?months=`, `?news_limit=`, `?news_days=` follow the tabs' options |
 | `GET` | `/download/<ticker>/<name>` | One file |
-| `GET` | `/healthz` | Health probe |
+| `GET` | `/healthz` | Health probe: version, commit, code hashes |
+| `POST` | `/api/diag` | Browser errors, for the diagnostics log (sent by the page itself) |
 
 The tabs sit on the left of the ticker bar's row, the bar on the right (on
 narrow screens the tabs get a row of their own below the bar); the **Recent**
@@ -162,7 +163,7 @@ ticker switches to Home; the run's progress and log are in the Charts tab.
 
 **Downloads.** Every tab has a download icon and downloads what it shows, with
 the options chosen there: **Home** a zip with everything for the ticker
-(`/download/<ticker>/all`), **Charts** the run's folder as a zip (each chart
+(`/download/<ticker>/all`) plus a `_debug/` folder for bug reports, **Charts** the run's folder as a zip (each chart
 also has its own download icon), **Insiders** a CSV of the trades in the
 chosen period and side (buys, sells or both), **Screener** a CSV with every field of every ticker in the
 current sort order, **News** a CSV of the listed articles (headline, outlet,
@@ -425,8 +426,8 @@ curl -s localhost:8053/healthz
 `/healthz` must report the pipeline modules and the exact code hashes:
 
 ```json
-{"status":"ok","version":"dev","features":["valuation","insider"],
- "pipeline_sha1":"…","charts_sha1":"…",
+{"status":"ok","version":"1.0.0","commit":"…","dirty":null,"code_sha1":"…",
+ "features":["valuation","insider"],"pipeline_sha1":"…","charts_sha1":"…",
  "data":{"graph_dir":"/app/data","exists":true,"readable":true,
          "writable":true,"uid":10001}}
 ```
@@ -446,6 +447,29 @@ Two failure modes to watch for, both silent:
   serving. Run the steps separately or check the pull output.
 - `docker compose up -d` **without** `build` reuses the existing image; code
   changes need `up -d --build` (or an explicit `build`).
+
+## Versions and bug reports
+
+The release number is in `VERSION` as `major.minor.patch`: **patch** for a fix,
+**minor** for a new feature or visible change, **major** for a change that
+breaks stored data or the API. Each release is tagged `vX.Y.Z`.
+
+The running build is shown in Options → Data → Version, in `/healthz`
+(`version`, `commit`) and in the name of Home's zip
+(`<TICKER>_everything_v1.0.0_<commit>.zip`). Docker has no `.git`, so the
+commit is a build arg: the deploy hook passes it
+(`docker compose build --build-arg STOCKY_COMMIT=$(git rev-parse HEAD)`);
+outside Docker the app asks `git`. Without either, `code_sha1` (a hash of every
+root `*.py` and `templates/*.html`) still identifies the code.
+
+Every account has a diagnostics log, `data/users/<id>/diagnostics.jsonl`
+(trimmed to the newest 2000 entries past 1 MB): failed requests (with the
+traceback when the server crashed), failed pipeline runs (with the log tail) and
+browser errors (script errors, failed fetches; at most 50 per page load).
+Home's download adds a `_debug/` folder with `build.json` (version, commit,
+Python and package versions), `jobs.json`, `diagnostics.jsonl`, every ticker's
+last `run.log` and a `README.md` explaining them, so a bug can be reported by
+sending that one zip. "Remove all data" deletes the log too.
 
 ## Metrics extracted per fiscal year
 

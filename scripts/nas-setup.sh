@@ -64,7 +64,9 @@ else
   exit 1
 fi
 
-"\${DOCKER[@]}" compose up -d --build --remove-orphans
+# The commit as a build arg (not an env var: sudo would drop it).
+"\${DOCKER[@]}" compose build --build-arg STOCKY_COMMIT="\$(git rev-parse HEAD)"
+"\${DOCKER[@]}" compose up -d --remove-orphans
 "\${DOCKER[@]}" compose ps
 
 for _ in \$(seq 1 30); do

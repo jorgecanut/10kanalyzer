@@ -9,7 +9,8 @@ laptop ──git push nas main──► /mnt/tanques/stocky/10kanalyzer.git (bar
                                      ▼
                             /mnt/tanques/stocky/10kanalyzer
                             git reset --hard origin/main
-                            docker compose up -d --build
+                            docker compose build --build-arg STOCKY_COMMIT=<sha>
+                            docker compose up -d
                             curl /healthz
 ```
 
@@ -58,7 +59,8 @@ laptop ──git push nas main──► /mnt/tanques/stocky/10kanalyzer.git (bar
   ssh nas 'cd /mnt/tanques/stocky/10kanalyzer && docker compose up -d --build'
   ```
 
-- Verify with `/healthz`: `features` and the `sha1` of `edgar_dashboard.py` /
+- Verify with `/healthz`: `commit` must be the pushed commit (`git rev-parse HEAD`);
+  a missing `commit` means the hook predates the build arg, so re-run step 2. `features` and the `sha1` of `edgar_dashboard.py` /
   `charts.py` must match the pushed commit (`sha1sum` in the repo root).
 
 ## Troubleshooting

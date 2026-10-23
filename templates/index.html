@@ -1181,6 +1181,12 @@
             <p class="opt-hint">Deletes every ticker's charts, CSVs and logs. Your account stays.</p>
             <button class="danger-btn" onclick="openConfirm('data')">Remove all data…</button>
           </div>
+          <div class="opt-row" data-search="version build commit release debug logs diagnostics errors bug report">
+            <span class="opt-label">Version</span>
+            <p class="opt-hint">Stocky {{ version }}{% if commit %} ({{ commit }}){% endif %}.
+              Home's download includes a _debug folder with this version, the run logs and
+              recent errors, for bug reports.</p>
+          </div>
         </section>
         <p id="opt-empty" class="opt-hint hidden">No options match.</p>
       </div>
@@ -1215,6 +1221,33 @@
 
 <script>
 const $ = s => document.querySelector(s);
+
+// Browser errors and failed fetches go to the server's diagnostics log, which
+// Home's download includes. Capped per page load so a loop cannot flood it.
+const DIAG = { left: 50 };
+function reportDiag(message, detail = '') {
+  if (DIAG.left-- <= 0) return;
+  try {
+    const body = JSON.stringify({ message: String(message).slice(0, 2000), detail: String(detail).slice(0, 4000),
+                                  page: location.pathname + location.hash, viewport: `${innerWidth}x${innerHeight}` });
+    navigator.sendBeacon('/api/diag', new Blob([body], { type: 'application/json' }));
+  } catch {}
+}
+window.addEventListener('error', e =>
+  reportDiag(e.message, `${e.filename}:${e.lineno}:${e.colno}\n${e.error?.stack || ''}`));
+window.addEventListener('unhandledrejection', e =>
+  reportDiag(`Unhandled rejection: ${e.reason?.message || e.reason}`, e.reason?.stack || ''));
+{
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = async (url, options = {}) => {
+    try {
+      return await nativeFetch(url, options);
+    } catch (err) {
+      if (err.name !== 'AbortError') reportDiag(`fetch failed: ${options.method || 'GET'} ${url}`, err.message);
+      throw err;
+    }
+  };
+}
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 // Hover descriptions for the numbers in the Screener and Simulation tabs.

@@ -12,6 +12,7 @@ import textwrap
 import threading
 import time
 import unittest
+import unittest.mock
 import zipfile
 from pathlib import Path
 
@@ -273,6 +274,66 @@ class DownloadAllTests(FakeNewsCase):
 
     def test_zip_needs_results(self):
         self.assertEqual(self.client.get("/download/ZZZ/all").status_code, 404)
+
+    def test_zip_has_debug_folder_with_build_logs_and_diagnostics(self):
+        self.make_results()
+        self.client.post("/api/diag", json={"message": "TypeError: x is undefined", "page": "/#home"})
+        self.client.get("/api/files/NOPE")                 # a failed request is logged too
+        res = self.client.get("/download/AAA/all")
+        self.assertIn(f"v{app.app_version()}", res.headers["Content-Disposition"])
+        bundle = zipfile.ZipFile(io.BytesIO(res.data))
+        names = set(bundle.namelist())
+        for name in ("README.md", "build.json", "jobs.json", "diagnostics.jsonl", "runs/AAA.log", "runs/AAA.json"):
+            self.assertIn(f"_debug/{name}", names)
+        build = json.loads(bundle.read("_debug/build.json"))
+        self.assertEqual(build["version"], app.app_version())
+        self.assertIn("commit", build)
+        self.assertEqual(len(build["code_sha1"]), 40)
+        diag = [json.loads(line) for line in bundle.read("_debug/diagnostics.jsonl").decode().splitlines()]
+        self.assertEqual([d["source"] for d in diag], ["browser", "server"])
+        self.assertIn("/api/files/NOPE", diag[1]["message"])
+        self.assertIn("ARGS", bundle.read("_debug/runs/AAA.log").decode())
+        self.assertNotIn(self.uid(), bundle.read("_debug/jobs.json").decode())
+
+
+class DiagnosticsTests(AppTestCase):
+    def read_diag(self):
+        path = app._user_dir(self.uid()) / app.DIAG_FILE
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def test_failed_run_is_logged_with_its_log_tail(self):
+        app.DASHBOARD.write_text("import sys\nprint('boom here')\nsys.exit(3)\n")
+        self.client.post("/api/run", json={"ticker": "BAD", "filings": 3})
+        self.wait_idle("BAD")
+        entry = next(d for d in self.read_diag() if d["source"] == "pipeline")
+        self.assertIn("exit 3", entry["message"])
+        self.assertIn("boom here", entry["log_tail"])
+
+    def test_crash_is_logged_with_traceback_and_returns_json(self):
+        (app._user_dir(self.uid()) / "AAA").mkdir(parents=True)
+        with unittest.mock.patch.object(app, "_results_summary", side_effect=RuntimeError("kaput")):
+            res = self.client.get("/api/recent")
+        self.assertEqual(res.status_code, 500)
+        self.assertIn("error", res.get_json())
+        entries = [d for d in self.read_diag() if d["level"] == "error"]
+        self.assertEqual(len(entries), 1)               # not logged twice
+        self.assertIn("kaput", entries[0]["traceback"])
+
+    def test_browser_reports_need_a_user_and_an_object(self):
+        anon = app.app.test_client()
+        self.assertEqual(anon.post("/api/diag", json={"message": "x"}).status_code, 401)
+        self.assertEqual(self.client.post("/api/diag", json=[1]).status_code, 400)
+        self.assertEqual(self.client.post("/api/diag", json={"message": "y" * 9000}).status_code, 204)
+        self.assertEqual(len(self.read_diag()[-1]["message"]), 2000)
+
+    def test_log_is_trimmed(self):
+        with unittest.mock.patch.object(app, "DIAG_MAX_BYTES", 2000), unittest.mock.patch.object(app, "DIAG_KEEP", 5):
+            for i in range(30):
+                app._diag(self.uid(), "server", "warn", f"entry {i}")
+        entries = self.read_diag()
+        self.assertLessEqual(len(entries), 30)
+        self.assertEqual(entries[-1]["message"], "entry 29")
+        self.assertLess(len(entries), 30)
 
 
 class RouteTests(AppTestCase):

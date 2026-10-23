@@ -14,12 +14,14 @@ Run locally:   python app.py            (http://localhost:8053)
 from __future__ import annotations
 
 import calendar
+import collections
 import csv
 import io
 import json
 import hashlib
 import math
 import os
+import platform
 import re
 import secrets
 import shutil
@@ -28,10 +30,13 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import uuid
 import zipfile
 import xml.etree.ElementTree as ET
 from contextlib import contextmanager
+from functools import lru_cache
+from importlib import metadata
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from http.cookiejar import CookieJar
@@ -76,6 +81,16 @@ AVATAR_MAX_PIXELS = 40_000_000       # refuse decompression bombs before decodin
 # Tickers: letters/digits plus the "." and "-" seen in symbols such as BRK.B.
 TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 ALLOWED_FILES = {".png", ".csv", ".log"}
+
+# Release number (major.minor.patch, see README "Versions"); the commit comes
+# from the STOCKY_COMMIT build arg, or from git when run from a checkout.
+VERSION_FILE = BASE_DIR / "VERSION"
+# Per-user diagnostics (server errors, failed runs, browser errors), kept as
+# JSON lines in the user's folder and shipped in Home's download for debugging.
+DIAG_FILE = "diagnostics.jsonl"
+DIAG_MAX_BYTES = 1_000_000           # trimmed to the newest DIAG_KEEP lines past this
+DIAG_KEEP = 2000
+DIAG_LOCK = threading.Lock()
 
 app = Flask(__name__)
 app.config.update(
@@ -251,12 +266,31 @@ def _results_summary(ticker: str) -> dict | None:
     }
 
 
-def _log_tail(ticker: str, max_lines: int = 200) -> str:
-    log = _ticker_dir(ticker) / "run.log"
+def _log_tail(ticker: str, max_lines: int = 200, uid: str | None = None) -> str:
+    log = _ticker_dir(ticker, uid) / "run.log"
     if not log.is_file():
         return ""
     text = log.read_text(errors="replace").splitlines()
     return "\n".join(text[-max_lines:])
+
+
+def _diag(uid: str | None, source: str, level: str, message: str, **detail) -> None:
+    """Append one entry to the user's diagnostics log; never raises."""
+    if not uid:
+        return
+    entry = {"time": _now(), "version": app_version(), "source": source, "level": level,
+             "message": str(message)[:2000], **detail}
+    path = _user_dir(uid) / DIAG_FILE
+    with DIAG_LOCK:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as out:
+                out.write(json.dumps(entry, default=str) + "\n")
+            if path.stat().st_size > DIAG_MAX_BYTES:
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-DIAG_KEEP:]
+                path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except OSError:
+            pass
 
 
 YAHOO_UA = "Mozilla/5.0 (X11; Linux x86_64) Stocky/1.0"
@@ -466,6 +500,10 @@ def _worker(key: str, filings: int, job_id: str) -> None:
                     job.update(status="cancelled", finished=_now(), returncode=code)
                 else:
                     job.update(status=status, finished=_now(), returncode=code)
+                    if status == "error":
+                        _diag(uid, "pipeline", "error", f"{ticker} run failed (exit {code})",
+                              ticker=ticker, filings=filings, charts=with_charts,
+                              error=job.get("error"), log_tail=_log_tail(ticker, 60, uid))
                     if status == "done":
                         _write_run_meta(directory, filings, with_charts)
                     followup = job.get("followup_filings")
@@ -517,6 +555,30 @@ def handle_http_error(err: HTTPException):
     return jsonify(error=err.description, status=err.code), err.code
 
 
+@app.errorhandler(Exception)
+def handle_exception(err: Exception):
+    """Unexpected errors: JSON for the UI, full traceback in the diagnostics log."""
+    app.logger.exception("unhandled error on %s %s", request.method, request.path)
+    user = getattr(g, "user", None)
+    _diag(user and user["id"], "server", "error", f"{type(err).__name__}: {err}",
+          request=f"{request.method} {request.full_path.rstrip('?')}", traceback=traceback.format_exc())
+    g.diag_logged = True
+    return jsonify(error="Internal error; it is in the diagnostics log.", status=500), 500
+
+
+@app.after_request
+def log_failed_request(response):
+    """Every failed request of a signed-in user goes to their diagnostics log."""
+    user = getattr(g, "user", None)
+    if (response.status_code >= 400 and user and not g.get("diag_logged")
+            and request.endpoint not in ("static", "client_diag")):
+        body = response.get_json(silent=True) if response.is_json else None
+        _diag(user["id"], "server", "error" if response.status_code >= 500 else "warn",
+              f"{request.method} {request.full_path.rstrip('?')} -> {response.status_code}",
+              error=(body or {}).get("error") if isinstance(body, dict) else None)
+    return response
+
+
 @app.after_request
 def set_security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -556,7 +618,8 @@ def _start_session(uid: str) -> None:
 
 @app.get("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", version=app_version(),
+                           commit=(git_commit()["commit"] or "")[:7])
 
 
 @app.get("/login")
@@ -604,6 +667,20 @@ def logout():
     return jsonify(ok=True)
 
 
+@app.post("/api/diag")
+def client_diag():
+    """Browser errors (script errors, failed fetches), for the diagnostics log."""
+    payload = request.get_json(silent=True, force=True) or {}
+    if not isinstance(payload, dict):
+        abort(400, "Expected a JSON object.")
+    level = payload.get("level") if payload.get("level") in ("error", "warn", "info") else "error"
+    _diag(g.user["id"], "browser", level, str(payload.get("message") or "")[:2000],
+          detail=str(payload.get("detail") or "")[:4000], page=str(payload.get("page") or "")[:200],
+          viewport=str(payload.get("viewport") or "")[:40],
+          agent=request.headers.get("User-Agent", "")[:300])
+    return "", 204
+
+
 @app.get("/healthz")
 def healthz():
     return jsonify(status="ok", **build_info())
@@ -616,7 +693,7 @@ def build_info() -> dict:
     ``pipeline_sha1`` / ``charts_sha1`` with the repo's
     ``sha1sum edgar_dashboard.py charts.py``.
     """
-    info = {"version": os.environ.get("STOCKY_VERSION", "dev"), "features": []}
+    info = {"version": app_version(), **git_commit(), "code_sha1": code_sha1(), "features": []}
     for module in ("valuation", "insider"):
         if (BASE_DIR / f"{module}.py").is_file():
             info["features"].append(module)
@@ -628,6 +705,43 @@ def build_info() -> dict:
             info[key] = None
     info["data"] = graph_diagnostics(DATA_DIR, list_tickers=False)
     return info
+
+
+def app_version() -> str:
+    try:
+        return VERSION_FILE.read_text().strip() or "0.0.0"
+    except OSError:
+        return "0.0.0"
+
+
+@lru_cache(maxsize=1)
+def git_commit() -> dict:
+    """The deployed commit: the build arg in Docker, else ``git`` in a checkout."""
+    commit = os.environ.get("STOCKY_COMMIT", "").strip()
+    if commit:
+        return {"commit": commit, "dirty": None}
+    try:
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=BASE_DIR, capture_output=True,
+                                text=True, timeout=5, check=True).stdout.strip()
+        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=BASE_DIR,
+                               capture_output=True, text=True, timeout=5).stdout.strip() != ""
+        return {"commit": commit, "dirty": dirty}
+    except (OSError, subprocess.SubprocessError):
+        return {"commit": None, "dirty": None}
+
+
+@lru_cache(maxsize=1)
+def code_sha1() -> str:
+    """One hash over every root module and template, to match a build to a commit
+    even when the commit is unknown (a deploy without the build arg)."""
+    digest = hashlib.sha1()
+    for path in sorted([*BASE_DIR.glob("*.py"), *(BASE_DIR / "templates").glob("*.html")]):
+        digest.update(path.name.encode() + b"\0")
+        try:
+            digest.update(path.read_bytes())
+        except OSError:
+            pass
+    return digest.hexdigest()
 
 
 def graph_diagnostics(directory: Path, list_tickers: bool = True) -> dict:
@@ -1456,12 +1570,76 @@ def _months_ago(months: int) -> str:
     return f"{year:04d}-{month + 1:02d}-{day:02d}"
 
 
+DEBUG_README = """\
+# Stocky debug bundle
+
+Made by Home's download so a bug can be fixed without re-running anything.
+`build.json` names the exact code: `version` (VERSION file, major.minor.patch)
+and `commit` (git SHA; `dirty: true` means uncommitted local edits). When
+`commit` is null, `code_sha1` is a SHA-1 over every root `*.py` and
+`templates/*.html` (sorted by name, each as name + NUL + bytes) to match against
+a checkout.
+
+- `build.json`: version, commit, Python and package versions, the options used.
+- `jobs.json`: this account's runs in memory (status, error, exit code, times).
+  Empty after a restart.
+- `diagnostics.jsonl`: one JSON object per line, oldest first. `source` is
+  `server` (failed requests, with a traceback for crashes), `pipeline` (failed
+  runs with the log tail) or `browser` (script errors and failed fetches).
+- `runs/<TICKER>.log`: the last pipeline log of every ticker of this account,
+  with `runs/<TICKER>.json` (filings, charts, finish time of the last success).
+
+The ticker's own results (CSVs, charts, JSON) are in the ticker folder next to
+this one.
+"""
+
+# Packages whose versions most often explain a difference in output.
+DEBUG_PACKAGES = ("flask", "waitress", "edgartools", "pandas", "numpy", "matplotlib", "requests")
+
+
+def _debug_files(uid: str, options: dict) -> dict[str, str]:
+    """The ``_debug/`` folder of Home's download (see DEBUG_README)."""
+    packages = {}
+    for name in DEBUG_PACKAGES:
+        try:
+            packages[name] = metadata.version(name)
+        except metadata.PackageNotFoundError:
+            packages[name] = None
+    build = {**build_info(), "python": sys.version.split()[0], "platform": platform.platform(),
+             "packages": packages, "generated": _now(), "options": options,
+             "agent": request.headers.get("User-Agent", "")}
+    build.pop("data", None)
+    with JOBS_LOCK:
+        jobs = [{k: v for k, v in job.items() if k != "uid"}
+                for job in JOBS.values() if job.get("uid") == uid]
+    files = {"README.md": DEBUG_README, "build.json": json.dumps(build, indent=2, default=str),
+             "jobs.json": json.dumps(jobs, indent=2, default=str)}
+    directory = _user_dir(uid)
+    try:
+        files["diagnostics.jsonl"] = (directory / DIAG_FILE).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        files["diagnostics.jsonl"] = ""
+    try:
+        folders = sorted(d for d in directory.iterdir() if d.is_dir()) if directory.is_dir() else []
+    except OSError:
+        folders = []
+    for folder in folders:
+        for name, suffix in (("run.log", "log"), ("run.json", "json")):
+            try:
+                text = (folder / name).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            files[f"runs/{folder.name}.{suffix}"] = "\n".join(text.splitlines()[-400:]) + "\n"
+    return files
+
+
 @app.get("/download/<ticker>/all")
 def download_all(ticker: str):
     """Home's download: every file of the run plus insiders, news and screener as CSV.
 
     Insiders and news follow the options passed (``months``, ``news_limit``,
-    ``news_days``). News is left out when Google News is unreachable.
+    ``news_days``). News is left out when Google News is unreachable. A
+    ``_debug/`` folder adds the build, jobs, diagnostics and every run log.
     """
     ticker = _normalise_ticker(ticker)
     folder = _ticker_dir(ticker)
@@ -1493,9 +1671,13 @@ def download_all(ticker: str):
                 bundle.write(path, arcname=f"{ticker}/{path.relative_to(folder).as_posix()}")
         for name, text in extra.items():
             bundle.writestr(f"{ticker}/{name}", text)
+        options = {"months": months, "news_days": news_days, "news_limit": news_limit}
+        for name, text in _debug_files(g.user["id"], options).items():
+            bundle.writestr(f"_debug/{name}", text)
     buffer.seek(0)
+    commit = (git_commit()["commit"] or "")[:7]
     return send_file(buffer, mimetype="application/zip", as_attachment=True,
-                     download_name=f"{ticker}_everything.zip")
+                     download_name=f"{ticker}_everything_v{app_version()}{'_' + commit if commit else ''}.zip")
 
 
 @app.get("/download/<ticker>/<path:name>")
