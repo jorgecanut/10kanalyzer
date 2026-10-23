@@ -2573,7 +2573,9 @@ async function loadInsiderTicker() {
 
 const insiderRow = it => `<div class="stat">
     <span class="who"><b>${esc(it.name || '—')}</b>${it.title ? ' · ' + esc(it.title) : ''} · ${it.date ? esc(fmtDate(it.date)) : '—'}</span>
-    <b><span class="badge ${it.type === 'buy' ? 'done' : 'error'}">${esc(it.type || '—')}</span> ${fmtInt(it.shares)} sh · ${fmtMoney(it.value)}</b>
+    <b><span class="badge ${it.type === 'buy' ? 'done' : 'error'}">${esc(it.type || '—')}</span> ${fmtInt(it.shares)} sh · ${it.value_estimated && it.value != null
+      ? `<span title="Estimated: the filing gives a price range in a footnote; this uses its midpoint">≈${fmtMoney(it.value)}</span>`
+      : fmtMoney(it.value)}</b>
   </div>`;
 
 function renderInsiders() {

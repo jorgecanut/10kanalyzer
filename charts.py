@@ -326,26 +326,33 @@ def _fact_series(
 
 
 def _shares_series(facts: pd.DataFrame, concepts: Iterable[str], years: list[int]) -> pd.Series:
-    """Total shares outstanding: dedupe by concept, then sum across classes."""
+    """Shares outstanding per year: the first of ``concepts`` (in order) with a value.
+
+    The concepts are alternatives (balance-sheet count, cover-page count,
+    weighted average), never added together. A concept reported only per
+    share class (a class-of-stock dimension) is the sum of its classes.
+    """
+    result = pd.Series(np.nan, index=years, dtype=float)
     if facts.empty:
-        return pd.Series(np.nan, index=years)
+        return result
     facts = facts.copy()
     facts["fiscal_year"] = pd.to_numeric(facts["fiscal_year"], errors="coerce").astype("Int64")
-    facts = facts.dropna(subset=["fiscal_year"])
+    facts["numeric"] = pd.to_numeric(facts["value"], errors="coerce")
+    facts = facts.dropna(subset=["fiscal_year", "numeric"])
     concept_name = facts["concept"].str.split(":").str[-1]
-    mask = concept_name.isin(concepts) & (~facts["is_dimensioned"].astype(bool))
-    sub = facts[mask].copy()
-    if sub.empty:
-        return pd.Series(np.nan, index=years)
-    sub["numeric"] = pd.to_numeric(sub["value"], errors="coerce")
-    sub = sub.dropna(subset=["numeric"])
-    is_dei = sub["concept"].str.startswith("dei:")
-    years_with_gaap = sub.loc[~is_dei, "fiscal_year"].unique()
-    sub = sub[~is_dei | ~sub["fiscal_year"].isin(years_with_gaap)]
-    # One value per concept per year, then add across share classes.
-    s = sub.groupby(["fiscal_year", "concept"])["numeric"].first().groupby("fiscal_year").sum()
-    s = s / USD_TO_MILLIONS
-    return s.reindex(years)
+    dimensioned = facts["is_dimensioned"].astype(bool)
+    dimension = facts["dimension"] if "dimension" in facts.columns else pd.Series(None, index=facts.index)
+    by_class = dimensioned & dimension.astype(str).str.contains("ClassOfStock", na=False)
+    class_key = ["fiscal_year", "member"] if "member" in facts.columns else ["fiscal_year", "numeric"]
+    for concept in concepts:
+        of_concept = concept_name == concept
+        plain = facts[of_concept & ~dimensioned].groupby("fiscal_year")["numeric"].first()
+        classes = (facts[of_concept & by_class].drop_duplicates(class_key)
+                   .groupby("fiscal_year")["numeric"].sum())
+        found = plain.combine_first(classes) / USD_TO_MILLIONS
+        found.index = found.index.astype(int)
+        result = result.fillna(found.reindex(years))
+    return result
 
 
 def _year_windows(years: list[int], window: int = CHART_WINDOW) -> Iterable[list[int]]:
@@ -692,8 +699,8 @@ def chart_balance(
     shares = _shares_series(
         facts,
         [
-            "EntityCommonStockSharesOutstanding",
             "CommonStockSharesOutstanding",
+            "EntityCommonStockSharesOutstanding",
             "WeightedAverageNumberOfDilutedSharesOutstanding",
         ],
         years,

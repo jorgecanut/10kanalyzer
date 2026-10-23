@@ -250,6 +250,11 @@ date share the line under the header. `insider.py` collects 3 years and does
 not cap transactions (it stops at the window, with a 1500-filing safety valve;
 `since` in `insider.json` says how far back the data really goes). Runs made
 before this collected 6 months; the tab says so and suggests re-running.
+A trade's value is shares × the reported price. Sales made in several lots
+often report a price of 0 and give the range only in a footnote ("weighted
+average … $X to $Y"); the value then uses the midpoint, shows as **≈** and has
+`value_estimated: true`. Form 4s the company files as the insider of *another*
+issuer (a stake it holds, an acquisition) are left out.
 
 Every tab's panel title is just the tab name, every refresh button is the
 circular-arrow icon, and every ticker drop-down reads `TICKER · last run date`.

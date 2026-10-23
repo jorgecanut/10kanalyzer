@@ -9,8 +9,13 @@ Design notes:
     * Only open-market purchases/sales count. Grants (A), option exercises (M),
       tax withholding (F), gifts (G) and conversions (C) are not market trades
       and are ignored on purpose.
-    * ``value`` is ``shares * price`` when the filing reports a price, else
-      ``None`` (many grants and some sales omit it).
+    * ``value`` is ``shares * price`` when the filing reports a price. Sales
+      made in several lots often report 0 and give only the range in a
+      footnote ("weighted average ... $X to $Y"); the midpoint is used then and
+      ``value_estimated`` is true. With no price anywhere ``value`` is ``None``.
+    * Only filings whose issuer is the company itself count. A company that is
+      an insider of another issuer (a >10% holder, an acquirer) files Form 4s
+      about that issuer's shares, and those are not its insiders' trades.
     * Failure policy: no exception ever reaches the caller. A failure returns
       ``[]`` (collect) or ``None`` (write) after one printed warning.
     * ``write_insiders`` always writes a file, even when collection fails or
@@ -26,6 +31,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from datetime import date, datetime, timezone
 from typing import Any
@@ -49,6 +55,12 @@ except Exception as exc:  # pragma: no cover - only when edgar is missing/broken
 MAX_FILINGS = 1500
 DEFAULT_MONTHS = 36
 OUTPUT_FILENAME = "insider.json"
+
+# "$601.88 to $602.06", "$1,000.50 - $1,001.50": the price range of a weighted
+# average in a Form 4 footnote.
+PRICE_RANGE_RE = re.compile(
+    r"\$\s*([\d,]+(?:\.\d+)?)\s*(?:to|through|and|-|–|—)\s*\$?\s*([\d,]+(?:\.\d+)?)", re.IGNORECASE)
+FOOTNOTE_ID_RE = re.compile(r"F\d+")
 
 
 def _warn(message: str) -> None:
@@ -94,6 +106,31 @@ def _parse_date(value: Any) -> date | None:
         return datetime.strptime(text, "%Y-%m-%d").date()
     except ValueError:
         return None
+
+
+def _footnote_price(ids: Any, footnotes: Any) -> float | None:
+    """Midpoint of the first price range in the row's footnotes, if any."""
+    for footnote_id in FOOTNOTE_ID_RE.findall(str(ids or "")):
+        try:
+            text = footnotes.get(footnote_id) or ""
+        except Exception:
+            continue
+        match = PRICE_RANGE_RE.search(str(text))
+        if not match:
+            continue
+        low, high = (_to_float(part.replace(",", "")) for part in match.groups())
+        if low and high and 0 < low <= high:
+            return (low + high) / 2
+    return None
+
+
+def _same_issuer(ownership: Any, company_cik: int | None) -> bool:
+    """False only when the filing clearly names a different issuer."""
+    try:
+        issuer_cik = int(str(ownership.issuer.cik).strip())
+    except Exception:
+        return True
+    return company_cik is None or issuer_cik == company_cik
 
 
 def _insider_title(ownership: Any) -> str:
@@ -156,6 +193,10 @@ def _rows_from_ownership(ownership: Any) -> list[dict]:
             shares = abs(shares)
 
             price = _to_float(row.get("Price"))
+            estimated = False
+            if not price or price <= 0:
+                price = _footnote_price(row.get("footnotes"), getattr(ownership, "footnotes", None))
+                estimated = price is not None
             value = round(shares * price, 2) if price and price > 0 else None
 
             trade_date = _parse_date(row.get("Date"))
@@ -170,6 +211,7 @@ def _rows_from_ownership(ownership: Any) -> list[dict]:
                     "type": trade_type,
                     "shares": float(shares),
                     "value": value,
+                    "value_estimated": estimated,
                 }
             )
         except Exception:
@@ -199,7 +241,12 @@ def _collect(ticker: str, months: int) -> tuple[list[dict], str | None]:
         months = max(1, int(months))
         cutoff = _months_ago(months)
 
-        filings = Company(ticker).get_filings(form="4")
+        company = Company(ticker)
+        try:
+            company_cik = int(company.cik)
+        except Exception:
+            company_cik = None
+        filings = company.get_filings(form="4")
         if filings is None:
             _warn(f"no Form 4 filings for {ticker}")
             return [], cutoff.isoformat()
@@ -224,7 +271,7 @@ def _collect(ticker: str, months: int) -> tuple[list[dict], str | None]:
                 if filing_date is not None:
                     last_filed = filing_date
                 ownership = filing.obj()
-                if ownership is None:
+                if ownership is None or not _same_issuer(ownership, company_cik):
                     continue
                 for row in _rows_from_ownership(ownership):
                     if row["date"] >= cutoff.isoformat():
