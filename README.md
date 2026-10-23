@@ -250,7 +250,9 @@ newest first, with a period selector (1 month to 3 years, default 1 year,
 remembered per browser) and a ticker selector. The count and the collection
 date share the line under the header. `insider.py` collects 3 years and does
 not cap transactions (it stops at the window, with a 1500-filing safety valve;
-`since` in `insider.json` says how far back the data really goes). Runs made
+`since` in `insider.json` says how far back the data really goes).
+The Form 4s download in the background while the 10-Ks are fetched, since
+neither needs the other. Runs made
 before this collected 6 months; the tab says so and suggests re-running.
 A trade's value is shares × the reported price. Sales made in several lots
 often report a price of 0 and give the range only in a footnote ("weighted
