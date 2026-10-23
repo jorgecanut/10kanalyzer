@@ -772,8 +772,7 @@
           </button>
         </span>
       </div>
-      <!-- The log sits above the chart index: open on its own while a run is
-           queued or running, closed when it ends (the log button toggles it). -->
+      <!-- The log sits above the chart index, closed until the log button opens it. -->
       <div class="term-wrap hidden" id="term-wrap">
         <div class="term-label">Log</div>
         <div class="panel-body term-body" id="term-body">
@@ -1895,13 +1894,8 @@ function setGraph(ticker) {
 
 function renderGraph() {
   const { ticker, state } = GRAPH;
-  // The log opens when a run starts and closes when it ends; an error keeps it
-  // open so the reason stays in view.
-  const live = !!ticker && (state === 'queued' || state === 'running');
-  if (live !== !!GRAPH.wasLive) {
-    GRAPH.wasLive = live;
-    if (live || state !== 'error') GRAPH.log = live;
-  }
+  // The log stays closed unless the log button opens it; the progress line
+  // under the header shows the latest log line (or the error) instead.
   $('#graph-empty').classList.toggle('hidden', !!ticker);
   for (const id of ['#graph-download-btn', '#graph-log-btn', '#graph-refresh-btn']) $(id).hidden = !ticker;
   const logBtn = $('#graph-log-btn');
