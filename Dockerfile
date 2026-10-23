@@ -14,9 +14,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
 
 # Application code (glob: every root module, so new ones cannot be missed).
-COPY *.py ./
+COPY VERSION *.py ./
 COPY templates ./templates
 COPY static ./static
+
+# The deployed commit (.git is not in the build context); shown by /healthz,
+# Options > Data and Home's download. The deploy hook passes it.
+ARG STOCKY_COMMIT=""
+ENV STOCKY_COMMIT=${STOCKY_COMMIT}
 
 RUN useradd --create-home --uid 10001 appuser && mkdir -p /app/data && chown -R appuser:appuser /app
 

@@ -8,7 +8,11 @@
 # and that account is what is sent to the SEC.
 services:
   dashboard:
-    build: .
+    build:
+      context: .
+      args:
+        # Set by the deploy hook (git rev-parse HEAD); empty is fine.
+        STOCKY_COMMIT: ${STOCKY_COMMIT:-}
     image: edgar-dashboard
     restart: unless-stopped
     environment:
