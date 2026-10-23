@@ -319,6 +319,17 @@ class DiagnosticsTests(AppTestCase):
         self.assertEqual(len(entries), 1)               # not logged twice
         self.assertIn("kaput", entries[0]["traceback"])
 
+    def test_unwritable_data_folder_is_named_in_the_error(self):
+        # A fresh bind mount Docker created as root: no database, nothing writable.
+        locked = self.tmp / "locked"
+        locked.mkdir()
+        locked.chmod(0o555)
+        with unittest.mock.patch.object(app, "DATA_DIR", locked):
+            res = app.app.test_client().post("/api/login", json={"email": "a@example.com", "password": "x" * 8})
+        self.assertEqual(res.status_code, 500)
+        self.assertIn("not writable", res.get_json()["error"])
+        self.assertNotIn("diagnostics log", res.get_json()["error"])   # nobody signed in: nothing logged
+
     def test_browser_reports_need_a_user_and_an_object(self):
         anon = app.app.test_client()
         self.assertEqual(anon.post("/api/diag", json={"message": "x"}).status_code, 401)

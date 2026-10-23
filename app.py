@@ -563,7 +563,15 @@ def handle_exception(err: Exception):
     _diag(user and user["id"], "server", "error", f"{type(err).__name__}: {err}",
           request=f"{request.method} {request.full_path.rstrip('?')}", traceback=traceback.format_exc())
     g.diag_logged = True
-    return jsonify(error="Internal error; it is in the diagnostics log.", status=500), 500
+    if not os.access(DATA_DIR, os.W_OK):
+        # The usual cause after a redeploy: a bind mount the container user cannot write.
+        message = (f"The data folder {DATA_DIR} is not writable by the app (uid {os.getuid()}); "
+                   "fix its ownership on the host. /healthz shows the details.")
+    elif user:
+        message = "Internal error; it is in the diagnostics log."
+    else:
+        message = "Internal error; it is in the server log."
+    return jsonify(error=message, status=500), 500
 
 
 @app.after_request
