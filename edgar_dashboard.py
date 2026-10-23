@@ -34,7 +34,7 @@ import xbrl_extract
 # Override it in production via the EDGAR_IDENTITY env var (see docker-compose).
 set_identity(os.environ.get("EDGAR_IDENTITY", "Data Analyst analyst@example.com"))
 
-TICKER = "NFLX"
+TICKER = ""                 # set from --ticker
 TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 NUM_FILINGS = 10
 BASE_OUTPUT_DIR = "financial_graphs"
@@ -566,7 +566,7 @@ def main() -> None:
     global OUTPUT_DIR, DATA_CSV, TICKER
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--ticker", default=TICKER, help="Ticker symbol (default: %(default)s)")
+    parser.add_argument("--ticker", required=True, help="Ticker symbol")
     parser.add_argument(
         "--filings", type=int, default=NUM_FILINGS,
         help="Number of 10-K filings to use (default: %(default)s)",

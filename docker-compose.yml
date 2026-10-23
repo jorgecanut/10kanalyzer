@@ -11,7 +11,7 @@ services:
     build:
       context: .
       args:
-        # Set by the deploy hook (git rev-parse HEAD); empty is fine.
+        # Optional: STOCKY_COMMIT=$(git rev-parse HEAD) docker compose up -d --build
         STOCKY_COMMIT: ${STOCKY_COMMIT:-}
     image: edgar-dashboard
     restart: unless-stopped

@@ -38,7 +38,6 @@ export EDGAR_IDENTITY="Jane Doe jane@example.com"
 ## Run
 
 ```bash
-python edgar_dashboard.py                 # defaults to NFLX
 python edgar_dashboard.py --ticker AAPL --filings 10
 python edgar_dashboard.py --ticker AAPL --no-charts   # data only (screener mode)
 python edgar_dashboard.py --ticker AAPL --output-dir /tmp/out   # writes /tmp/out/AAPL/
@@ -457,10 +456,11 @@ breaks stored data or the API. Each release is tagged `vX.Y.Z`.
 The running build is shown in Options → Data → Version, in `/healthz`
 (`version`, `commit`) and in the name of Home's zip
 (`<TICKER>_everything_v1.0.0_<commit>.zip`). Docker has no `.git`, so the
-commit is a build arg: the deploy hook passes it
-(`docker compose build --build-arg STOCKY_COMMIT=$(git rev-parse HEAD)`);
-outside Docker the app asks `git`. Without either, `code_sha1` (a hash of every
-root `*.py` and `templates/*.html`) still identifies the code.
+commit is optional there: set it with
+`STOCKY_COMMIT=$(git rev-parse HEAD) docker compose up -d --build`; outside
+Docker the app asks `git`. Since every release bumps `VERSION`, the version is
+enough to find the code, and `code_sha1` (a hash of every root `*.py` and
+`templates/*.html`) confirms it is exactly that release.
 
 Every account has a diagnostics log, `data/users/<id>/diagnostics.jsonl`
 (trimmed to the newest 2000 entries past 1 MB): failed requests (with the
