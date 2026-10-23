@@ -134,7 +134,7 @@ Routes:
 | `GET` | `/api/files/<ticker>` | Chart list for a ticker |
 | `GET` | `/api/evaluation/<ticker>` | `evaluation.csv` rows for one ticker |
 | `GET` | `/api/insiders/<ticker>` | `insider.json` trades for one ticker |
-| `GET` | `/api/news/<ticker>` | Recent articles (title, source, date, link) from Google News; `?limit=20\|30\|40\|50` (default 20), `?days=1\|7\|14\|30` (default 14), `?fresh=1` skips the 30-min cache |
+| `GET` | `/api/news/<ticker>` | Recent articles (title, source, date, link) from Google News; `?limit=20\|30\|40\|50` (default 20), `?days=1\|7\|14\|30` (default 14), `?scope=company\|market` (default company; market adds `topic`), `?fresh=1` skips the 30-min cache |
 | `GET` | `/api/simulation/<ticker>` | Yahoo price history + dividends (`?range=1y`) |
 | `GET` | `/api/fundamentals/<ticker>` | Flat metric set behind the screener |
 | `GET` | `/api/screener` | Cached screener results, Greenblatt ranks |
@@ -155,7 +155,8 @@ icon are drawn for this project (no third-party icon sets).
 latest search (the pinned ticker). It shows that company's key numbers (the
 only place outside the Screener with stats), its spot in the screener's Magic
 Formula ranking with the two tickers above and below (names only, click one to
-switch to it), the top five headlines, the five latest insider trades (with a
+switch to it), the top five market headlines (see the News tab below), the
+five latest insider trades (with a
 link to the Insiders tab), and one small thumbnail per chart type
 (the most recent year window) that opens in the Charts tab. Running a single
 ticker switches to Home; the run's progress and log are in the Charts tab.
@@ -266,6 +267,14 @@ comes from Yahoo's search and the articles from the Google News RSS feed, in
 Google's ranking order (its "top stories", the closest free signal to
 popularity). Results are cached for 30 minutes and shared by every user;
 the refresh button fetches them again. Nothing else is derived from them.
+
+Home's headlines (`scope=market`) are about the stock rather than the company:
+the ticker with market words (shares, price target, analyst, earnings), its
+sector and industry from Yahoo's search, and the wider market and economy
+(Wall Street, the Fed, inflation, rates). The three feeds interleave stock,
+stock, sector, market, and each headline is labelled with its topic; product
+and other company news stays in the News tab. The sector feed is skipped when
+Yahoo does not know the ticker's sector.
 
 ### Tests
 
