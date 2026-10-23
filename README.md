@@ -173,9 +173,10 @@ The ticker bar decides the mode. **One ticker** runs the full pipeline: charts
 plus screener data. It is pinned to the **Charts** tab and stays there until you
 run/open another ticker; the pin survives page reloads and cancel. Its scores
 and ratios live in the **Screener** tab only. The Charts tab is empty until
-then. The pipeline log opens above the chart index, set apart by its own
-background and a rule, while the run is queued or running and closes when it
-ends (it stays open after an error); the **log** button toggles it. The chart index sits inside the Charts
+then. The pipeline log is closed by default, even during a run: the line under
+the header shows its latest line while the run is queued or running, and the
+error if it fails. The **log** button opens it above the chart index, set apart
+by its own background and a rule. The chart index sits inside the Charts
 panel, one line per chart (year windows side by side); the layout switch
 (one chart per row, as wide as the page column, or a grid) is the joined pair of buttons left of the other actions. **Several tickers** switch to screener mode:
 data only, no charts (`--no-charts`), and the pinned graph is left as is.
