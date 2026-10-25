@@ -153,6 +153,11 @@ narrow screens the tabs get a row of their own below the bar); the **Recent**
 clock icon sits left of the ticker box, or at the right end of the tab row on
 narrow screens. The logo and the Stocky name open Home. The logo and every
 icon are drawn for this project (no third-party icon sets).
+The address bar follows the open tab and the pinned ticker (`/#charts/AAPL`,
+`/#screener`), so Back and Forward step through tabs, a reload stays put, and a
+bookmark or shared link opens that tab and ticker (signing in first if
+needed). A URL ticker wins over the saved pin; with no tab in the URL the
+Options default is used.
 **Home** (the house icon, first tab) is the default tab: an overview of the
 latest search (the pinned ticker). It shows that company's key numbers (the
 only place outside the Screener with stats), its spot in the screener's Magic

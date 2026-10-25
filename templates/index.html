@@ -597,7 +597,7 @@
     <div class="head-row">
       <div class="brand">
         <!-- Stocky's own mark: three rising candlesticks. Opens Home. -->
-        <a href="#" class="brand-link" onclick="showTab('home');return false" title="Home" aria-label="Stocky, go to Home">
+        <a href="#home" class="brand-link" onclick="showTab('home');return false" title="Home" aria-label="Stocky, go to Home">
         <svg class="brand-icon" viewBox="0 0 24 24" aria-hidden="true">
           <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
             <path d="M3.5 13.5h4v4.5h-4zM10 9h4v5.5h-4zM16.5 4.5h4v5.5h-4z" fill="currentColor" opacity=".2" stroke="none" />
@@ -729,20 +729,20 @@
             <div class="home-block">
               <h3>Screener ranking</h3>
               <ol id="home-rank" class="home-rank"></ol>
-              <a href="#" class="home-more" onclick="showTab('screener');return false">Full ranking</a>
+              <a href="#screener" class="home-more" onclick="showTab('screener');return false">Full ranking</a>
             </div>
           </div>
           <div class="home-block">
             <h3>Market news</h3>
             <p class="sim-meta" id="home-news-status"></p>
             <ol id="home-news" class="news-list"></ol>
-            <a href="#" class="home-more" onclick="showTab('news');return false">Company news</a>
+            <a href="#news" class="home-more" onclick="showTab('news');return false">Company news</a>
           </div>
           <div class="home-block">
             <h3>Insider trades</h3>
             <p class="sim-meta" id="home-insider-status"></p>
             <div id="home-insiders" class="insider-list"></div>
-            <a href="#" class="home-more" onclick="showTab('insiders');return false">All insider trades</a>
+            <a href="#insiders" class="home-more" onclick="showTab('insiders');return false">All insider trades</a>
           </div>
           <div class="home-block">
             <h3>Charts</h3>
@@ -1522,7 +1522,7 @@ function resetUi() {
   resetSimulation();
   closeDropbar();
   suggestTickers();
-  showTab(PREFS.tab);
+  showTab(PREFS.tab, { history: 'replace' });
   // The pinned graph is kept; re-read its state now that the jobs are gone.
   GRAPH.log = false;
   renderGraph();
@@ -1914,6 +1914,7 @@ function setGraph(ticker) {
   setGraphProgress('');
   setTermLog('');
   renderGraph();
+  if (!ticker) syncHash('replace');
   if (!$('#pane-home').classList.contains('hidden')) initHome();
 }
 
@@ -2206,7 +2207,37 @@ function syncTabFades() {
   tabs.classList.toggle('more-right', tabs.scrollLeft < max - 2);
 }
 
-function showTab(name) {
+// The URL names the open tab and the pinned ticker (#charts/AAPL), so Back,
+// Forward, reload and bookmarks land where you were. The pane ids stay internal.
+const TAB_SLUGS = { home: 'home', graph: 'charts', insiders: 'insiders', recent: 'recent',
+                    screener: 'screener', simulation: 'simulation', news: 'news' };
+
+function parseHash() {
+  const [slug = '', raw = ''] = decodeURIComponent(location.hash.slice(1)).split('/');
+  const tab = Object.keys(TAB_SLUGS).find(key => TAB_SLUGS[key] === slug.toLowerCase()) || '';
+  const ticker = raw.toUpperCase();
+  return { tab, ticker: TICKER_RE.test(ticker) ? ticker : '' };
+}
+
+function currentTab() {
+  return Object.keys(TAB_SLUGS).find(tab => !$(`#pane-${tab}`).classList.contains('hidden')) || 'home';
+}
+
+// 'push' adds a history entry, 'replace' rewrites the current one.
+function syncHash(mode, name = currentTab()) {
+  const hash = `#${TAB_SLUGS[name]}${GRAPH.ticker ? `/${GRAPH.ticker}` : ''}`;
+  if (location.hash === hash) return;
+  history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', hash);
+}
+
+// Back and Forward: reopen the tab and re-pin the ticker the entry names.
+window.addEventListener('popstate', () => {
+  const { tab, ticker } = parseHash();
+  if (ticker && ticker !== GRAPH.ticker) { setGraph(ticker); refreshGraph(); }
+  showTab(tab || PREFS.tab, { history: 'replace' });
+});
+
+function showTab(name, { history: mode = 'push' } = {}) {
   for (const tab of ['home', 'graph', 'insiders', 'recent', 'screener', 'simulation', 'news']) {
     const active = tab === name;
     $(`#pane-${tab}`).classList.toggle('hidden', !active);
@@ -2225,6 +2256,7 @@ function showTab(name) {
   if (name === 'screener') loadScreener();
   if (name === 'simulation') initSimulation();
   if (name === 'news') initNews();
+  syncHash(mode, name);
 }
 
 // "done" shows for 10 s, then the badge settles back to idle.
@@ -3507,9 +3539,15 @@ suggestTickers();
 setInterval(() => { if (!$('#ticker').value) suggestTickers(); }, 6000);
 applyPrefs();
 applySimPrefs();
+// A ticker in the URL (a bookmark or shared link) wins over the saved pin.
+const START = parseHash();
+if (START.ticker) {
+  GRAPH.ticker = START.ticker;
+  try { localStorage.setItem('stocky-graph', START.ticker); } catch {}
+}
 renderGraph();
 refreshGraph();
-showTab(PREFS.tab);
+showTab(START.tab || PREFS.tab, { history: 'replace' });
 (async () => {
   const { jobs, batch } = await (await fetch('/api/jobs')).json();
   for (const job of jobs) {
