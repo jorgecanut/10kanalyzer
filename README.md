@@ -261,7 +261,7 @@ average … $X to $Y"); the value then uses the midpoint, shows as **≈** and h
 issuer (a stake it holds, an acquisition) are left out.
 
 Every tab's panel title is just the tab name, every refresh button is the
-circular-arrow icon, and every ticker drop-down reads `TICKER · last run date`.
+circular-arrow icon, and every ticker drop-down reads `TICKER (last run date)`.
 
 The **News** tab lists up to 25 articles about the company from the last 14
 days: headline, outlet and date, each linking to the original. The company name
