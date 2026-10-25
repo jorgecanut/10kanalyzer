@@ -129,7 +129,8 @@ async function submitForm(event) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Something went wrong.');
-    location.href = '/';
+    // Keep the tab and ticker the visitor was sent here from (#charts/AAPL).
+    location.href = '/' + location.hash;
   } catch (err) {
     $('#msg').textContent = err.message;
     $('#submit').disabled = false;
