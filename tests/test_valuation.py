@@ -61,3 +61,55 @@ class ExtractSharesTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def balance(*rows, year=2025):
+    """(standard_concept, label, value in USD) tuples as a statements frame."""
+    return pd.DataFrame(
+        [{"statement": "balance", "standard_concept": c, "label": l, "value": v, "fiscal_year": year}
+         for c, l, v in rows]
+    )
+
+
+class TotalLiabilitiesTests(unittest.TestCase):
+    def test_reported_total_comes_first(self):
+        frame = balance(
+            ("OtherNonOperatingCurrentLiabilities", "Accrued interest", 533e6),
+            ("Liabilities", "Total liabilities", 61_000e6),
+        )
+        self.assertEqual(valuation._total_liabilities(frame, [2025])[2025], 61_000)
+
+    def test_current_plus_noncurrent_when_no_total(self):
+        # Eli Lilly's shape: subtotals only; "Other current liabilities" is not the total.
+        frame = balance(
+            ("Assets", "Total assets", 112_476e6),
+            ("OtherNonOperatingCurrentLiabilities", "Other current liabilities", 8_457e6),
+            ("CurrentLiabilitiesTotal", "Total current liabilities", 35_228e6),
+            ("NonCurrentLiabilitiesTotal", "Total noncurrent liabilities", 50_713e6),
+            ("AllEquityBalance", "Total equity", 26_535e6),
+            ("LiabilitiesAndEquity", "Total liabilities and equity", 112_476e6),
+        )
+        self.assertEqual(valuation._total_liabilities(frame, [2025])[2025], 85_941)
+
+    def test_liabilities_and_equity_minus_equity_otherwise(self):
+        # McDonald's shape: no liability totals beyond current, and a deficit;
+        # the first line containing "liabilities" (accrued interest) is not the total.
+        frame = balance(
+            ("Assets", "Total assets", 59_515e6),
+            ("OtherNonOperatingCurrentLiabilities", "Accrued interest", 533e6),
+            ("CurrentLiabilitiesTotal", "Total current liabilities", 4_361e6),
+            ("AllEquityBalance", "Total shareholders' equity (deficit)", -1_790e6),
+            ("LiabilitiesAndEquity", "Total liabilities and shareholders' equity (deficit)", 59_515e6),
+        )
+        self.assertEqual(valuation._total_liabilities(frame, [2025])[2025], 61_305)
+
+    def test_assets_minus_equity_without_a_liabilities_and_equity_line(self):
+        frame = balance(
+            ("Assets", "Total assets", 1_000e6),
+            ("AllEquityBalance", "Total equity", 400e6),
+        )
+        self.assertEqual(valuation._total_liabilities(frame, [2025])[2025], 600)
+
+    def test_no_totals_gives_nan_not_a_random_liability_line(self):
+        frame = balance(("OtherNonOperatingCurrentLiabilities", "Accrued interest", 533e6))
+        self.assertTrue(pd.isna(valuation._total_liabilities(frame, [2025])[2025]))

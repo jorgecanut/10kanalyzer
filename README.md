@@ -74,7 +74,9 @@ artifacts: no metric is hard-coded, so a new filer needs no code change.
 `evaluation.csv` (from `valuation.py`) adds per-year P/E, P/B, P/FCF, EV/EBIT,
 EV/EBITDA, earnings yield, Greenblatt return on capital, the historical P/E
 median and percentile, Piotroski F-score (0–9), Altman Z-score and the accruals
-ratio. Prices come from Yahoo; if Yahoo is unreachable the run still succeeds
+ratio. When a filer prints no total-liabilities line (the Z-score needs one),
+it is derived: current plus noncurrent totals, else total liabilities and equity
+(or total assets) minus equity. Prices come from Yahoo; if Yahoo is unreachable the run still succeeds
 and valuation is skipped with a warning. `insider.json` (from `insider.py`)
 lists every open-market Form 4 buy and sell (codes `P` and `S`) in the last 6
 months — no transaction cap. Both steps are fail-soft, and the trades have
