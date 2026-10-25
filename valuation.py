@@ -52,6 +52,16 @@ TOTAL_LIABILITIES = (
     ["Liabilities", "LiabilitiesTotal", "TotalLiabilities"],
     ["total liabilities"],
 )
+# For deriving total liabilities when a filer reports no total line.
+NONCURRENT_LIABILITIES = (
+    ["NonCurrentLiabilitiesTotal", "LiabilitiesNoncurrent"],
+    ["total noncurrent liabilities", "total non-current liabilities"],
+)
+LIABILITIES_AND_EQUITY = (
+    ["LiabilitiesAndEquity", "LiabilitiesAndStockholdersEquity"],
+    ["total liabilities and equity", "total liabilities and stockholders' equity",
+     "total liabilities and shareholders' equity"],
+)
 RETAINED_EARNINGS = (
     ["RetainedEarnings", "RetainedEarningsAccumulatedDeficit", "AccumulatedDeficit"],
     ["retained earnings", "accumulated deficit"],
@@ -198,11 +208,14 @@ def _statement_metric(
     years: list[int],
     concepts: list[str],
     labels: list[str],
+    fuzzy: bool = True,
 ) -> pd.Series:
     """Look a balance-sheet line up per fiscal year, tolerant to tag drift.
 
-    Exact standard_concept matches win, then exact label matches, then a
-    case-insensitive substring match. Values are converted to USD millions.
+    Exact standard_concept matches win, then exact label matches, then (when
+    fuzzy) a case-insensitive substring match. Values are converted to USD
+    millions. Totals pass fuzzy=False: a substring such as "liabilities" also
+    matches every single liability line.
     """
     out = pd.Series(np.nan, index=years, dtype="float64")
     if statements is None or statements.empty or "value" not in statements.columns:
@@ -247,7 +260,7 @@ def _statement_metric(
                     value = hit.iloc[0]["_value"]
                     break
         # 3. Substring fallback on either field.
-        if pd.isna(value):
+        if fuzzy and pd.isna(value):
             for key in concept_keys + label_keys:
                 if len(key) < 6:
                     continue
@@ -260,6 +273,24 @@ def _statement_metric(
                     break
         out[year] = _finite(value) / USD_TO_MILLIONS
     return out
+
+
+def _total_liabilities(statements: pd.DataFrame, years: list[int]) -> pd.Series:
+    """Total liabilities per fiscal year (millions), derived when not reported.
+
+    Many filers print no "Total liabilities" line. Then: current plus
+    noncurrent totals, else total liabilities and equity (or total assets)
+    minus total equity. Equity may be negative (a deficit), which is right.
+    """
+    reported = _statement_metric(statements, years, *TOTAL_LIABILITIES, fuzzy=False)
+    current = _statement_metric(statements, years, *CURRENT_LIABILITIES, fuzzy=False)
+    noncurrent = _statement_metric(statements, years, *NONCURRENT_LIABILITIES, fuzzy=False)
+    both_sides = _statement_metric(statements, years, *LIABILITIES_AND_EQUITY, fuzzy=False)
+    assets = _statement_metric(statements, years, *TOTAL_ASSETS, fuzzy=False)
+    equity = _statement_metric(statements, years, *EQUITY, fuzzy=False)
+    total = reported.where(reported.notna(), current + noncurrent)
+    total = total.where(total.notna(), both_sides - equity)
+    return total.where(total.notna(), assets - equity)
 
 
 def _fact_metric(facts: pd.DataFrame, years: list[int], concepts: list[str]) -> pd.Series:
@@ -515,7 +546,7 @@ def build_evaluation(
 
     statement_metrics = {
         "total_assets": _statement_metric(statements, years, *TOTAL_ASSETS),
-        "total_liabilities": _statement_metric(statements, years, *TOTAL_LIABILITIES),
+        "total_liabilities": _total_liabilities(statements, years),
         "retained_earnings": _statement_metric(statements, years, *RETAINED_EARNINGS),
         "cash": _statement_metric(statements, years, *CASH),
         "equity": _statement_metric(statements, years, *EQUITY),
