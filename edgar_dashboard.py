@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """SEC EDGAR 10-K financial dashboard.
 
-Downloads the last N 10-K filings for a target ticker straight from SEC EDGAR,
-writes the data as CSV into ``financial_graphs/<TICKER>/`` and renders a fixed
-set of charts from that data.
+Downloads the last N annual filings (10-K, or 20-F / 40-F for foreign filers,
+IFRS included) for a target ticker straight from SEC EDGAR, writes the data as
+CSV into ``financial_graphs/<TICKER>/`` in the filer's reporting currency,
+checks every total against its calculation linkbase (``calc_check.csv``) and
+writes the chart specs (``charts.json``).
 
 Usage:
     python edgar_dashboard.py
@@ -16,7 +18,9 @@ import argparse
 import json
 import os
 import re
+import sys
 import threading
+import time
 from typing import Iterable
 
 import numpy as np
@@ -24,6 +28,7 @@ import pandas as pd
 
 from edgar import Company, set_identity
 
+import calc_check
 import charts
 import xbrl_extract
 
@@ -45,7 +50,8 @@ BASE_OUTPUT_DIR = "financial_graphs"
 OUTPUT_DIR = BASE_OUTPUT_DIR
 DATA_CSV = os.path.join(BASE_OUTPUT_DIR, "financial_data.csv")
 
-# Money is reported in USD; we convert everything to millions for readability.
+# Money stays in the filer's reporting currency (USD for most 10-Ks; EUR, TWD,
+# JPY... for foreign filers' 20-F/40-F), converted to millions for readability.
 USD_TO_MILLIONS = 1_000_000
 
 # Minimum span (in days) for a "duration" fact to count as the annual figure.
@@ -79,8 +85,9 @@ METRIC_CONCEPTS: dict[str, tuple[list[str], str]] = {
             "SalesRevenueNet",
             # Older filings (pre-ASC 606) often split goods/services or use this.
             "SalesRevenueGoodsNet",
-            # IFRS filers (e.g. Celestica 20-F).
+            # IFRS filers (e.g. Celestica 20-F); plain Revenue is IFRS's total.
             "RevenueFromContractsWithCustomers",
+            "Revenue",
         ],
         "duration",
     ),
@@ -115,9 +122,6 @@ METRIC_CONCEPTS: dict[str, tuple[list[str], str]] = {
         [
             "SellingGeneralAndAdministrativeExpense",
             "SellingGeneralAndAdministrative",
-            # Some filers split the two halves instead.
-            "SellingAndMarketingExpense",
-            "GeneralAndAdministrativeExpense",
             # IFRS filers (e.g. Celestica).
             "SellingGeneralAndAdminExpenses",
         ],
@@ -139,6 +143,8 @@ METRIC_CONCEPTS: dict[str, tuple[list[str], str]] = {
             # catch-all some filers use for the annual writedown.
             "GoodwillAndIntangibleAssetImpairment",
             "AssetImpairmentCharges",
+            # IFRS filers.
+            "ImpairmentLossRecognisedInProfitOrLossGoodwill",
         ],
         "duration",
     ),
@@ -164,8 +170,10 @@ METRIC_CONCEPTS: dict[str, tuple[list[str], str]] = {
         [
             "PaymentsToAcquirePropertyPlantAndEquipment",
             "PaymentsToAcquireProductiveAssets",
-            # IFRS filers (e.g. Celestica).
+            # IFRS filers (e.g. Celestica, TSMC).
             "PurchaseOfPropertyPlantAndEquipmentIntangibleAssetsOtherThanGoodwillInvestmentPropertyAndOtherNoncurrentAssets",
+            "PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",
+            "PurchaseOfPropertyPlantAndEquipment",
         ],
         "duration",
     ),
@@ -192,6 +200,9 @@ METRIC_CONCEPTS: dict[str, tuple[list[str], str]] = {
             # Common balance-sheet line for companies that fold leases in,
             # and the tag Estee Lauder actually uses (no LongTermDebt tag).
             "LongTermDebtAndCapitalLeaseObligations",
+            # IFRS filers: total borrowings due after a year (parts below).
+            "NoncurrentPortionOfNoncurrentBorrowings",
+            "NoncurrentBorrowings",
         ],
         "instant",
     ),
@@ -208,6 +219,48 @@ METRIC_CONCEPTS: dict[str, tuple[list[str], str]] = {
         "instant",
     ),
 }
+
+# A metric no single total covers: the sum of whichever parts the filer tags.
+# IFRS income statements by function split SG&A into distribution (selling)
+# and administrative costs; some US filers split it the same way.
+COMPONENT_METRICS: dict[str, list[list[str]]] = {
+    "SellingGeneralAndAdministrativeExpense": [
+        ["SellingAndMarketingExpense", "SellingExpense", "DistributionCosts", "SellingAndDistributionExpense"],
+        ["GeneralAndAdministrativeExpense", "AdministrativeExpense"],
+    ],
+    # Filers without a total: bonds or notes, plus loans, plus secured debt
+    # (TSMC: bonds and bank loans; Realty Income: notes, term loans, mortgages).
+    "LongTermDebt": [
+        ["NoncurrentPortionOfNoncurrentBondsIssued", "BondsIssued", "SeniorNotes", "SeniorLongTermNotes",
+         "NotesPayable", "UnsecuredDebt"],
+        ["LongtermBorrowings", "NoncurrentPortionOfNoncurrentLoansReceived",
+         "NoncurrentPortionOfNoncurrentBankLoansReceived", "LongTermLoansFromBank", "LoansPayable"],
+        ["SecuredDebt"],
+        ["ConvertibleDebtNoncurrent", "ConvertibleNotesPayable"],
+    ],
+}
+
+# Foreign filers list American Depositary Shares, which can stand for several
+# ordinary shares (TSMC: 5) or a fraction of one; prices are per ADS.
+ADS_TEXT_RE = re.compile(
+    r"each\s+(?:ADS\s+)?represent\w*\s+(?:the\s+right\s+to\s+receive\s+)?(?P<n>[\w./-]+)\s+(?:[\w-]+\s+){0,3}?shares?",
+    re.IGNORECASE,
+)
+ADS_MEMBER_RE = re.compile(r"AmericanDeposit[ao]r|AdrMember|\bADS", re.IGNORECASE)
+# American Depositary Shares/Receipts, not the depositary shares of a preferred
+# stock that many US banks list (JPM: "each representing a one-four hundredth
+# interest in a share of preferred stock").
+ADR_TITLE_RE = re.compile(r"american\s+deposit[ao]ry", re.IGNORECASE)
+NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+    "ten": 10, "twelve": 12, "fifteen": 15, "twenty": 20, "twenty-five": 25, "thirty": 30, "forty": 40,
+    "fifty": 50, "hundred": 100, "one-half": 0.5, "half": 0.5, "one-third": 1 / 3, "one-fourth": 0.25,
+    "one-quarter": 0.25, "one-fifth": 0.2, "one-tenth": 0.1,
+}
+EPS_CONCEPTS = [
+    "ifrs-full:BasicEarningsLossPerShare", "us-gaap:EarningsPerShareBasic",
+    "ifrs-full:DilutedEarningsLossPerShare", "us-gaap:EarningsPerShareDiluted",
+]
 
 # Chart-friendly display labels.
 LABELS = {
@@ -263,6 +316,7 @@ def extract_metric(
     period_of_report: str,
     period_type: str,
     statement_values: dict[str, float] | None = None,
+    currency: str | None = None,
 ) -> float:
     """Return the value for the first matching concept, else nan.
 
@@ -280,15 +334,18 @@ def extract_metric(
     the value on the balance-sheet date closest to the report date is used.
     When a concept has no dimension-free fact, a scenario-only fact (successor/
     predecessor reporting basis) is accepted as the consolidated value.
+    Facts in another currency than ``currency`` are ignored: foreign filers
+    such as TSMC add a USD convenience translation of the current year.
     """
     target = pd.Timestamp(period_of_report)
     is_dimensional = facts["is_dimensioned"].astype(bool)
     dimension = facts["dimension"] if "dimension" in facts.columns else pd.Series(pd.NA, index=facts.index)
     scenario_only = dimension == SCENARIO_AXIS
     concept_name = facts["concept"].str.split(":").str[-1]
+    in_currency = _in_currency(facts, currency)
 
     def pick(mask: pd.Series):
-        sub = facts[mask & (concept_name == concept)].copy()
+        sub = facts[mask & in_currency & (concept_name == concept)].copy()
         if sub.empty:
             return np.nan
         sub["period_start"] = pd.to_datetime(sub["period_start"], errors="coerce")
@@ -335,6 +392,118 @@ def extract_metric(
     return np.nan
 
 
+def _in_currency(facts: pd.DataFrame, currency: str | None) -> pd.Series:
+    """True for facts without a currency (shares, ratios) or in ``currency``."""
+    if not currency or "currency" not in facts.columns:
+        return pd.Series(True, index=facts.index)
+    return facts["currency"].isna() | (facts["currency"].astype(str).str.upper() == currency)
+
+
+def reporting_currency(facts: pd.DataFrame) -> str | None:
+    """The currency most of a filing's money facts are in (per-share units aside)."""
+    if "currency" not in facts.columns:
+        return None
+    unit = facts["unit_ref"].astype(str).str.lower() if "unit_ref" in facts.columns else pd.Series("", index=facts.index)
+    money = facts["currency"].notna() & ~unit.str.contains("per", regex=False)
+    counts = facts.loc[money, "currency"].astype(str).str.upper().value_counts()
+    return str(counts.index[0]) if len(counts) else None
+
+
+def _ratio_number(text: str) -> float | None:
+    text = text.lower().strip(".,")
+    if text in NUMBER_WORDS:
+        return float(NUMBER_WORDS[text])
+    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+        return float(text)
+    fraction = re.fullmatch(r"(\d+)/(\d+)", text)
+    if fraction and int(fraction.group(2)):
+        return int(fraction.group(1)) / int(fraction.group(2))
+    return None
+
+
+def ads_ratio(facts: pd.DataFrame, currency: str | None) -> tuple[float | None, str, bool]:
+    """Ordinary shares per ADS, where it came from, and whether ADSs are listed.
+
+    The cover page often says it ("American Depositary Shares, each
+    representing five ordinary shares"); else earnings per ADS over earnings
+    per ordinary share in the same currency and year (TSMC tags both). Neither:
+    ``(None, "", is_adr)``, and valuation tries Yahoo.
+    """
+    import valuation
+
+    titles = facts.loc[facts["concept"] == "dei:Security12bTitle", "value"].dropna().astype(str)
+    titles = titles[titles.str.contains(ADR_TITLE_RE)]
+    members = facts["member"].dropna().astype(str) if "member" in facts.columns else pd.Series(dtype=str)
+    # Shell spells its member "AmericanDepositorySharesMember".
+    is_adr = bool(len(titles) or members.str.contains(r"AdrMember|AmericanDeposit[ao]ry").any())
+    for title in titles:
+        match = ADS_TEXT_RE.search(title)
+        if match:
+            number = _ratio_number(match.group("n"))
+            ratio = valuation.snap_ratio(number) if number else None
+            if ratio:
+                return ratio, "cover", True
+    numbers = pd.to_numeric(facts["numeric_value"], errors="coerce")
+    in_currency = _in_currency(facts, currency)
+    member = facts["member"].astype(str) if "member" in facts.columns else pd.Series("", index=facts.index)
+    for concept in EPS_CONCEPTS:
+        rows = facts[(facts["concept"] == concept) & in_currency & numbers.notna()]
+        if rows.empty:
+            continue
+        plain = rows[~rows["is_dimensioned"].astype(bool)]
+        ads = rows[rows["is_dimensioned"].astype(bool) & member.loc[rows.index].str.contains(ADS_MEMBER_RE)]
+        for _, row in ads.iterrows():
+            same = plain[plain["period_end"] == row["period_end"]]
+            if same.empty:
+                continue
+            base = float(pd.to_numeric(same.iloc[0]["numeric_value"]))
+            if base:
+                ratio = valuation.snap_ratio(float(row["numeric_value"]) / base)
+                if ratio:
+                    return ratio, "eps", True
+    return None, "", is_adr
+
+
+def _component_metric(
+    facts: pd.DataFrame,
+    groups: list[list[str]],
+    period_of_report: str,
+    period_type: str,
+    statement_values: dict[str, float],
+    currency: str | None,
+) -> float:
+    """Sum of the first concept with a value in each group; nan when none has one."""
+    parts = [extract_metric(facts, group, period_of_report, period_type, statement_values, currency)
+             for group in groups]
+    found = [part for part in parts if pd.notna(part)]
+    return float(sum(found)) if found else np.nan
+
+
+# A company-specific capex line: its tag names PP&E (or capital expenditure)
+# and a purchase (Toyota's "PurchaseOfPropertyPlantAndEquipmentExcluding...",
+# Shell's "CashOutflowForTotalCashCapitalExpenditure").
+CAPEX_ASSET_RE = re.compile(r"PropertyPlant|PropertyAndEquipment|FixedAssets|CapitalExpenditure", re.IGNORECASE)
+CAPEX_ACTION_RE = re.compile(r"Purchase|Payment|Acquire|Acquisition|Addition|Expenditure|Outflow", re.IGNORECASE)
+
+
+def _capex_line(statement_rows: list[dict]) -> float:
+    """Capex from the one investing line that is clearly it, else nan.
+
+    Only direct parts of the investing-activities total count, and only when
+    exactly one matches: NextEra lists capex per subsidiary, and taking one of
+    them would understate the total.
+    """
+    found: dict[str, float] = {}
+    for row in statement_rows:
+        name = _concept_name(str(row.get("concept") or ""))
+        parent = str(row.get("parent_concept") or "")
+        if (row.get("statement") == "cashflow" and "InvestingActivities" in parent
+                and CAPEX_ASSET_RE.search(name) and CAPEX_ACTION_RE.search(name)
+                and not re.search(r"Proceeds|Sale|Disposal", name)):
+            found.setdefault(name, abs(float(row["value"])))
+    return next(iter(found.values())) if len(found) == 1 else np.nan
+
+
 def _report_date(filing) -> str:
     """The filing's period end as ``YYYY-MM-DD``.
 
@@ -348,19 +517,23 @@ def _report_date(filing) -> str:
     return str(filing.period_of_report or "")
 
 
-def build_dataset(ticker: str, n_filings: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def build_dataset(ticker: str, n_filings: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Fetch the last ``n_filings`` annual filings and assemble the datasets.
 
     Supports 10-K (US domestic), 20-F and 40-F (foreign private issuers) so
     tickers such as Celestica (CLS) get their full available history.
 
-    Returns ``(ratios, statements, facts)``:
-    - ``ratios`` — the wide per-year summary used by the ratio charts.
+    Returns ``(ratios, statements, facts, checks)``:
+    - ``ratios`` — the wide per-year summary used by the ratio charts, with the
+      reporting ``currency`` and, for ADS listings, ``ads_ratio``.
     - ``statements`` — long-form, every dimension-free primary-statement line.
     - ``facts`` — long-form, every fact for the period, dimensions included.
+    - ``checks`` — the calculation-linkbase check, one row per total.
     """
+    print(f"[*] Looking up {ticker} on SEC EDGAR")
     company = Company(ticker)
     print(f"[+] Company: {company.name} (CIK {company.cik})")
+    print("[*] Listing annual filings (10-K, 20-F, 40-F)")
 
     # Pull annual filings for US (10-K) and foreign (20-F / 40-F) filers, then
     # merge, deduplicate by accession and keep the most recent ``n_filings``.
@@ -392,13 +565,17 @@ def build_dataset(ticker: str, n_filings: int) -> tuple[pd.DataFrame, pd.DataFra
         period_filings.append((period, filing))
     period_filings.sort(key=lambda item: item[0], reverse=True)
     filings = [filing for _, filing in period_filings[:n_filings]]
+    forms = ", ".join(f"{sum(f.form == form for f in all_filings)} {form}" for form in annual_forms
+                      if any(f.form == form for f in all_filings))
+    print(f"[+] Found {len(all_filings)} annual filings ({forms or 'none'}); reading the newest {len(filings)}")
 
     records: list[dict] = []
     statement_records: list[dict] = []
     fact_records: list[dict] = []
+    check_records: list[dict] = []
     seen_periods: set[str] = set()
 
-    for filing in filings:
+    for position, filing in enumerate(filings, 1):
         if len(records) >= n_filings:
             break
         accession = None
@@ -421,6 +598,9 @@ def build_dataset(ticker: str, n_filings: int) -> tuple[pd.DataFrame, pd.DataFra
                 continue
 
             accession = filing.accession_no
+            print(f"[*] Filing {position}/{len(filings)}: {filing.form} for the year ended {period_key}, "
+                  f"downloading and parsing its XBRL ({accession})")
+            started = time.monotonic()
             xbrl = filing.xbrl()
             if xbrl is None:
                 print(f"    [!] {period_key} ({accession}): no XBRL; skipping")
@@ -439,16 +619,33 @@ def build_dataset(ticker: str, n_filings: int) -> tuple[pd.DataFrame, pd.DataFra
             else:
                 fiscal_year = int(period_key[:4])
 
-            row: dict = {"period_of_report": period_key, "fiscal_year": fiscal_year}
+            currency = reporting_currency(facts)
+            ratio, ratio_source, is_adr = ads_ratio(facts, currency)
+            row: dict = {"period_of_report": period_key, "fiscal_year": fiscal_year,
+                         "form": filing.form, "currency": currency or "USD",
+                         "ads": is_adr, "ads_ratio": ratio, "ads_ratio_source": ratio_source}
             # Statement rows are also the fallback source for metrics a filer
             # renders but never tags as a consolidated fact.
-            statement_rows = xbrl_extract.extract_statements(xbrl, period_key)
+            statement_rows = xbrl_extract.extract_statements(
+                xbrl, period_key, calc_check.period_values(facts, period_key, currency),
+                calc_check.convenience_values(facts, period_key, currency))
             statement_values = _statement_values(statement_rows)
             for metric, (concepts, period_type) in METRIC_CONCEPTS.items():
                 row[metric] = extract_metric(
-                    facts, concepts, period_of_report, period_type, statement_values
+                    facts, concepts, period_of_report, period_type, statement_values, currency
                 )
+            for metric, groups in COMPONENT_METRICS.items():
+                if pd.isna(row[metric]):
+                    row[metric] = _component_metric(facts, groups, period_of_report,
+                                                    METRIC_CONCEPTS[metric][1], statement_values, currency)
+            if pd.isna(row["CapEx"]):
+                row["CapEx"] = _capex_line(statement_rows)
             filing_facts = xbrl_extract.extract_facts(xbrl, period_key)
+            try:
+                filing_checks = calc_check.check_filing(xbrl, facts, period_key, currency)
+            except Exception as exc:  # noqa: BLE001 - the check never costs the filing
+                print(f"    [!] {period_key}: calculation check skipped ({exc.__class__.__name__}: {exc})")
+                filing_checks = []
         except Exception as exc:  # noqa: BLE001 - skip unparseable filings
             ident = accession or getattr(filing, "accession_no", "?")
             print(f"    [!] {ident}: unreadable ({exc.__class__.__name__}: {exc}); skipping")
@@ -457,8 +654,13 @@ def build_dataset(ticker: str, n_filings: int) -> tuple[pd.DataFrame, pd.DataFra
         records.append(row)
         statement_records.extend(statement_rows)
         fact_records.extend(filing_facts)
+        check_records.extend(filing_checks)
         seen_periods.add(period_key)
-        print(f"    [+] FY{fiscal_year} (period end {period_key}): extracted {accession}")
+        money = "" if row["currency"] == "USD" else f", {row['currency']}"
+        adds_up = sum(check["status"] == calc_check.STATUS_OK for check in filing_checks)
+        print(f"    [+] FY{fiscal_year} (period end {period_key}): extracted {accession} ({filing.form}{money}) "
+              f"in {time.monotonic() - started:.0f} s; {len(statement_rows)} statement lines, "
+              f"{adds_up}/{len(filing_checks)} linkbase totals add up")
 
     if not records:
         raise RuntimeError(
@@ -491,8 +693,11 @@ def build_dataset(ticker: str, n_filings: int) -> tuple[pd.DataFrame, pd.DataFra
     facts = pd.DataFrame(fact_records)
     if not facts.empty:
         facts["fiscal_year"] = facts["period_of_report"].map(year_by_period)
+    checks = pd.DataFrame(check_records)
+    if not checks.empty:
+        checks.insert(0, "fiscal_year", checks["period_of_report"].map(year_by_period))
 
-    return df, statements, facts
+    return df, statements, facts, checks
 
 
 # --------------------------------------------------------------------------- #
@@ -554,6 +759,22 @@ def _safe_div(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
 # Entry point
 # --------------------------------------------------------------------------- #
 
+def _write_checks(checks: pd.DataFrame) -> None:
+    """``calc_check.csv`` and a one-line verdict in the log."""
+    path = os.path.join(OUTPUT_DIR, "calc_check.csv")
+    if checks.empty:
+        if os.path.exists(path):
+            os.remove(path)
+        print("[!] Calculation check: no calculation linkbase in these filings")
+        return
+    checks.to_csv(path, index=False)
+    counts = calc_check.summary(checks)
+    statements, notes = counts["statement"], counts["note"]
+    print(f"[+] Calculation check ({counts['filings']} filings, calc_check.csv): statements "
+          f"{statements['ok']}/{statements['totals']} totals add up, {statements['mismatch']} do not, "
+          f"{statements['incomplete']} have untagged parts; notes {notes['ok']}/{notes['totals']}")
+
+
 def print_summary(df: pd.DataFrame) -> None:
     display_cols = [
         "fiscal_year", "Revenues", "NetIncomeLoss", "GrossMargin",
@@ -570,7 +791,8 @@ def print_summary(df: pd.DataFrame) -> None:
     summary["DebtToEquity"] = summary["DebtToEquity"].round(2)
 
     print("\n" + "=" * 100)
-    print(f"{TICKER} financial summary (USD millions; margins in %)")
+    currency = str(df["currency"].iloc[-1]) if "currency" in df.columns and len(df) else "USD"
+    print(f"{TICKER} financial summary ({currency} millions; margins in %)")
     print("=" * 100)
     print(summary.to_string(index=False))
     print("=" * 100 + "\n")
@@ -591,6 +813,7 @@ def _start_insiders(ticker: str, output_dir: str) -> tuple[threading.Thread, dic
         except Exception as exc:  # noqa: BLE001 - optional artifact must never abort
             result["error"] = exc
 
+    print("[*] Insider trades: reading Form 4 filings in the background")
     thread = threading.Thread(target=work, name="insiders", daemon=True)
     thread.start()
     return thread, result
@@ -599,6 +822,8 @@ def _start_insiders(ticker: str, output_dir: str) -> tuple[threading.Thread, dic
 def _report_insiders(started: tuple[threading.Thread, dict]) -> None:
     """Wait for the background insider step and print its outcome."""
     thread, result = started
+    if thread.is_alive():
+        print("[*] Waiting for the insider trades (Form 4 filings) to finish")
     thread.join()
     if "error" in result:
         exc = result["error"]
@@ -620,8 +845,36 @@ def _report_insiders(started: tuple[threading.Thread, dict]) -> None:
         print(f"[+] Wrote insider transactions ({trades} trades)")
 
 
+class _Stamped:
+    """A stream that starts every line with the time, so the log shows where a run spends it."""
+
+    def __init__(self, stream):
+        self._stream = stream
+        self._lock = threading.Lock()
+        self._at_line_start = True
+
+    def write(self, text: str) -> int:
+        with self._lock:
+            out = []
+            for piece in text.splitlines(keepends=True):
+                if self._at_line_start and piece.strip():
+                    out.append(time.strftime("%H:%M:%S "))
+                out.append(piece)
+                self._at_line_start = piece.endswith("\n")
+            self._stream.write("".join(out))
+            self._stream.flush()
+        return len(text)
+
+    def flush(self) -> None:
+        self._stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
 def main() -> None:
     global OUTPUT_DIR, DATA_CSV, TICKER
+    sys.stdout, sys.stderr = _Stamped(sys.stdout), _Stamped(sys.stderr)
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ticker", required=True, help="Ticker symbol")
@@ -652,8 +905,8 @@ def main() -> None:
     # run while the 10-Ks are fetched instead of after them.
     insiders = _start_insiders(TICKER, OUTPUT_DIR)
 
-    print(f"[*] Extracting {args.ticker} data from the last {args.filings} 10-K filings")
-    raw, statements, facts = build_dataset(TICKER, args.filings)
+    print(f"[*] Extracting {TICKER} data from the last {args.filings} annual filings")
+    raw, statements, facts, checks = build_dataset(TICKER, args.filings)
     df = clean_and_derive(raw)
 
     df.to_csv(DATA_CSV, index=False)
@@ -670,6 +923,7 @@ def main() -> None:
             notes.to_csv(os.path.join(OUTPUT_DIR, "notes.csv"), index=False)
         print(f"[+] Wrote {len(facts)} facts and {len(notes)} note rows")
 
+    _write_checks(checks)
     print_summary(df)
 
     # Optional valuation artifacts: price history vs. reported fundamentals.
@@ -677,8 +931,14 @@ def main() -> None:
     try:
         import valuation
 
+        print("[*] Valuation: fetching the monthly price history (Yahoo Finance)")
         history = valuation.fetch_price_history(TICKER)
-        evaluation = valuation.build_evaluation(TICKER, df, statements, facts, history)
+        # Foreign filers: the quote is in USD per ADS, the filings in their own currency.
+        scale, price_currency, note = valuation.market_scale(TICKER, df, facts, statements)
+        if note:
+            print(f"[*] Valuation: {note}")
+        evaluation = valuation.build_evaluation(TICKER, df, statements, facts, history,
+                                                price_scale=scale, price_currency=price_currency)
         if evaluation.empty:
             print("[!] valuation skipped: no price history")
         else:
@@ -697,7 +957,7 @@ def main() -> None:
 
     # charts.json only: the page draws it, and PNGs are drawn when downloaded.
     print("[*] Building charts")
-    rendered = charts.render_all(TICKER, OUTPUT_DIR, df, statements, facts)
+    rendered = charts.render_all(TICKER, OUTPUT_DIR, df, statements, facts, log=print)
     print(f"    [+] {len(rendered)} charts written to charts.json")
 
     print(f"\n[+] Done. {len(rendered)} charts and CSV data written to '{os.path.abspath(OUTPUT_DIR)}/'.")

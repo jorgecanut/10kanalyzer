@@ -371,15 +371,31 @@
   .graph-progress.is-error { color:var(--badge-error-fg); white-space:pre-wrap; }
   .panel-btn[hidden] { display:none; }
 
-  /* Log block: its own background and a rule under it, apart from the index. */
-  .term-wrap { background:var(--bg); border-bottom:1px solid var(--line-strong); }
-  .term-label { padding:10px 18px 0; font-size:calc(var(--fs) * 20); font-weight:700; color:var(--heading); }
   /* Terminal body: same panel chrome, monospace log. */
   .term-body { max-height:360px; overflow:auto;
                font:calc(var(--fs) * 17)/1.7 var(--mono); color:var(--text); }
   .term-log { margin:0; font:inherit; color:inherit; white-space:pre-wrap; word-break:break-word; }
   .term-dim { color:var(--muted); }
   .term-ok { color:var(--green); }
+  .term-warn { color:var(--badge-error-fg); }
+  /* Logs tab: the run log in its own box, then the page's requests. */
+  .logs-h { margin:6px 0 4px; font-size:calc(var(--fs) * 20); font-weight:700; color:var(--heading); }
+  .logs-h + .muted { margin:0 0 10px; }
+  .logs-term { max-height:min(62vh, 640px); padding:12px 14px; margin-bottom:22px; background:var(--bg);
+               border:1px solid var(--line); border-radius:var(--radius); font-size:calc(var(--fs) * 15); }
+  .activity { list-style:none; margin:0; padding:0; font-size:calc(var(--fs) * 15); }
+  .activity li { display:flex; align-items:baseline; gap:6px 14px; flex-wrap:wrap; padding:6px 2px;
+                 border-bottom:1px solid var(--line-soft); }
+  .activity li:last-child { border-bottom:0; }
+  .activity time { color:var(--muted); font-variant-numeric:tabular-nums; }
+  .act-text { flex:1; min-width:200px; }
+  .act-state { color:var(--muted); font-size:calc(var(--fs) * 14); white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .act-state.busy { color:var(--badge-running-fg); }
+  .act-state.ok { color:var(--green); }
+  .act-state.bad { color:var(--badge-error-fg); }
+  a.badge-link { text-decoration:none; cursor:pointer; }
+  .tabs button[hidden] { display:none; }   /* the Logs tab, when Options hides it */
+  .graph-progress a { margin-left:6px; white-space:nowrap; }
   @media (max-width:600px) {
     .term-body { font-size:calc(var(--fs) * 16); }
     header { padding:10px 14px; }
@@ -567,6 +583,17 @@
                            border-radius:50%; background:var(--c); }
   .ec-swatch.dash { background:repeating-linear-gradient(90deg, var(--c) 0 4px, transparent 4px 7px); }
   .ec-canvas { width:100%; }
+  /* One year back / forward, either side of the years slider. */
+  .ec-wrap { position:relative; }
+  .ec-step { position:absolute; bottom:10px; display:flex; align-items:center; justify-content:center;
+             width:28px; height:24px; padding:0; border:1px solid var(--line); border-radius:var(--radius-sm);
+             background:var(--surface); color:var(--muted); cursor:pointer; }
+  .ec-step[hidden] { display:none; }
+  .ec-step.prev { left:6px; }
+  .ec-step.next { right:6px; }
+  .ec-step:hover:not(:disabled) { color:var(--text); border-color:var(--line-strong); }
+  .ec-step:disabled { opacity:.35; cursor:default; }
+  .ec-step svg { width:16px; height:16px; display:block; }
   .ec-empty, .ec-note { margin:8px 0 0; text-align:center; color:var(--muted); font-size:calc(var(--fs) * 15); }
   .ec-empty { padding:60px 0; }
   .grid .ec-fig { padding:12px 12px 8px; }
@@ -608,6 +635,36 @@
   table.fact-table th, table.fact-table td { text-align:right; }
   table.fact-table th:first-child, table.fact-table td:first-child { text-align:right; }
   table.fact-table .is-year { background:var(--accent-soft); color:var(--text); font-weight:700; }
+
+  /* Calculation check, under the chart index. */
+  #calc-checks:empty { display:none; }
+  .checks { margin-top:14px; padding-top:12px; border-top:1px solid var(--line-soft); }
+  .checks > summary, .ck-notes > summary { cursor:pointer; list-style-position:outside; }
+  .checks > summary { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 12px; }
+  .checks-title { font-size:calc(var(--fs) * 20); font-weight:700; color:var(--heading); }
+  .checks-sum { color:var(--muted); font-size:calc(var(--fs) * 15); }
+  .checks-sum.has-issues { color:var(--badge-queued-fg); }
+  .checks .opt-hint { margin:10px 0 6px; }
+  .ck-head { margin:12px 0 4px; font-size:calc(var(--fs) * 16); }
+  .ck-list { list-style:none; margin:0; padding:0; }
+  .ck-list > li { border-bottom:1px solid var(--line-soft); }
+  .ck-list > li:last-child { border-bottom:0; }
+  .ck-list summary { display:flex; align-items:baseline; gap:4px 12px; flex-wrap:wrap; padding:7px 4px; cursor:pointer;
+                     font-size:calc(var(--fs) * 15); border-radius:var(--radius-sm); }
+  .ck-list summary:hover { background:var(--hover); }
+  .ck-year { color:var(--muted); font-variant-numeric:tabular-nums; }
+  .ck-label { font-weight:600; }
+  .ck-where { flex:1; min-width:140px; color:var(--muted); font-size:calc(var(--fs) * 14); }
+  .ck-badge { padding:1px 8px; border-radius:999px; font-size:calc(var(--fs) * 13); white-space:nowrap; }
+  .ck-badge.mismatch { background:var(--badge-queued-bg); color:var(--badge-queued-fg); }
+  .ck-badge.incomplete { background:var(--badge-idle-bg); color:var(--badge-idle-fg); }
+  table.ck-table { margin:2px 0 10px; }
+  table.ck-table td:first-child { width:1.5em; text-align:center; color:var(--muted); }
+  table.ck-table td:nth-child(2) { text-align:left; white-space:normal; }
+  table.ck-table tr.ck-sum td { font-weight:700; border-bottom:0; }
+  table.ck-table tr.muted td { color:var(--muted); }
+  .ck-notes { margin-top:10px; }
+  .ck-notes > summary { color:var(--muted); font-size:calc(var(--fs) * 15); padding:4px 0; }
 
   /* Download dialog: what goes in the zip. */
   .opt.dl { width:min(660px, 100%); height:auto; max-height:min(720px, calc(100vh - 32px)); }
@@ -769,6 +826,7 @@
         <button id="tab-screener" onclick="showTab('screener')">Screener</button>
         <button id="tab-simulation" onclick="showTab('simulation')">Simulation</button>
         <button id="tab-news" onclick="showTab('news')">News</button>
+        <button id="tab-logs" onclick="showTab('logs')" hidden>Logs</button>
       </nav>
       <button id="tab-recent" class="tab-icon nav-btn" onclick="showTab('recent')"
               title="Recent runs" aria-label="Recent runs">
@@ -835,6 +893,10 @@
             </div>
           </div>
           <div class="home-block">
+            <h3>Charts</h3>
+            <div id="home-charts" class="home-charts"></div>
+          </div>
+          <div class="home-block">
             <h3>Market news</h3>
             <p class="sim-meta" id="home-news-status"></p>
             <ol id="home-news" class="news-list"></ol>
@@ -845,10 +907,6 @@
             <p class="sim-meta" id="home-insider-status"></p>
             <div id="home-insiders" class="insider-list"></div>
             <a href="#insiders" class="home-more" onclick="showTab('insiders');return false">All insider trades</a>
-          </div>
-          <div class="home-block">
-            <h3>Charts</h3>
-            <div id="home-charts" class="home-charts"></div>
           </div>
         </div>
       </div>
@@ -874,16 +932,6 @@
           </span>
           <span class="head-sep" id="view-sep" hidden></span>
           <span id="graph-state"></span>
-          <button class="panel-btn icon-btn" id="graph-log-btn" hidden onclick="toggleLog()"
-                  title="Show log" aria-label="Show log" aria-pressed="false">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
-                <rect x="3" y="4.5" width="18" height="15" rx="2.5" fill="currentColor" opacity=".2" stroke="none" />
-                <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
-                <path d="M7 9.5l3 2.5l-3 2.5M12.5 15H17" />
-              </g>
-            </svg>
-          </button>
           <button class="panel-btn icon-btn" id="graph-download-btn" hidden onclick="downloadGraph()"
                   title="Download charts and data (.zip)" aria-label="Download charts and data">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -898,13 +946,6 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh" /></svg>
           </button>
         </span>
-      </div>
-      <!-- The log sits above the chart index, closed until the log button opens it. -->
-      <div class="term-wrap hidden" id="term-wrap">
-        <div class="term-label">Log</div>
-        <div class="panel-body term-body" id="term-body">
-          <pre id="term-log" class="term-log" role="log" aria-live="polite"></pre>
-        </div>
       </div>
       <div class="panel-body" id="graph-body">
         <p class="muted" id="graph-empty">No ticker yet. Enter one above and press Run; its charts
@@ -928,6 +969,7 @@
         <p class="cs-status" id="cs-status" role="status"></p>
         <div id="fact-card"></div>
         <div id="chart-index" class="chart-index"></div>
+        <div id="calc-checks"></div>
       </div>
     </section>
     <div id="results-graph"></div>
@@ -1001,6 +1043,35 @@
   </section>
 
   <!-- Recent tab -->
+  <!-- Logs tab: a run's whole log, then what this page asked the server for. -->
+  <section id="pane-logs" class="hidden">
+    <section class="panel">
+      <div class="panel-head">
+        <span class="panel-title">Logs</span>
+        <span class="panel-actions">
+          <select id="logs-run" aria-label="Run" title="Whose log" onchange="setLogsTicker(this.value)"></select>
+          <span id="logs-state"></span>
+          <button class="panel-btn icon-btn" onclick="downloadLog()" title="Download this log" aria-label="Download this log">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download" /></svg>
+          </button>
+          <button class="panel-btn icon-btn" onclick="loadLogs()" title="Refresh" aria-label="Refresh">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh" /></svg>
+          </button>
+        </span>
+      </div>
+      <div class="panel-body">
+        <h3 class="logs-h">Run</h3>
+        <p class="muted" id="logs-meta"></p>
+        <div class="term-body logs-term" id="term-body">
+          <pre id="term-log" class="term-log" role="log" aria-live="polite"></pre>
+        </div>
+        <h3 class="logs-h">This page</h3>
+        <p class="muted">What the page asked the server for since it loaded, newest first, with the time each took.</p>
+        <ol id="activity-log" class="activity"></ol>
+      </div>
+    </section>
+  </section>
+
   <section id="pane-recent" class="hidden">
     <div class="panel">
       <div class="panel-head">
@@ -1213,6 +1284,15 @@
           <div class="opt-row" data-search="start open startup landing first default tab page">
             <label for="pref-tab">Tab on open</label>
             <select id="pref-tab" class="opt-select" onchange="setPref('tab', this.value)"></select>
+          </div>
+          <div class="opt-row" data-search="logs log tab status progress debug pipeline">
+            <span class="opt-label" id="pref-logs-label">Logs tab</span>
+            <p class="opt-hint">The full log of each run and what the page is loading. Hidden, it still opens from
+              a running badge or <code>/#logs</code>.</p>
+            <div class="seg" id="pref-logs" role="group" aria-labelledby="pref-logs-label">
+              <button data-value="on" onclick="setPref('logsTab', 'on')">Show</button>
+              <button data-value="off" onclick="setPref('logsTab', 'off')">Hide</button>
+            </div>
           </div>
           <div class="opt-row" data-search="tabs order arrange move sort reorder">
             <span class="opt-label">Tab order</span>
@@ -1432,9 +1512,14 @@ window.addEventListener('unhandledrejection', e =>
 {
   const nativeFetch = window.fetch.bind(window);
   window.fetch = async (url, options = {}) => {
+    const quiet = options.headers && options.headers['X-Quiet'];
+    const entry = quiet || typeof activityStart !== 'function' ? null : activityStart(url, options.method || 'GET');
     try {
-      return await nativeFetch(url, options);
+      const res = await nativeFetch(url, options);
+      activityEnd(entry, res.ok, res.ok ? '' : `HTTP ${res.status}`);
+      return res;
     } catch (err) {
+      activityEnd(entry, false, err.name === 'AbortError' ? 'cancelled' : 'no answer');
       if (err.name !== 'AbortError') reportDiag(`fetch failed: ${options.method || 'GET'} ${url}`, err.message);
       throw err;
     }
@@ -1475,7 +1560,7 @@ const TICKER_RE = /^[A-Z][A-Z0-9.\-]{0,9}$/;
 
 // The Charts tab shows one pinned ticker. It survives reloads and cancel, and
 // changes only when a single ticker is run or opened, or it is removed.
-const GRAPH = { ticker: '', state: '', log: false, results: null };
+const GRAPH = { ticker: '', state: '', results: null };
 let CHART_VIEW = 'full';
 try { CHART_VIEW = localStorage.getItem('stocky-chart-view') || 'full'; } catch {}
 try {
@@ -1488,9 +1573,9 @@ const LIVE = {};
 
 // Per-browser settings from Options. One JSON blob; bad values fall back.
 const TAB_NAMES = { home: 'Home', graph: 'Charts', insiders: 'Insiders', screener: 'Screener',
-                    simulation: 'Simulation', news: 'News' };
+                    simulation: 'Simulation', news: 'News', logs: 'Logs' };
 const PREF_DEFAULTS = {
-  tab: 'home', tabOrder: ['home', 'graph', 'insiders', 'screener', 'simulation', 'news'],
+  tab: 'home', tabOrder: ['home', 'graph', 'insiders', 'screener', 'simulation', 'news', 'logs'], logsTab: 'off',
   filings: '20', textSize: '1', date: 'dmy', number: 'en-US',
   insiderMonths: 12, simAmount: 1000, simYears: 4, simMode: 'cash', simRange: '1y',
   newsLimit: 20, newsDays: 14,
@@ -1499,13 +1584,15 @@ const PREF_CHOICES = {
   tab: Object.keys(TAB_NAMES), filings: ['3', '5', '10', '20'], textSize: ['0.88', '1', '1.12', '1.25'],
   date: ['dmy', 'mdy', 'ymd'], number: ['en-US', 'de-DE', 'fr-FR'], insiderMonths: [1, 3, 6, 12, 24, 36],
   simMode: ['cash', 'reinvest'], simRange: ['1mo', '4mo', '6mo', '1y', '3y', '5y', '10y', 'max'],
-  newsLimit: [20, 30, 40, 50], newsDays: [1, 7, 14, 30],
+  newsLimit: [20, 30, 40, 50], newsDays: [1, 7, 14, 30], logsTab: ['on', 'off'],
 };
 const PREFS = { ...PREF_DEFAULTS };
 try {
   const saved = JSON.parse(localStorage.getItem('stocky-prefs') || '{}');
   for (const [key, value] of Object.entries(saved)) {
     if (!(key in PREF_DEFAULTS)) continue;
+    // Orders saved before the Logs tab existed get it at the end.
+    if (key === 'tabOrder' && Array.isArray(value) && !value.includes('logs')) value.push('logs');
     if (PREF_CHOICES[key] && !PREF_CHOICES[key].includes(value)) continue;
     if (key === 'tabOrder' && !(Array.isArray(value) && value.length === PREF_DEFAULTS.tabOrder.length
         && PREF_DEFAULTS.tabOrder.every(tab => value.includes(tab)))) continue;
@@ -1527,9 +1614,10 @@ function applyPrefs(changed = '') {
     document.documentElement.style.setProperty('--fs', PREFS.textSize + 'px');
     if (SIM.data) renderSimulation();
   }
-  if (all || changed === 'tabOrder') {
+  if (all || changed === 'tabOrder' || changed === 'logsTab') {
     const strip = $('.tabs');
     for (const tab of PREFS.tabOrder) strip.appendChild($(`#tab-${tab}`));
+    $('#tab-logs').hidden = PREFS.logsTab !== 'on';
     syncTabFades();
   }
   if (all || changed === 'filings') $('#filings').value = PREFS.filings;
@@ -1554,10 +1642,13 @@ function applyPrefs(changed = '') {
 }
 
 function syncPrefControls() {
-  $('#pref-tab').innerHTML = PREFS.tabOrder.map(tab =>
+  const shownTabs = PREFS.tabOrder.filter(tab => tab !== 'logs' || PREFS.logsTab === 'on');
+  $('#pref-tab').innerHTML = shownTabs.map(tab =>
     `<option value="${tab}">${TAB_NAMES[tab]}</option>`).join('');
   $('#pref-tab').value = PREFS.tab;
-  $('#pref-order').innerHTML = PREFS.tabOrder.map((tab, i) => `<li><span>${TAB_NAMES[tab]}</span>
+  document.querySelectorAll('#pref-logs button').forEach(button =>
+    button.classList.toggle('active', button.dataset.value === PREFS.logsTab));
+  $('#pref-order').innerHTML = PREFS.tabOrder.map((tab, i) => `<li${tab === 'logs' && PREFS.logsTab !== 'on' ? ' class="muted"' : ''}><span>${TAB_NAMES[tab]}</span>
       <button onclick="moveTab(${i}, -1)" ${i ? '' : 'disabled'} title="Move up" aria-label="Move ${TAB_NAMES[tab]} earlier">↑</button>
       <button onclick="moveTab(${i}, 1)" ${i < PREFS.tabOrder.length - 1 ? '' : 'disabled'} title="Move down" aria-label="Move ${TAB_NAMES[tab]} later">↓</button></li>`).join('');
   $('#pref-filings').value = PREFS.filings;
@@ -1692,7 +1783,6 @@ function resetUi() {
   suggestTickers();
   showTab(PREFS.tab, { history: 'replace' });
   // The pinned graph is kept; re-read its state now that the jobs are gone.
-  GRAPH.log = false;
   renderGraph();
   refreshGraph();
   window.scrollTo({ top: 0, behavior: 'auto' });
@@ -2058,14 +2148,140 @@ function suggestTickers() {
   $('#ticker').placeholder = `Try ${pool.slice(0, 4).join(', ')}`;
 }
 
-/* Terminal ---------------------------------------------------------------- */
+/* Logs tab ------------------------------------------------------------------ */
+// Optional (Options → General), hidden by default; /#logs and the live status
+// badges open it anyway. Two parts: the whole log of one run, timestamped and
+// polled while it runs, and what this page itself asked the server for.
+const LOGS = { ticker: '', timer: null, text: '' };
+const ACTIVITY = [];
+const logsTicker = () => LOGS.ticker || ACTIVE_TICKER || GRAPH.ticker;
 
-function setTermLog(text) {
-  const log = $('#term-log');
-  if (log.textContent === text) return;
-  log.textContent = text;
+// The run log, coloured: the time dim, successes green, warnings red. The
+// view follows the end unless you scrolled up to read.
+function setTermLog(text, ticker = GRAPH.ticker) {
+  if (ticker !== logsTicker() || text === LOGS.text) return;
+  LOGS.text = text;
   const body = $('#term-body');
-  body.scrollTop = body.scrollHeight;
+  const atEnd = body.scrollTop + body.clientHeight >= body.scrollHeight - 40;
+  $('#term-log').innerHTML = String(text).split('\n').map(line => {
+    const match = line.match(/^(\d\d:\d\d:\d\d )?(.*)$/);
+    const rest = match[2];
+    const cls = /\[!\]|error|Traceback|failed/i.test(rest) ? 'term-warn' : /\[\+\]/.test(rest) ? 'term-ok' : '';
+    return (match[1] ? `<span class="term-dim">${match[1]}</span>` : '') + (cls ? `<span class="${cls}">${esc(rest)}</span>` : esc(rest));
+  }).join('\n');
+  if (atEnd) body.scrollTop = body.scrollHeight;
+}
+
+function openLogs(ticker = '') {
+  if (ticker) LOGS.ticker = ticker;
+  showTab('logs');
+  window.scrollTo({ top: 0, behavior: 'auto' });
+}
+
+async function initLogs() {
+  if (!LOGS.ticker) LOGS.ticker = ACTIVE_TICKER || GRAPH.ticker;
+  renderActivity();
+  try {
+    const res = await fetch('/api/recent', { headers: { 'X-Quiet': '1' } });
+    const items = res.ok ? (await res.json()).items || [] : [];
+    const tickers = [...new Set([LOGS.ticker, ACTIVE_TICKER, GRAPH.ticker, ...items.map(item => item.ticker)].filter(Boolean))];
+    $('#logs-run').innerHTML = tickers.length
+      ? tickers.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('') : '<option value="">No runs yet</option>';
+    $('#logs-run').value = LOGS.ticker || '';
+  } catch { /* the log still loads */ }
+  loadLogs();
+}
+
+function setLogsTicker(ticker) {
+  LOGS.ticker = ticker;
+  LOGS.text = '';
+  $('#term-log').textContent = '';
+  loadLogs();
+}
+
+async function loadLogs() {
+  clearTimeout(LOGS.timer);
+  const ticker = logsTicker();
+  if (!ticker) {
+    $('#logs-meta').textContent = 'No run yet. Run a ticker and its log shows here.';
+    $('#logs-state').innerHTML = '';
+    return;
+  }
+  try {
+    const res = await fetch(`/api/status/${encodeURIComponent(ticker)}?full=1`, { headers: { 'X-Quiet': '1' } });
+    const job = await res.json();
+    if (ticker !== logsTicker()) return;
+    const live = job.status === 'queued' || job.status === 'running';
+    const cls = job.status === 'cancelled' ? 'idle' : job.status;
+    $('#logs-state').innerHTML = `<span class="badge ${esc(cls)}">${esc(job.status)}</span>`;
+    $('#logs-meta').textContent = live ? `${ticker}: the log updates as the run goes.`
+      : job.status === 'idle' ? `${ticker} has not been run yet.` : `${ticker}: the last run's log.`;
+    setTermLog(job.log || (job.status === 'queued' ? 'Waiting for the run before it to finish…' : ''), ticker);
+    if (job.error) setTermLog(`${job.log || ''}\nerror: ${job.error}`, ticker);
+    // Poll while it runs and the tab is open.
+    if (live && !$('#pane-logs').classList.contains('hidden')) LOGS.timer = setTimeout(loadLogs, 1500);
+  } catch {
+    $('#logs-meta').textContent = 'Could not reach the server.';
+  }
+}
+
+function downloadLog() {
+  const ticker = logsTicker();
+  if (ticker) location.href = `/download/${encodeURIComponent(ticker)}/run.log`;
+}
+
+// What the page asks the server for, in words, with how long it took.
+// Polling and bookkeeping requests are left out (and any sent with X-Quiet).
+const ACTIVITY_RULES = [
+  [/^\/api\/news\/([^/?]+)\?(?=.*scope=market)/, m => `Looking for market and sector news (${m[1]})`],
+  [/^\/api\/news\/([^/?]+)/, m => `Looking for news about ${m[1]} (Google News)`],
+  [/^\/api\/insiders\/([^/?]+)/, m => `Fetching the insider trades of ${m[1]}`],
+  [/^\/api\/charts\/([^/?]+)/, m => `Loading the chart data of ${m[1]}`],
+  [/^\/api\/facts\/([^/?]+)/, m => `Loading every fact of ${m[1]} for the search`],
+  [/^\/api\/checks\/([^/?]+)/, m => `Loading the calculation check of ${m[1]}`],
+  [/^\/api\/files\/([^/?]+)/, m => `Reading the run files of ${m[1]}`],
+  [/^\/api\/simulation\/([^/?]+)/, m => `Fetching the price history of ${m[1]} (Yahoo Finance)`],
+  [/^\/api\/fundamentals\/([^/?]+)/, m => `Reading the fundamentals of ${m[1]}`],
+  [/^\/api\/evaluation\/([^/?]+)/, m => `Reading the valuation of ${m[1]}`],
+  [/^\/api\/screener$/, (m, method) => method === 'POST' ? 'Queuing the screener runs' : 'Loading the screener'],
+  [/^\/api\/run$/, () => 'Starting a run'],
+  [/^\/api\/cancel$/, () => 'Cancelling the runs'],
+  [/^\/api\/recent$/, () => 'Listing your runs'],
+  [/^\/download\/([^/?]+)\/all\?(.*)/, m => /charts=[^&]/.test(m[2])
+    ? `Packing the download of ${m[1]}: drawing the chart PNGs (the first time takes a few seconds)`
+    : `Packing the download of ${m[1]}`],
+];
+
+function activityStart(url, method) {
+  const path = String(url).replace(location.origin, '');
+  for (const [pattern, describe] of ACTIVITY_RULES) {
+    const match = path.match(pattern);
+    if (!match) continue;
+    const entry = { at: new Date(), text: describe(match.map(part => decodeURIComponent(part || '')), method), ms: null, ok: null };
+    ACTIVITY.unshift(entry);
+    ACTIVITY.length = Math.min(ACTIVITY.length, 200);
+    renderActivity();
+    return entry;
+  }
+  return null;
+}
+
+function activityEnd(entry, ok, note = '') {
+  if (!entry) return;
+  entry.ms = Date.now() - entry.at.getTime();
+  entry.ok = ok;
+  entry.note = note;
+  renderActivity();
+}
+
+function renderActivity() {
+  if ($('#pane-logs').classList.contains('hidden')) return;
+  const time = date => date.toTimeString().slice(0, 8);
+  $('#activity-log').innerHTML = ACTIVITY.length ? ACTIVITY.map(entry => `<li>
+      <time>${time(entry.at)}</time><span class="act-text">${esc(entry.text)}</span>
+      <span class="act-state ${entry.ok === null ? 'busy' : entry.ok ? 'ok' : 'bad'}">${entry.ok === null ? 'working…'
+        : `${entry.ok ? 'done' : esc(entry.note || 'failed')} · ${(entry.ms / 1000).toFixed(1)} s`}</span></li>`).join('')
+    : '<li class="muted">Nothing yet. Open a tab or a ticker and its requests show here.</li>';
 }
 
 /* Charts tab --------------------------------------------------------------- */
@@ -2089,18 +2305,17 @@ function setGraph(ticker) {
 
 function renderGraph() {
   const { ticker, state } = GRAPH;
-  // The log stays closed unless the log button opens it; the progress line
-  // under the header shows the latest log line (or the error) instead.
+  // The log lives in the Logs tab; the progress line under the header shows
+  // its latest line (or the error) and links there.
   $('#graph-empty').classList.toggle('hidden', !!ticker);
-  for (const id of ['#graph-download-btn', '#graph-log-btn', '#graph-refresh-btn']) $(id).hidden = !ticker;
-  const logBtn = $('#graph-log-btn');
-  logBtn.title = GRAPH.log ? 'Hide log' : 'Show log';
-  logBtn.setAttribute('aria-label', logBtn.title);
-  logBtn.setAttribute('aria-pressed', String(!!GRAPH.log));
-  $('#term-wrap').classList.toggle('hidden', !(ticker && GRAPH.log));
+  for (const id of ['#graph-download-btn', '#graph-refresh-btn']) $(id).hidden = !ticker;
   const cls = state === 'cancelled' ? 'idle' : state;
+  const live = state === 'queued' || state === 'running';
+  // A live badge opens the run's log, like the one in the header.
   $('#graph-state').innerHTML = ticker && state && state !== 'done'
-    ? `<span class="badge ${esc(cls)}">${esc(state)}</span>` : '';
+    ? (live ? `<a class="badge ${esc(cls)} badge-link" href="#logs" title="Open the log"
+         onclick="openLogs('${esc(ticker)}');return false">${esc(state)}</a>`
+      : `<span class="badge ${esc(cls)}">${esc(state)}</span>`) : '';
   syncChartView();
   renderHome();
 }
@@ -2115,18 +2330,14 @@ function syncChartView() {
 
 function setGraphProgress(text, isError = false) {
   const line = $('#graph-progress');
-  line.textContent = text;
+  const link = text && GRAPH.ticker
+    ? ` <a href="#logs" onclick="openLogs('${esc(GRAPH.ticker)}');return false">Open the log</a>` : '';
+  line.innerHTML = text ? esc(text) + link : '';
   line.classList.toggle('is-error', isError);
 }
 
 function downloadGraph() {
   openDownload('graph');
-}
-
-function toggleLog() {
-  GRAPH.log = !GRAPH.log;
-  renderGraph();
-  if (GRAPH.log) { const body = $('#term-body'); body.scrollTop = body.scrollHeight; }
 }
 
 function openGraph(ticker) {
@@ -2197,7 +2408,7 @@ async function loadScreenerData() {
 /* Home -------------------------------------------------------------------- */
 
 // Overview of the pinned ticker: its numbers, where it sits in the screener
-// ranking, a few headlines and every chart as a thumbnail.
+// ranking, every chart as a thumbnail, then a few headlines and insider trades.
 const NEWS_TOPICS = { stock: 'Stock', sector: 'Sector', market: 'Market' };
 const HOME = { news: null, newsTicker: '', newsError: '', insiders: null, insiderTicker: '' };
 
@@ -2212,20 +2423,29 @@ function initHome(force = false) {
 }
 
 // The five most recent insider trades; '' data means none collected yet.
-async function loadHomeInsiders(ticker) {
+// Home and the run's results both ask on page load: a second call for the
+// same ticker while one is in flight shares it instead of fetching again.
+function loadHomeInsiders(ticker) {
+  if (HOME.insiderLoading && HOME.insiderLoading.ticker === ticker) return HOME.insiderLoading.done;
   HOME.insiderTicker = ticker;
   HOME.insiders = null;
   renderHome();
-  try {
-    const res = await fetch(`/api/insiders/${encodeURIComponent(ticker)}`);
-    const data = res.ok ? await res.json() : { transactions: [], missing: true };
-    if (ticker !== HOME.insiderTicker) return;
-    HOME.insiders = data;
-  } catch {
-    if (ticker !== HOME.insiderTicker) return;
-    HOME.insiders = { transactions: [], failed: true };
-  }
-  renderHome();
+  const done = (async () => {
+    try {
+      const res = await fetch(`/api/insiders/${encodeURIComponent(ticker)}`);
+      const data = res.ok ? await res.json() : { transactions: [], missing: true };
+      if (ticker !== HOME.insiderTicker) return;
+      HOME.insiders = data;
+    } catch {
+      if (ticker !== HOME.insiderTicker) return;
+      HOME.insiders = { transactions: [], failed: true };
+    } finally {
+      if (HOME.insiderLoading && HOME.insiderLoading.done === done) HOME.insiderLoading = null;
+    }
+    renderHome();
+  })();
+  HOME.insiderLoading = { ticker, done };
+  return done;
 }
 
 async function loadHomeNews(ticker, fresh = false) {
@@ -2269,7 +2489,7 @@ function renderHome() {
     $('#home-stats').innerHTML = '<p class="muted">No numbers yet; they appear when the run finishes.</p>';
   } else if (row.has_evaluation === false) {
     $('#home-stats').innerHTML = `<p class="muted">No valuation data for ${esc(ticker)}: usually Yahoo prices were
-      unreachable. Open the log in the Charts tab and look for <code>[!] valuation skipped</code>.</p>`;
+      unreachable. Open its log in the Logs tab and look for <code>[!] valuation skipped</code>.</p>`;
   } else {
     $('#home-stats').innerHTML = `<div class="home-stats">
       ${stat('FY', esc(row.fiscal_year ?? '—'), 'fiscal_year')}
@@ -2377,7 +2597,7 @@ function syncTabFades() {
 // The URL names the open tab and the pinned ticker (#charts/AAPL), so Back,
 // Forward, reload and bookmarks land where you were. The pane ids stay internal.
 const TAB_SLUGS = { home: 'home', graph: 'charts', insiders: 'insiders', recent: 'recent',
-                    screener: 'screener', simulation: 'simulation', news: 'news' };
+                    screener: 'screener', simulation: 'simulation', news: 'news', logs: 'logs' };
 
 function parseHash() {
   const [slug = '', raw = ''] = decodeURIComponent(location.hash.slice(1)).split('/');
@@ -2405,7 +2625,7 @@ window.addEventListener('popstate', () => {
 });
 
 function showTab(name, { history: mode = 'push' } = {}) {
-  for (const tab of ['home', 'graph', 'insiders', 'recent', 'screener', 'simulation', 'news']) {
+  for (const tab of ['home', 'graph', 'insiders', 'recent', 'screener', 'simulation', 'news', 'logs']) {
     const active = tab === name;
     $(`#pane-${tab}`).classList.toggle('hidden', !active);
     $(`#tab-${tab}`).classList.toggle('active', active);
@@ -2423,6 +2643,8 @@ function showTab(name, { history: mode = 'push' } = {}) {
   if (name === 'screener') loadScreener();
   if (name === 'simulation') initSimulation();
   if (name === 'news') initNews();
+  if (name === 'logs') initLogs();
+  else clearTimeout(LOGS.timer);
   syncHash(mode, name);
 }
 
@@ -2434,25 +2656,19 @@ function setStatus(text, cls) {
   if (cls === 'done') STATUS_TIMER = setTimeout(() => setStatus('idle', 'idle'), 10000);
   const live = cls === 'queued' || cls === 'running';
   const badge = live
-    ? `<span class="badge ${cls} badge-link" role="button" tabindex="0" title="Go to this run" onclick="gotoActive()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();gotoActive();}">${text}</span>`
+    ? `<span class="badge ${cls} badge-link" role="button" tabindex="0" title="Open the log of this run" onclick="gotoActive()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();gotoActive();}">${text}</span>`
     : `<span class="badge ${cls}">${text}</span>`;
   const status = $('#status');
   status.innerHTML = badge;
   status.dataset.ticker = live ? ACTIVE_TICKER : '';
 }
 
-// The pinned ticker's run lives in the Charts tab; anything else is a screener job.
+// A live badge opens the log of that run in the Logs tab, shown or not.
 function gotoActive() {
   const ticker = $('#status').dataset.ticker || ACTIVE_TICKER;
   if (!ticker) return;
   ACTIVE_TICKER = ticker;
-  if (ticker === GRAPH.ticker) {
-    showTab('graph');
-    refreshGraph();
-    window.scrollTo({ top: 0, behavior: SMOOTH });
-  } else {
-    showTab('screener');
-  }
+  openLogs(ticker);
 }
 
 async function runTicker(rawTicker, { fresh = false } = {}) {
@@ -2461,6 +2677,9 @@ async function runTicker(rawTicker, { fresh = false } = {}) {
   $('#ticker').value = ticker;
   LIVE[ticker] = 'queued';
   ACTIVE_TICKER = ticker;
+  // The Logs tab follows the new run.
+  LOGS.ticker = ticker;
+  LOGS.text = '';
   const filings = Number($('#filings').value);
   $('#run-btn').disabled = true;
   setGraph(ticker);
@@ -2578,6 +2797,7 @@ async function renderResults(data, target) {
   GRAPH.results = null;
   $('#chart-index').innerHTML = '';
   syncChartView();
+  $('#calc-checks').innerHTML = '';
   if (!data.charts.length) {
     disposeCharts($(target));
     $('#chart-search').hidden = true;
@@ -2607,6 +2827,7 @@ async function renderResults(data, target) {
   mountCharts($(target), [...custom, ...spec.charts]);
   $('#chart-index').innerHTML = chartIndex();
   $('#chart-search').hidden = false;
+  loadChecks(data);
   fillSearchYears(spec);
   syncChartView();
   renderHome();
@@ -2648,21 +2869,33 @@ function compact(value, prefix = '', decimals = 2, strip = false) {
   return (value < 0 ? '−' : '') + prefix + text.replace('.', ',') + unit;
 }
 const comma = text => text.replace('.', ',').replace('-', '−');
+// Money is in the run's reporting currency (charts.json ``currency``): USD for
+// a 10-K, EUR, TWD, JPY... for most foreign filers. Same symbols as charts.py.
+const CURRENCY_SYMBOLS = {
+  USD: '$', EUR: '€', GBP: '£', JPY: '¥', CNY: 'CN¥', TWD: 'NT$', KRW: '₩', INR: '₹', CAD: 'C$', AUD: 'A$',
+  HKD: 'HK$', BRL: 'R$', MXN: 'MX$', ILS: '₪', SGD: 'S$', NZD: 'NZ$', DKK: 'kr ', SEK: 'kr ', NOK: 'kr ',
+  CHF: 'CHF ', ZAR: 'R ',
+};
+const CUR = { code: 'USD', symbol: '$' };
+function setCurrency(code) {
+  CUR.code = String(code || 'USD').toUpperCase();
+  CUR.symbol = CURRENCY_SYMBOLS[CUR.code] || `${CUR.code} `;
+}
 const VALUE_FMT = {
-  mm: v => compact(v, '$'),
+  mm: v => compact(v, CUR.symbol),
   shares: v => compact(v),
   pct: v => comma((v * 100).toFixed(2)) + '%',
   x: v => comma(v.toFixed(1)) + 'x',
   int: v => v.toFixed(0),
   dec1: v => comma(v.toFixed(1)),
-  usdps: v => (v < 0 ? '−$' : '$') + Math.abs(v).toFixed(2).replace('.', ','),
+  moneyps: v => (v < 0 ? '−' : '') + CUR.symbol + Math.abs(v).toFixed(2).replace('.', ','),
 };
 const AXIS_FMT = {
-  money: v => v === 0 ? '0' : compact(v, '$', 1, true),
+  money: v => v === 0 ? '0' : compact(v, CUR.symbol, 1, true),
   shares: v => v === 0 ? '0' : compact(v, '', 2, true),
   pct: v => comma((v * 100).toFixed(0)) + '%',
   x: v => v.toFixed(0) + 'x',
-  usdps: v => VALUE_FMT.usdps(v),
+  moneyps: v => VALUE_FMT.moneyps(v),
   plain: v => comma(String(+v.toFixed(2))),
 };
 const fmtValue = (format, v) => (VALUE_FMT[format] || String)(v);
@@ -2690,6 +2923,10 @@ function niceStep(raw) {
 function axisBounds(lo, hi, margin, zero, sticky) {
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) { lo = 0; hi = 1; }
   if (zero) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
+  // A nearly flat series (a share count that moves 0,01%) gets at least ±2%
+  // of room, so the line is not blown up and the labels do not repeat.
+  const floor = 0.04 * Math.max(Math.abs(lo), Math.abs(hi));
+  if (!zero && hi - lo < floor) { const mid = (lo + hi) / 2; lo = mid - floor / 2; hi = mid + floor / 2; }
   const span = (hi - lo) || Math.abs(hi) || 1;
   const top = sticky && hi === 0 ? 0 : hi + span * margin;
   const bottom = sticky && lo === 0 ? 0 : lo - span * margin;
@@ -2802,7 +3039,7 @@ function panelOption(panel, t, { mini = false, width = 800 } = {}) {
   });
 
   const option = {
-    animationDuration: 300, animationDurationUpdate: 250,
+    animationDuration: 250, animationDurationUpdate: 0,
     textStyle: { fontFamily: t.font },
     grid: mini ? { left: 2, right: 2, top: 6, bottom: 4, containLabel: false }
                : { left: 6, right: 6, top: 14, bottom: zoom ? 54 : 6, containLabel: true },
@@ -2821,7 +3058,8 @@ function panelOption(panel, t, { mini = false, width = 800 } = {}) {
   if (zoom) {
     option.dataZoom = [{
       type: 'slider', xAxisIndex: 0, startValue: years.length - visible, endValue: years.length - 1,
-      minValueSpan: 1, bottom: 10, height: 24, brushSelect: false, borderColor: t.line, borderRadius: 6,
+      minValueSpan: 1, bottom: 10, height: 24, left: 44, right: 44, throttle: 30,
+      brushSelect: false, borderColor: t.line, borderRadius: 6,
       backgroundColor: 'transparent', fillerColor: t.soft,
       dataBackground: { lineStyle: { color: t.lineStrong, opacity: 0.6 }, areaStyle: { color: t.lineStrong, opacity: 0.12 } },
       selectedDataBackground: { lineStyle: { color: t.lineStrong }, areaStyle: { color: t.lineStrong, opacity: 0.2 } },
@@ -2831,7 +3069,7 @@ function panelOption(panel, t, { mini = false, width = 800 } = {}) {
     }];
     // Drag to pan and ctrl+wheel to zoom with a mouse; touch keeps scrolling the page.
     if (FINE_POINTER) option.dataZoom.push({ type: 'inside', xAxisIndex: 0, zoomOnMouseWheel: 'ctrl',
-                                             moveOnMouseWheel: 'shift', moveOnMouseMove: true });
+                                             moveOnMouseWheel: 'shift', moveOnMouseMove: true, throttle: 30 });
   }
   return { option, index };
 }
@@ -2873,7 +3111,13 @@ function figureHtml(chart, custom = false) {
           ${panel.subtitle ? `<div class="ec-sub" data-sub="${esc(panel.subtitle)}">${esc(panel.subtitle.replace('{span}', yearSpan(panel.years)))}</div>` : ''}
           ${panel.series.length || panel.reference ? `<div class="ec-legend">${legendHtml(panel)}</div>` : ''}
         </div>
-        ${panel.series.length ? `<div class="ec-canvas" style="height:${height}px" data-chart="${esc(chart.id)}" data-panel="${i}"></div>`
+        ${panel.series.length ? `<div class="ec-wrap">
+            <div class="ec-canvas" style="height:${height}px" data-chart="${esc(chart.id)}" data-panel="${i}"></div>
+            <button class="ec-step prev" hidden onclick="stepYears(this, -1)" title="One year back" aria-label="One year back">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+            <button class="ec-step next" hidden onclick="stepYears(this, 1)" title="One year forward" aria-label="One year forward">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+          </div>`
           : `<p class="ec-empty">${esc(panel.empty)}</p>`}
         ${panel.note ? `<p class="ec-note">${esc(panel.note)}</p>` : ''}
       </div>`;
@@ -2927,10 +3171,16 @@ function drawEntry(entry) {
   entry.inst.setOption(option);
   entry.index = index;
   if (entry.mini) return;
+  // The axis follows the years on show, once per frame however fast the slider moves.
   entry.inst.on('datazoom', () => {
-    const [from, to] = zoomRange(entry);
-    entry.inst.setOption({ yAxis: yBounds(entry.panel, from, to) });
-    updateSpan(entry);
+    if (entry.frame) return;
+    entry.frame = requestAnimationFrame(() => {
+      entry.frame = 0;
+      const [from, to] = zoomRange(entry);
+      entry.inst.setOption({ yAxis: yBounds(entry.panel, from, to) }, { lazyUpdate: true });
+      updateSpan(entry);
+      syncSteps(entry);
+    });
   });
   entry.inst.on('legendselectchanged', event => {
     for (const key of entry.head.querySelectorAll('.ec-key')) {
@@ -2938,6 +3188,29 @@ function drawEntry(entry) {
     }
   });
   updateSpan(entry);
+  syncSteps(entry);
+}
+
+// The arrows beside the slider: shown when the chart scrolls, off at either end.
+function syncSteps(entry) {
+  const wrap = entry.el.closest('.ec-wrap');
+  if (!wrap) return;
+  const zoom = entry.inst.getOption().dataZoom;
+  const [from, to] = zoomRange(entry);
+  const last = entry.panel.years.length - 1;
+  for (const button of wrap.querySelectorAll('.ec-step')) {
+    button.hidden = !(zoom && zoom.length);
+    button.disabled = button.classList.contains('prev') ? from <= 0 : to >= last;
+  }
+}
+
+function stepYears(button, step) {
+  const entry = EC.entries.find(e => e.el.closest('.ec-wrap') === button.closest('.ec-wrap'));
+  if (!entry || !entry.inst) return;
+  const [from, to] = zoomRange(entry);
+  const last = entry.panel.years.length - 1;
+  const shift = Math.max(-from, Math.min(last - to, step));
+  if (shift) entry.inst.dispatchAction({ type: 'dataZoom', startValue: from + shift, endValue: to + shift });
 }
 
 // A panel cut to its last ``n`` years (Home's thumbnails).
@@ -2952,6 +3225,14 @@ function zoomRange(entry) {
   const n = entry.panel.years.length;
   const zoom = entry.inst && entry.inst.getOption().dataZoom;
   if (!zoom || !zoom.length) return [0, n - 1];
+  // The slider's own window (category indices); its percentages drift after
+  // a programmatic move, so they are only the fallback.
+  try {
+    const range = entry.inst.getModel().getComponent('dataZoom', 0).getValueRange();
+    if (range && Number.isFinite(range[0]) && Number.isFinite(range[1])) {
+      return [Math.max(0, Math.round(range[0])), Math.min(n - 1, Math.round(range[1]))];
+    }
+  } catch { /* fall back below */ }
   const z = zoom[0];
   return [Math.round((z.start / 100) * (n - 1)), Math.round((z.end / 100) * (n - 1))];
 }
@@ -2976,6 +3257,7 @@ async function loadSpec(data) {
   const spec = await res.json();
   EC.spec = spec;
   EC.key = key;
+  setCurrency(spec.currency);
   return spec;
 }
 
@@ -2990,8 +3272,13 @@ const STATEMENT_NAMES = {
   Disclosures: 'Notes', NoteTable: 'Notes', Notes: 'Notes', AccountingPolicies: 'Notes',
   ComprehensiveIncome: 'Comprehensive income',
 };
-const UNIT_FORMAT = { usd: ['mm', 1e6, 'USD'], shares: ['shares', 1e6, 'shares'], 'usd/share': ['usdps', 1, 'USD per share'],
-                      pure: ['pct', 1, 'ratio'] };
+// A fact's unit -> [value format, divisor, name]; money is in the run's currency.
+function unitFormat(unit) {
+  if (unit === 'shares') return ['shares', 1e6, 'shares'];
+  if (unit === 'money/share') return ['moneyps', 1, `${CUR.code} per share`];
+  if (unit === 'pure') return ['pct', 1, 'ratio'];
+  return ['mm', 1e6, CUR.code];
+}
 const SEARCH = { results: [], active: -1, fact: null };
 const words = concept => String(concept).replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
 
@@ -3151,7 +3438,7 @@ function showFact(fact) {
   const years = Object.keys(fact.values).map(Number).sort((a, b) => a - b);
   const values = years.map(y => fact.values[y]);
   const year = pickYear(years, values);
-  const [format, divisor, unitName] = UNIT_FORMAT[fact.unit] || UNIT_FORMAT.usd;
+  const [format, divisor, unitName] = unitFormat(fact.unit);
   const cell = v => v == null ? '–' : fmtValue(format, v / divisor);
   const asked = Number($('#cs-year').value);
   $('#cs-status').textContent = asked && asked !== year
@@ -3191,8 +3478,8 @@ function chartFact() {
   const id = 'fact_' + fact.concept;
   if (!EC.custom.some(c => c.id === id && c.ticker === GRAPH.ticker)) {
     const years = EC.spec.years.length ? EC.spec.years : Object.keys(fact.values).map(Number).sort((a, b) => a - b);
-    const [format, divisor, unitName] = UNIT_FORMAT[fact.unit] || UNIT_FORMAT.usd;
-    const axis = { mm: 'money', shares: 'shares', usdps: 'usdps', pct: 'pct' }[format];
+    const [format, divisor, unitName] = unitFormat(fact.unit);
+    const axis = { mm: 'money', shares: 'shares', moneyps: 'moneyps', pct: 'pct' }[format];
     EC.custom.unshift({
       id, ticker: GRAPH.ticker, name: fact.label, panels: [{
         title: `${GRAPH.ticker} · ${fact.label}`, subtitle: `Fiscal years {span} · ${unitName}`, years,
@@ -3237,6 +3524,74 @@ function searchYearChanged() {
   }
 }
 
+/* Calculation check ----------------------------------------------------------- */
+// Each total in the filings' calculation linkbase against the sum of its
+// parts (calc_check.py). Statement totals that do not add up come first: they
+// name the line a filer reports in an unexpected way. Notes are folded away.
+const CHECKS = { key: '', data: null };
+
+async function loadChecks(data) {
+  const key = `${data.ticker}|${data.modified}`;
+  if (CHECKS.key !== key) {
+    CHECKS.key = key;
+    CHECKS.data = null;
+    try {
+      const res = await fetch(`/api/checks/${encodeURIComponent(data.ticker)}`);
+      if (CHECKS.key !== key) return;
+      CHECKS.data = res.ok ? await res.json() : null;
+    } catch { CHECKS.data = null; }
+  }
+  if (CHECKS.key === key) renderChecks();
+}
+
+function checkIssue(item) {
+  const money = v => v == null ? '–' : VALUE_FMT.mm(v / 1e6);
+  const verdict = item.status === 'mismatch'
+    ? `<span class="ck-badge mismatch">off by ${esc(money(item.difference))}</span>`
+    : '<span class="ck-badge incomplete">untagged parts</span>';
+  const parts = (item.parts || []).map(part => `<tr class="${part.value == null ? 'muted' : ''}">
+      <td>${part.weight < 0 ? '−' : '+'}</td><td>${esc(part.label)}</td>
+      <td>${part.value == null ? 'no plain value' : esc(money(part.value))}</td></tr>`).join('');
+  return `<li><details>
+      <summary><span class="ck-year">${esc(Number(item.fiscal_year) || '')}</span>
+        <span class="ck-label">${esc(item.label)}</span><span class="ck-where">${esc(item.statement)}</span>${verdict}</summary>
+      <div class="table-wrap"><table class="data ck-table">
+        <tbody>${parts}
+          <tr class="ck-sum"><td>=</td><td>Sum of the parts</td><td>${esc(money(item.computed))}</td></tr>
+          <tr class="ck-sum"><td></td><td>Reported total <span class="muted">${esc(item.concept)}</span></td><td>${esc(money(item.reported))}</td></tr>
+        </tbody></table></div>
+    </details></li>`;
+}
+
+function renderChecks() {
+  const box = $('#calc-checks');
+  const data = CHECKS.data;
+  if (!data) { box.innerHTML = ''; return; }
+  setCurrency(data.currency);
+  const { statement: st, note } = data.counts;
+  const issues = kind => data.issues.filter(item => item.kind === kind);
+  const list = (items, limit = 150) => items.length
+    ? `<ul class="ck-list">${items.slice(0, limit).map(checkIssue).join('')}</ul>`
+      + (items.length > limit ? `<p class="muted">…and ${items.length - limit} more in calc_check.csv.</p>` : '')
+    : '<p class="muted">Every one adds up.</p>';
+  const parts = [`${st.ok} of ${st.totals} statement totals add up`];
+  if (st.mismatch) parts.push(`${st.mismatch} don't`);
+  if (st.incomplete) parts.push(`${st.incomplete} with untagged parts`);
+  box.innerHTML = `
+    <details class="checks">
+      <summary><span class="checks-title">Calculation check</span>
+        <span class="checks-sum ${st.mismatch ? 'has-issues' : ''}">${esc(parts.join(' · '))}</span></summary>
+      <p class="opt-hint">Every total in the ${esc(data.filings)} filings' calculation linkbase against the sum of its
+        parts. <b>Off by</b>: every part has a value and the sum still differs, so a line is tagged in an unexpected
+        way or missing. <b>Untagged parts</b>: some parts have no plain value that year (tagged only per segment or
+        tranche), so the sum cannot close. Open a row for its parts.</p>
+      <h4 class="ck-head">Statements</h4>
+      ${list(issues('statement'))}
+      <details class="ck-notes"><summary>Notes: ${note.ok} of ${note.totals} totals add up</summary>
+        ${list(issues('note'))}</details>
+    </details>`;
+}
+
 /* Download dialog ---------------------------------------------------------------- */
 // Ticks what goes in the zip: charts (PNGs drawn by the server only now, in
 // windows of 5 or 10 years or one wide image), the run's data files, and
@@ -3251,6 +3606,7 @@ const FILE_INFO = {
   'evaluation.csv': 'Valuation: price, P/E, F- and Z-score',
   'data_quality.csv': 'Which chart values are reported, derived or missing',
   'charts.json': 'The charts as data',
+  'calc_check.csv': 'Calculation check: each total against its parts',
   'insider.json': 'Insider trades as collected',
   'run.log': 'Log of the last run',
 };
@@ -3766,7 +4122,7 @@ function renderScreener() {
   const notes = [];
   if (pipelineNote) notes.push(pipelineNote);
   if (stale) notes.push(`${stale} ticker(s) have results but no <code>evaluation.csv</code>: the pipeline wrote no
-        valuation data. Open it with <b>charts</b> and check its log: <code>[!] valuation skipped</code> means Yahoo
+        valuation data. Open its log in the <a href="#logs" onclick="showTab('logs');return false">Logs tab</a>: <code>[!] valuation skipped</code> means Yahoo
         price data was unreachable from the container (SEC works, Yahoo often does not). Re-run once it can reach it.`);
   $('#screen-notes').innerHTML = notes.join('<br>');
   const { key, dir } = SCREEN.sort;

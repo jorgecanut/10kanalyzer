@@ -429,8 +429,44 @@ class ChartSpecTests(AppTestCase):
         self.assertEqual([f["concept"] for f in facts], ["Goodwill", "GoodwillImpairmentLoss"])
         self.assertEqual(facts[0]["values"], {"2024": 5000000.0, "2025": 6000000.0})
         self.assertEqual(facts[1]["values"], {"2025": 300000.0})      # not the comparative, not the segment
-        self.assertEqual(facts[1]["unit"], "usd")
+        self.assertEqual(facts[1]["unit"], "money")
         self.assertEqual(self.client.get("/api/facts/NONE").status_code, 404)
+
+
+class ForeignAndCheckTests(AppTestCase):
+    def test_fact_index_keeps_the_reporting_currency_and_drops_the_usd_copy(self):
+        folder = app._ticker_dir("TSM", self.uid())
+        folder.mkdir(parents=True)
+        (folder / "financial_data.csv").write_text("fiscal_year,currency,Revenues\n2025,TWD,3809054.3\n")
+        (folder / "facts.csv").write_text(
+            "period_of_report,concept,label,value,unit,currency,period_end,period_instant,is_dimensioned,"
+            "statement_type,fiscal_year\n"
+            "2025-12-31,ifrs-full:FinanceCosts,Finance costs,11750000000,twd,TWD,2025-12-31,,False,Notes,2025\n"
+            "2025-12-31,ifrs-full:FinanceCosts,Finance costs,370000000,usd,USD,2025-12-31,,False,Notes,2025\n"
+            "2025-12-31,ifrs-full:BasicEarningsLossPerShare,EPS,65.47,twdPerShare,TWD,2025-12-31,,False,Notes,2025\n")
+        data = self.client.get("/api/facts/TSM").get_json()
+        self.assertEqual(data["currency"], "TWD")
+        by_concept = {f["concept"]: f for f in data["facts"]}
+        self.assertEqual(by_concept["FinanceCosts"]["values"], {"2025": 11750000000.0})
+        self.assertEqual(by_concept["FinanceCosts"]["unit"], "money")
+        self.assertEqual(by_concept["BasicEarningsLossPerShare"]["unit"], "money/share")
+
+    def test_checks_list_what_does_not_add_up(self):
+        folder = app._ticker_dir("CHK", self.uid())
+        folder.mkdir(parents=True)
+        detail = json.dumps([{"concept": "x_A", "label": "A", "weight": 1, "value": 4.0}])
+        (folder / "calc_check.csv").write_text(
+            "fiscal_year,period_of_report,kind,statement,concept,label,reported,computed,difference,tolerance,"
+            "parts,missing,status,detail\n"
+            f"2025,2025-12-31,statement,Balance,x_Total,Total,10,10,0,0,1,,ok,\"{detail.replace(chr(34), chr(34) * 2)}\"\n"
+            f"2025,2025-12-31,statement,Balance,x_Debt,Debt,10,4,6,0,1,,mismatch,\"{detail.replace(chr(34), chr(34) * 2)}\"\n"
+            "2024,2024-12-31,note,Debt details,x_Bonds,Bonds,9,1,8,0,2,B,incomplete,[]\n")
+        data = self.client.get("/api/checks/CHK").get_json()
+        self.assertEqual(data["counts"]["statement"], {"totals": 2, "ok": 1, "mismatch": 1, "incomplete": 0})
+        self.assertEqual(data["filings"], 2)
+        self.assertEqual([i["label"] for i in data["issues"]], ["Debt", "Bonds"])
+        self.assertEqual(data["issues"][0]["parts"][0]["label"], "A")
+        self.assertEqual(self.client.get("/api/checks/NONE").status_code, 404)
 
 
 class DiagnosticsTests(AppTestCase):

@@ -246,6 +246,7 @@ def _collect(ticker: str, months: int) -> tuple[list[dict], str | None]:
             company_cik = int(company.cik)
         except Exception:
             company_cik = None
+        print(f"[*] Insider trades: listing Form 4 filings since {cutoff.isoformat()}", flush=True)
         filings = company.get_filings(form="4")
         if filings is None:
             _warn(f"no Form 4 filings for {ticker}")
@@ -270,6 +271,8 @@ def _collect(ticker: str, months: int) -> tuple[list[dict], str | None]:
                 parsed += 1
                 if filing_date is not None:
                     last_filed = filing_date
+                if parsed % 25 == 0:
+                    print(f"[*] Insider trades: read {parsed} Form 4 filings, back to {last_filed}", flush=True)
                 ownership = filing.obj()
                 if ownership is None or not _same_issuer(ownership, company_cik):
                     continue
