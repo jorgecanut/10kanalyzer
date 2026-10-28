@@ -11,3 +11,7 @@ display its attribution as described in Section 4(d) of the License.
 This product bundles "Ubuntu Mono derivative Stocky" (static/fonts), the
 Regular and Bold instances of Ubuntu Mono, Copyright 2010-2022 Canonical Ltd.,
 used under the Ubuntu Font Licence 1.0 (static/fonts/LICENCE.txt).
+
+This product bundles Apache ECharts 5.5.1 (static/vendor/echarts.min.js),
+Copyright The Apache Software Foundation, used under the Apache License 2.0
+(static/vendor/ECHARTS-LICENSE.txt).

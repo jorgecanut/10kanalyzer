@@ -1,9 +1,11 @@
-"""Series helpers in charts.py. No network, no rendering.
+"""Series helpers, chart specs and PNG windows in charts.py. No network.
 
 Run from the repo root:  python -m unittest discover tests
 """
 
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -49,6 +51,60 @@ class SharesTests(unittest.TestCase):
                 fact("dei:EntityCommonStockSharesOutstanding", 50e6, dimension=axis, member="ClassB"),
                 fact("us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding", 999e6)]
         self.assertEqual(self.shares(rows), 350.0)
+
+
+def ratios(years):
+    return pd.DataFrame({
+        "fiscal_year": years,
+        "Revenues": [100.0 + i for i in range(len(years))],
+        "NetIncomeLoss": [10.0] * len(years),
+        "StockholdersEquity": [50.0] * len(years),
+    })
+
+
+class SpecTests(unittest.TestCase):
+    def build(self, years, output_dir="/nonexistent"):
+        return charts.build_spec("TST", output_dir, ratios(years), pd.DataFrame(), pd.DataFrame())
+
+    def test_every_chart_is_plain_json(self):
+        spec = self.build(list(range(2010, 2026)))
+        self.assertEqual([c["id"] for c in spec["charts"]], [
+            "01_income_statement", "02_margins", "03_balance", "04_debt",
+            "05_cashflow_operations", "06_cashflow_financing", "07_returns"])
+        json.dumps(spec, allow_nan=False)        # no NaN or numpy values
+        income = spec["charts"][0]["panels"][0]
+        self.assertEqual(income["years"], list(range(2010, 2026)))
+        # Metrics without a single value are left out, not drawn empty.
+        self.assertEqual([s["label"] for s in income["series"]], ["Revenue", "Net Income"])
+        self.assertEqual(income["series"][0]["concepts"], ["Revenues"])
+
+    def test_missing_years_are_null(self):
+        df = ratios([2024, 2025])
+        df.loc[0, "Revenues"] = float("nan")
+        spec = charts.build_spec("TST", "/nonexistent", df, pd.DataFrame(), pd.DataFrame())
+        self.assertEqual(spec["charts"][0]["panels"][0]["series"][0]["values"], [None, 101.0])
+
+    def test_near_black_series_follow_the_theme(self):
+        self.assertEqual(charts._base_color("Free Cash Flow"), "strong")
+        self.assertEqual(charts._base_color("Revenue"), "#4c72b0")
+
+
+class PngTests(unittest.TestCase):
+    def test_windows_and_one_wide_image(self):
+        spec = charts.build_spec("TST", "/nonexistent", ratios(list(range(2013, 2026))),
+                                 pd.DataFrame(), pd.DataFrame())
+        self.assertEqual(charts.png_names(spec, ["01_income_statement"]), [
+            "01_income_statement_2013_2017.png", "01_income_statement_2018_2022.png",
+            "01_income_statement_2023_2025.png"])
+        self.assertEqual(charts.png_names(spec, ["02_margins"], years_per_image=0), ["02_margins_2013_2025.png"])
+        with tempfile.TemporaryDirectory() as folder:
+            paths = charts.render_pngs(spec, folder, ids=["01_income_statement", "07_returns"],
+                                       years_per_image=10, dark=True)
+            self.assertEqual([Path(p).name for p in paths], [
+                "01_income_statement_2013_2022.png", "01_income_statement_2023_2025.png",
+                "07_returns_2013_2022.png", "07_returns_2023_2025.png"])
+            for path in paths:
+                self.assertTrue(Path(path).read_bytes().startswith(b"\x89PNG"))
 
 
 if __name__ == "__main__":

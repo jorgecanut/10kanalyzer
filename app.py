@@ -62,6 +62,8 @@ from flask import (
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 
+import charts as chartlib
+
 BASE_DIR = Path(__file__).resolve().parent
 DASHBOARD = BASE_DIR / "edgar_dashboard.py"
 
@@ -81,6 +83,13 @@ AVATAR_MAX_PIXELS = 40_000_000       # refuse decompression bombs before decodin
 # Tickers: letters/digits plus the "." and "-" seen in symbols such as BRK.B.
 TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 ALLOWED_FILES = {".png", ".csv", ".log"}
+# A run's data files offered by the download dialog (top level of the ticker
+# folder); run.json is bookkeeping and stays out.
+DATA_SUFFIXES = {".csv", ".json", ".log"}
+HIDDEN_FILES = {"run.json"}
+# Years per downloaded chart image; 0 puts every year in one wide image.
+CHART_YEAR_CHOICES = (5, 10, 0)
+DOWNLOAD_EXTRAS = ("insiders", "news", "screener", "debug")
 
 # Release number (major.minor.patch, see README "Versions"); the commit comes
 # from the STOCKY_COMMIT build arg, or from git when run from a checkout.
@@ -233,12 +242,41 @@ def _ticker_dir(ticker: str, uid: str | None = None) -> Path:
     return _user_dir(uid) / ticker
 
 
-def _charts(ticker: str, subdir: str = "") -> list[str]:
-    directory = _ticker_dir(ticker) / subdir if subdir else _ticker_dir(ticker)
+def _chart_spec(ticker: str, uid: str | None = None) -> dict | None:
+    """The run's ``charts.json``.
+
+    A run from before it (PNGs only) is upgraded once from its CSVs; a
+    screener run has neither and stays without charts.
+    """
+    directory = _ticker_dir(ticker, uid)
+    path = directory / chartlib.SPEC_FILE
+    if not path.is_file():
+        try:
+            legacy = directory.is_dir() and any(directory.glob("*.png"))
+        except OSError:
+            legacy = False
+        if not legacy:
+            return None
+        try:
+            chartlib.render_from_dir(ticker, str(directory))
+        except Exception as exc:  # noqa: BLE001 - old charts are best-effort
+            app.logger.warning("could not upgrade %s charts: %s", ticker, exc)
+            return None
     try:
-        if not directory.is_dir():
-            return []
-        return sorted(p.name for p in directory.iterdir() if p.suffix.lower() == ".png")
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _charts(ticker: str) -> list[str]:
+    spec = _chart_spec(ticker)
+    return [chart["id"] for chart in spec["charts"]] if spec else []
+
+
+def _data_files(directory: Path) -> list[str]:
+    try:
+        return sorted(p.name for p in directory.iterdir()
+                      if p.is_file() and p.suffix.lower() in DATA_SUFFIXES and p.name not in HIDDEN_FILES)
     except OSError:
         return []
 
@@ -248,7 +286,7 @@ def _results_summary(ticker: str) -> dict | None:
     try:
         if not directory.is_dir():
             return None
-        files = [p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in ALLOWED_FILES]
+        files = [p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in ALLOWED_FILES | DATA_SUFFIXES]
     except OSError:
         return None
     if not files:
@@ -257,8 +295,8 @@ def _results_summary(ticker: str) -> dict | None:
     return {
         "ticker": ticker,
         "charts": _charts(ticker),
-        # Dark-theme copies of the charts (same names, under dark/).
-        "dark_charts": _charts(ticker, "dark"),
+        # What the download dialog offers besides the charts.
+        "files": _data_files(directory),
         "has_csv": (directory / "financial_data.csv").exists(),
         "has_insider": (directory / "insider.json").is_file(),
         "modified": datetime.fromtimestamp(modified, timezone.utc).isoformat(timespec="seconds"),
@@ -1066,6 +1104,99 @@ def files(ticker: str):
     return jsonify(summary)
 
 
+@app.get("/api/charts/<ticker>")
+def chart_spec(ticker: str):
+    """The run's chart specs (``charts.json``), drawn by the page with ECharts."""
+    ticker = _normalise_ticker(ticker)
+    spec = _chart_spec(ticker)
+    if not spec:
+        abort(404, "No charts for that ticker yet.")
+    return jsonify(spec)
+
+
+# Fact units as the search shows them; anything else (counts, text) is left out.
+FACT_UNITS = {"usd": "usd", "shares": "shares", "usdpershare": "usd/share", "pure": "pure"}
+
+
+def _fact_concept(concept) -> str:
+    """``us-gaap:Goodwill`` and ``us-gaap_Goodwill`` both become ``Goodwill``."""
+    text = str(concept)
+    return re.split(r"[:_]", text, maxsplit=1)[-1] if re.match(r"^[\w-]+[:_]", text) else text
+
+
+def _statement_unit(concept: str, label: str) -> str:
+    if "PerShare" in concept or "per share" in label.lower():
+        return "usd/share"
+    if "Shares" in concept or "shares" in label.lower():
+        return "shares"
+    return "usd"
+
+
+@lru_cache(maxsize=16)
+def _fact_index(directory: str, stamp: tuple) -> list[dict]:
+    """Every statement line, then every other plain fact of the filing's own period.
+
+    One row per concept: label, statement, unit and the value per fiscal year.
+    ``stamp`` (the files' mtimes) keys the cache so a new run is re-read.
+    """
+    rows: list[dict] = []
+    seen: set[str] = set()
+    folder = Path(directory)
+    try:
+        statements = pd.read_csv(folder / "statements.csv", low_memory=False)
+    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
+        statements = pd.DataFrame()
+    if not statements.empty:
+        statements["value"] = pd.to_numeric(statements["value"], errors="coerce")
+        statements["fiscal_year"] = pd.to_numeric(statements["fiscal_year"], errors="coerce")
+        statements = statements.dropna(subset=["value", "fiscal_year"])
+        statements["key"] = statements["concept"].map(_fact_concept)
+        for (statement, key), group in statements.groupby(["statement", "key"], sort=False):
+            label = str(group["label"].iloc[-1])
+            values = group.groupby("fiscal_year")["value"].first()
+            rows.append({"concept": key, "label": label, "statement": statement,
+                         "unit": _statement_unit(key, label),
+                         "values": {int(year): float(value) for year, value in values.items()}})
+            seen.add(key)
+    try:
+        facts = pd.read_csv(folder / "facts.csv", low_memory=False)
+    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
+        facts = pd.DataFrame()
+    if not facts.empty and {"unit", "is_dimensioned", "period_of_report"} <= set(facts.columns):
+        facts["unit"] = facts["unit"].astype(str).str.lower().map(FACT_UNITS)
+        facts["value"] = pd.to_numeric(facts["value"], errors="coerce")
+        facts["fiscal_year"] = pd.to_numeric(facts["fiscal_year"], errors="coerce")
+        # Only the filing's own period: a 10-K also tags the prior years it compares against.
+        own = (facts["period_end"].astype(str) == facts["period_of_report"].astype(str)) | (
+            facts["period_instant"].astype(str) == facts["period_of_report"].astype(str))
+        plain = facts["is_dimensioned"].astype(str).str.lower() != "true"
+        facts = facts[own & plain].dropna(subset=["unit", "value", "fiscal_year"])
+        facts["key"] = facts["concept"].map(_fact_concept)
+        facts = facts[~facts["key"].isin(seen)]
+        for key, group in facts.groupby("key", sort=False):
+            values = group.groupby("fiscal_year")["value"].first()
+            rows.append({"concept": key, "label": str(group["label"].iloc[-1]),
+                         "statement": str(group["statement_type"].iloc[-1]), "unit": group["unit"].iloc[-1],
+                         "values": {int(year): float(value) for year, value in values.items()}})
+    return rows
+
+
+@app.get("/api/facts/<ticker>")
+def fact_index(ticker: str):
+    """What the Charts tab's search looks through besides the charted series."""
+    ticker = _normalise_ticker(ticker)
+    folder = _ticker_dir(ticker)
+    stamp = []
+    for name in ("statements.csv", "facts.csv"):
+        try:
+            stamp.append((folder / name).stat().st_mtime_ns)
+        except OSError:
+            stamp.append(None)
+    if stamp == [None, None]:
+        abort(404, "No facts for that ticker yet.")
+    return jsonify(facts=_fact_index(str(folder), tuple(stamp)))
+
+
 @app.get("/api/simulation/<ticker>")
 def simulation(ticker: str):
     ticker = _normalise_ticker(ticker)
@@ -1607,23 +1738,8 @@ def serve_file(ticker: str, name: str):
 
 @app.get("/download/<ticker>")
 def download_ticker(ticker: str):
-    ticker = _normalise_ticker(ticker)
-    summary = _results_summary(ticker)
-    if not summary:
-        abort(404, "No results for that ticker yet.")
-
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
-        for path in sorted(_ticker_dir(ticker).iterdir()):
-            if path.is_file() and path.suffix.lower() in ALLOWED_FILES:
-                bundle.write(path, arcname=f"{ticker}/{path.name}")
-    buffer.seek(0)
-    return send_file(
-        buffer,
-        mimetype="application/zip",
-        as_attachment=True,
-        download_name=f"{ticker}_dashboard.zip",
-    )
+    """The Recent tab's download: the charts and data files, no extras."""
+    return _download_bundle(ticker, default_extras=(), download_name=f"{_normalise_ticker(ticker)}_dashboard.zip")
 
 
 def _csv_text(rows: list[dict]) -> str:
@@ -1707,51 +1823,97 @@ def _debug_files(uid: str, options: dict) -> dict[str, str]:
     return files
 
 
-@app.get("/download/<ticker>/all")
-def download_all(ticker: str):
-    """Home's download: every file of the run plus insiders, news and screener as CSV.
+def _list_arg(name: str) -> list[str] | None:
+    """A comma-separated query parameter; None when it is absent (everything)."""
+    raw = request.args.get(name)
+    if raw is None:
+        return None
+    return [item for item in raw.split(",") if item]
 
-    Insiders and news follow the options passed (``months``, ``news_limit``,
-    ``news_days``). News is left out when Google News is unreachable. A
-    ``_debug/`` folder adds the build, jobs, diagnostics and every run log.
+
+def _chart_images(folder: Path, spec: dict, ids: list[str], years: int, dark: bool) -> list[Path]:
+    """The charts as PNGs, drawn on the first download and kept until the next run."""
+    cache = folder / chartlib.PNG_CACHE_DIR / f"{'dark' if dark else 'light'}-{years or 'all'}"
+    return [Path(p) for p in chartlib.render_pngs(spec, str(cache), ids=ids, years_per_image=years,
+                                                  dark=dark, skip_existing=True)]
+
+
+def _download_bundle(ticker: str, default_extras: tuple[str, ...], download_name: str):
+    """A zip of what the download dialog ticked.
+
+    ``charts`` and ``files`` name the charts and data files (absent: all of
+    them), ``years`` the years per chart image (5, 10 or 0 for one image),
+    ``theme`` light or dark, and ``extras`` any of insiders, news, screener and
+    debug (absent: ``default_extras``). Insiders and news follow ``months``,
+    ``news_limit`` and ``news_days``; news is left out when Google News is
+    unreachable. ``debug`` adds a ``_debug/`` folder (build, jobs,
+    diagnostics, every run log).
     """
     ticker = _normalise_ticker(ticker)
     folder = _ticker_dir(ticker)
     if not folder.is_dir():
         abort(404, "No results for that ticker yet.")
+    spec = _chart_spec(ticker)
+    chart_ids = [chart["id"] for chart in spec["charts"]] if spec else []
+    wanted = _list_arg("charts")
+    chart_ids = chart_ids if wanted is None else [cid for cid in chart_ids if cid in wanted]
+    files = _data_files(folder)
+    wanted = _list_arg("files")
+    files = files if wanted is None else [name for name in files if name in wanted]
+    extras = _list_arg("extras")
+    extras = set(default_extras if extras is None else extras) & set(DOWNLOAD_EXTRAS)
+    years = _choice("years", CHART_YEAR_CHOICES, chartlib.CHART_WINDOW)
+    theme = request.args.get("theme", "light")
+    if theme not in ("light", "dark"):
+        abort(400, "theme must be light or dark.")
     months = _choice("months", INSIDER_MONTH_CHOICES, 12)
     news_days = _choice("news_days", NEWS_DAY_CHOICES, NEWS_DAYS)
     news_limit = _choice("news_limit", NEWS_LIMIT_CHOICES, NEWS_LIMIT)
+    if not (chart_ids or files or extras):
+        abort(400, "Nothing selected to download.")
 
     extra: dict[str, str] = {}
-    try:
-        trades = json.loads((folder / "insider.json").read_text(encoding="utf-8")).get("transactions") or []
-        cutoff = _months_ago(months)
-        extra["insiders.csv"] = _csv_text([t for t in trades if not t.get("date") or t["date"] >= cutoff])
-    except (OSError, ValueError, AttributeError):
-        pass
-    try:
-        extra["news.csv"] = _csv_text(_news_payload(ticker, news_days, news_limit)["articles"])
-    except NEWS_ERRORS:
-        pass
-    row = next((item for item in _screener_items() if item["ticker"] == ticker), None)
-    if row:
-        extra["screener.csv"] = _csv_text([row])
+    if "insiders" in extras:
+        try:
+            trades = json.loads((folder / "insider.json").read_text(encoding="utf-8")).get("transactions") or []
+            cutoff = _months_ago(months)
+            extra["insiders.csv"] = _csv_text([t for t in trades if not t.get("date") or t["date"] >= cutoff])
+        except (OSError, ValueError, AttributeError):
+            pass
+    if "news" in extras:
+        try:
+            extra["news.csv"] = _csv_text(_news_payload(ticker, news_days, news_limit)["articles"])
+        except NEWS_ERRORS:
+            pass
+    if "screener" in extras:
+        row = next((item for item in _screener_items() if item["ticker"] == ticker), None)
+        if row:
+            extra["screener.csv"] = _csv_text([row])
+    images = _chart_images(folder, spec, chart_ids, years, theme == "dark") if chart_ids else []
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
-        for path in sorted(folder.rglob("*")):
-            if path.is_file() and path.suffix.lower() in ALLOWED_FILES | {".json"}:
-                bundle.write(path, arcname=f"{ticker}/{path.relative_to(folder).as_posix()}")
+        for name in files:
+            bundle.write(folder / name, arcname=f"{ticker}/{name}")
+        for path in images:
+            bundle.write(path, arcname=f"{ticker}/charts/{path.name}")
         for name, text in extra.items():
             bundle.writestr(f"{ticker}/{name}", text)
-        options = {"months": months, "news_days": news_days, "news_limit": news_limit}
-        for name, text in _debug_files(g.user["id"], options).items():
-            bundle.writestr(f"_debug/{name}", text)
+        if "debug" in extras:
+            options = {"months": months, "news_days": news_days, "news_limit": news_limit,
+                       "charts": chart_ids, "years": years, "theme": theme}
+            for name, text in _debug_files(g.user["id"], options).items():
+                bundle.writestr(f"_debug/{name}", text)
     buffer.seek(0)
+    return send_file(buffer, mimetype="application/zip", as_attachment=True, download_name=download_name)
+
+
+@app.get("/download/<ticker>/all")
+def download_all(ticker: str):
+    """The download dialog (Home and Charts): see ``_download_bundle``; everything by default."""
     commit = (git_commit()["commit"] or "")[:7]
-    return send_file(buffer, mimetype="application/zip", as_attachment=True,
-                     download_name=f"{ticker}_everything_v{app_version()}{'_' + commit if commit else ''}.zip")
+    name = f"{_normalise_ticker(ticker)}_everything_v{app_version()}{'_' + commit if commit else ''}.zip"
+    return _download_bundle(ticker, default_extras=DOWNLOAD_EXTRAS, download_name=name)
 
 
 @app.get("/download/<ticker>/<path:name>")

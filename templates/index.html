@@ -81,6 +81,9 @@
     /* One rule per role: white fill = the main action, soft fill = selected,
        no border = chrome. Radii: containers, controls, inner pieces. */
     --radius-lg:12px; --radius:8px; --radius-sm:6px;
+    /* Charts: the PNGs' grid and zero-line greys. */
+    --chart-grid:#3a3c41;
+    --chart-ink:#8d919a;
   }
   [data-theme="light"] {
     color-scheme: light;
@@ -104,6 +107,7 @@
     --badge-error-fg:#b42318;  --badge-error-bg:rgba(180,35,24,.10);
     --badge-idle-fg:#475467;   --badge-idle-bg:rgba(71,84,103,.10);
     --hover:rgba(0,0,0,.045);
+    --chart-grid:#e7e8ec;
   }
   * { box-sizing: border-box; }
   html, body { overflow-x:clip; }
@@ -537,6 +541,104 @@
             color:var(--muted); background:var(--surface); border:1px solid var(--line-soft); }
   .fig-dl:hover { color:var(--text); border-color:var(--line-strong); }
   .fig-dl svg { width:18px; height:18px; display:block; }
+  button.fig-dl { cursor:pointer; }
+
+  /* Charts drawn in the page (ECharts), dressed like the PNGs: bold title,
+     muted subtitle, legend keys in rows above the plot. */
+  .ec-fig { padding:16px 18px 12px; }
+  .ec-panels { display:grid; gap:24px; }
+  @media (min-width:980px) { .charts-full .ec-panels.two { grid-template-columns:1fr 1fr; } }
+  .ec-panel { min-width:0; }
+  .ec-head { padding-right:44px; }      /* room for the download button */
+  .ec-panels.two .ec-panel:first-child .ec-head { padding-right:0; }
+  .ec-title { font-size:calc(var(--fs) * 19); font-weight:700; color:var(--text); line-height:1.3; }
+  .ec-sub { margin-top:2px; font-size:calc(var(--fs) * 15); color:var(--muted); }
+  .ec-legend { display:flex; flex-wrap:wrap; gap:2px 14px; margin:10px 0 4px; }
+  .ec-key { display:inline-flex; align-items:center; gap:7px; padding:3px 4px; border:0; border-radius:var(--radius-sm);
+            background:none; color:var(--text); font-size:calc(var(--fs) * 14); cursor:pointer; }
+  .ec-key:hover { background:var(--hover); }
+  .ec-key[aria-pressed="false"] { color:var(--muted); text-decoration:line-through; }
+  .ec-key[aria-pressed="false"] .ec-swatch { opacity:.35; }
+  .ec-key.is-found { animation:found 2.4s ease-out; }
+  @keyframes found { 0%, 60% { background:var(--accent-soft); box-shadow:0 0 0 2px var(--line-strong); } }
+  .ec-swatch { flex:none; width:12px; height:9px; border-radius:2px; background:var(--c); }
+  .ec-swatch.line, .ec-swatch.dash { position:relative; width:16px; height:2px; border-radius:1px; }
+  .ec-swatch.line::after { content:""; position:absolute; left:4px; top:-3px; width:8px; height:8px;
+                           border-radius:50%; background:var(--c); }
+  .ec-swatch.dash { background:repeating-linear-gradient(90deg, var(--c) 0 4px, transparent 4px 7px); }
+  .ec-canvas { width:100%; }
+  .ec-empty, .ec-note { margin:8px 0 0; text-align:center; color:var(--muted); font-size:calc(var(--fs) * 15); }
+  .ec-empty { padding:60px 0; }
+  .grid .ec-fig { padding:12px 12px 8px; }
+  .ec-tip { min-width:180px; }
+  .ec-tip-head { margin-bottom:4px; font-weight:700; }
+  .ec-tip-row { display:flex; align-items:center; gap:4px; line-height:1.6; }
+  .ec-tip-row b { margin-left:auto; padding-left:16px; font-variant-numeric:tabular-nums; }
+  .ec-mini { height:110px; pointer-events:none; }
+
+  /* Search over the charted series and every fact of the filings. */
+  .chart-search { display:flex; gap:8px; align-items:center; margin:2px 0 12px; }
+  .chart-search[hidden] { display:none; }
+  .cs-field { position:relative; flex:1; min-width:0; }
+  .cs-field > svg { position:absolute; left:11px; top:50%; width:18px; height:18px; transform:translateY(-50%);
+                    color:var(--muted); pointer-events:none; }
+  .cs-field input { width:100%; min-width:0; padding:9px 12px 9px 36px; border:1px solid var(--field-line);
+                    border-radius:var(--radius); background:var(--bg); color:var(--text); font-size:calc(var(--fs) * 16); }
+  .cs-field input::placeholder { color:var(--muted); }
+  .cs-field input:focus { outline:none; border-color:var(--accent); }
+  #cs-year { flex:none; }
+  .cs-results { position:absolute; z-index:25; left:0; right:0; top:calc(100% + 4px); margin:0; padding:4px;
+                list-style:none; max-height:340px; overflow:auto; background:var(--surface-2);
+                border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow-drop); }
+  .cs-results[hidden] { display:none; }
+  .cs-results li { display:flex; align-items:baseline; gap:10px; padding:7px 10px; border-radius:var(--radius-sm);
+                   cursor:pointer; font-size:calc(var(--fs) * 15); }
+  .cs-results li[aria-selected="true"], .cs-results li:hover { background:var(--hover); }
+  .cs-results li.cs-none { cursor:default; color:var(--muted); background:none; }
+  .cs-label { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cs-where { color:var(--muted); font-size:calc(var(--fs) * 14); white-space:nowrap; }
+  .cs-tag { flex:none; padding:1px 8px; border-radius:999px; background:var(--accent-soft); color:var(--muted);
+            font-size:calc(var(--fs) * 13); }
+  .cs-status { margin:0 0 12px; font-size:calc(var(--fs) * 15); color:var(--muted); }
+  .cs-status:empty { display:none; }
+  .fact-card { margin:0 0 14px; padding:12px 14px; border:1px solid var(--line); border-radius:var(--radius); background:var(--bg); }
+  .fact-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:8px; }
+  .fact-name { display:flex; flex-direction:column; gap:2px; min-width:0; }
+  .fact-name .muted { font-size:calc(var(--fs) * 14); overflow-wrap:anywhere; }
+  table.fact-table th, table.fact-table td { text-align:right; }
+  table.fact-table th:first-child, table.fact-table td:first-child { text-align:right; }
+  table.fact-table .is-year { background:var(--accent-soft); color:var(--text); font-weight:700; }
+
+  /* Download dialog: what goes in the zip. */
+  .opt.dl { width:min(660px, 100%); height:auto; max-height:min(720px, calc(100vh - 32px)); }
+  .dl-head { display:flex; align-items:center; justify-content:space-between; gap:8px;
+             padding:10px 12px 10px 20px; border-bottom:1px solid var(--line-soft); }
+  .dl-head h2 { margin:0; font-size:calc(var(--fs) * 20); color:var(--heading); }
+  .dl-body { flex:1; min-height:0; overflow:auto; padding:4px 20px 12px; }
+  .dl-section { padding:12px 0; border-bottom:1px solid var(--line-soft); }
+  .dl-section:last-child { border-bottom:0; }
+  .dl-group { display:flex; align-items:baseline; gap:10px; font-weight:700; font-size:calc(var(--fs) * 17); cursor:pointer; }
+  .dl-group .dl-meta { font-weight:400; }
+  .dl-list { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:0 18px; margin:6px 0 0 26px; }
+  .dl-list.files { grid-template-columns:1fr; }
+  .dl-item { display:flex; align-items:baseline; gap:10px; min-width:0; padding:4px 0; font-size:calc(var(--fs) * 15); cursor:pointer; }
+  .dl-name { flex:none; }
+  .dl-meta { min-width:0; color:var(--muted); font-size:calc(var(--fs) * 14); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .dl-item input, .dl-group input { flex:none; align-self:center; width:16px; height:16px; margin:0; accent-color:var(--accent); cursor:pointer; }
+  .dl-opts { display:flex; flex-wrap:wrap; gap:12px 28px; margin:12px 0 2px 26px; }
+  .dl-opts .seg { width:200px; }
+  .dl-opts.is-off { opacity:.45; }
+  .dl-foot { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:12px 20px; border-top:1px solid var(--line-soft); }
+  .dl-summary { flex:1; min-width:180px; color:var(--muted); font-size:calc(var(--fs) * 14); }
+  .dl-summary.is-error { color:var(--badge-error-fg); }
+  @media (max-width:600px) {
+    .dl-list { margin-left:0; grid-template-columns:1fr; }
+    .dl-opts { margin-left:0; }
+    .dl-item .dl-meta { display:none; }
+    .dl-summary { flex-basis:100%; }
+    .dl-foot .panel-btn { margin-left:auto; }
+    .ec-fig { padding:12px 10px 8px; }
+  }
   .ticker-link { color:var(--heading); }
   @media (max-width:820px) {
     .home-grid { grid-template-columns:1fr; }
@@ -710,7 +812,7 @@
         <!-- The tab's icon names it; the head carries the company instead. -->
         <div class="home-title"><b id="home-ticker" class="panel-title"></b><span class="muted parts" id="home-company"></span></div>
         <span class="panel-actions">
-          <button class="panel-btn icon-btn" id="home-download-btn" onclick="downloadHome()" title="Download everything for this ticker (.zip)" aria-label="Download everything for this ticker (.zip)">
+          <button class="panel-btn icon-btn" id="home-download-btn" onclick="downloadHome()" title="Download charts and data (.zip)" aria-label="Download charts and data (.zip)">
             <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download" /></svg>
           </button>
           <button class="panel-btn icon-btn" onclick="initHome(true)" title="Refresh" aria-label="Refresh">
@@ -783,7 +885,7 @@
             </svg>
           </button>
           <button class="panel-btn icon-btn" id="graph-download-btn" hidden onclick="downloadGraph()"
-                  title="Download all charts and data (.zip)" aria-label="Download all charts and data">
+                  title="Download charts and data (.zip)" aria-label="Download charts and data">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
                 <path d="M4 15.5v2A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5v-2H4" fill="currentColor" opacity=".2" stroke="none" />
@@ -808,6 +910,23 @@
         <p class="muted" id="graph-empty">No ticker yet. Enter one above and press Run; its charts
           stay here until you open another. Several tickers run the screener only.</p>
         <p class="graph-progress" id="graph-progress"></p>
+        <!-- Search: a fact and a year; charted ones jump to their chart. -->
+        <div class="chart-search" id="chart-search" hidden>
+          <div class="cs-field">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.6">
+              <circle cx="10.5" cy="10.5" r="6" /><path d="M15 15l5 5" /></g></svg>
+            <input id="cs-input" type="search" placeholder="Search a fact: goodwill, revenue, buybacks…" autocomplete="off"
+                   role="combobox" aria-label="Search a fact" aria-controls="cs-results" aria-expanded="false"
+                   aria-autocomplete="list" oninput="searchFacts()" onkeydown="searchKey(event)" onfocus="loadFacts()"
+                   onblur="closeSearch()">
+            <ul id="cs-results" class="cs-results" role="listbox" aria-label="Matching facts" hidden></ul>
+          </div>
+          <select id="cs-year" aria-label="Year" title="Year to show" onchange="searchYearChanged()">
+            <option value="">Latest year</option>
+          </select>
+        </div>
+        <p class="cs-status" id="cs-status" role="status"></p>
+        <div id="fact-card"></div>
         <div id="chart-index" class="chart-index"></div>
       </div>
     </section>
@@ -1234,6 +1353,54 @@
   </div>
 </div>
 
+<!-- Download: tick what goes in the zip. -->
+<div id="dl-backdrop" class="opt-backdrop hidden" onclick="if (event.target === this) closeDownload()">
+  <div class="opt dl" role="dialog" aria-modal="true" aria-labelledby="dl-title">
+    <div class="dl-head">
+      <h2 id="dl-title">Download</h2>
+      <button class="opt-close" onclick="closeDownload()" title="Close" aria-label="Close download">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none"
+             stroke="currentColor" stroke-linecap="round" stroke-width="1.8" /></svg>
+      </button>
+    </div>
+    <div class="dl-body">
+      <section class="dl-section">
+        <label class="dl-group"><input type="checkbox" data-group="dl-chart" onchange="dlGroup(this)">
+          Charts <span class="dl-meta">PNG, drawn when you download</span></label>
+        <div class="dl-list" id="dl-charts"></div>
+        <div class="dl-opts" id="dl-png-opts">
+          <div><span class="opt-label" id="dl-years-label">Years per image</span>
+            <div class="seg" id="dl-years" role="group" aria-labelledby="dl-years-label">
+              <button data-value="5" onclick="setDlOption('years', 5)">5</button>
+              <button data-value="10" onclick="setDlOption('years', 10)">10</button>
+              <button data-value="0" onclick="setDlOption('years', 0)">All</button>
+            </div></div>
+          <div><span class="opt-label" id="dl-theme-label">Theme</span>
+            <div class="seg" id="dl-theme" role="group" aria-labelledby="dl-theme-label">
+              <button data-value="light" onclick="setDlOption('theme', 'light')">Light</button>
+              <button data-value="dark" onclick="setDlOption('theme', 'dark')">Dark</button>
+            </div></div>
+        </div>
+      </section>
+      <section class="dl-section">
+        <label class="dl-group"><input type="checkbox" data-group="dl-file" onchange="dlGroup(this)">
+          Data <span class="dl-meta">the run's files</span></label>
+        <div class="dl-list files" id="dl-files"></div>
+      </section>
+      <section class="dl-section">
+        <label class="dl-group"><input type="checkbox" data-group="dl-extra" onchange="dlGroup(this)">
+          Extras <span class="dl-meta">made when you download</span></label>
+        <div class="dl-list files" id="dl-extras"></div>
+      </section>
+    </div>
+    <div class="dl-foot">
+      <span class="dl-summary" id="dl-summary" role="status"></span>
+      <button class="panel-btn" onclick="closeDownload()">Cancel</button>
+      <button class="primary" id="dl-go" onclick="runDownload()">Download</button>
+    </div>
+  </div>
+</div>
+
 <div id="dropbar" class="dropbar" role="status" aria-live="polite">
   <div class="dropbar-row">
     <span id="dropbar-text" class="dropbar-text"></span>
@@ -1243,6 +1410,7 @@
   <div class="dropbar-progress"></div>
 </div>
 
+<script src="{{ url_for('static', filename='vendor/echarts.min.js') }}"></script>
 <script>
 const $ = s => document.querySelector(s);
 
@@ -1565,7 +1733,7 @@ function applyTheme(theme) {
   }
   $('#opt-dark').classList.toggle('active', theme === 'dark');
   $('#opt-light').classList.toggle('active', theme === 'light');
-  // Swap the charts to the copies drawn for this theme.
+  // Redraw the charts in this theme's colours.
   if (GRAPH.results) renderResults(GRAPH.results, '#results-graph');
 }
 
@@ -1835,6 +2003,7 @@ async function runConfirm() {
 }
 
 document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !$('#dl-backdrop').classList.contains('hidden')) { closeDownload(); return; }
   if (e.key !== 'Escape' || $('#opt-backdrop').classList.contains('hidden')) return;
   if (OPT.confirm) closeConfirm();
   else closeOptions();
@@ -1951,7 +2120,7 @@ function setGraphProgress(text, isError = false) {
 }
 
 function downloadGraph() {
-  if (GRAPH.ticker) location.href = `/download/${encodeURIComponent(GRAPH.ticker)}`;
+  openDownload('graph');
 }
 
 function toggleLog() {
@@ -2145,27 +2314,25 @@ function renderHome() {
     : trades.length ? '' : 'No open-market insider trades in the collected period.';
   $('#home-insiders').innerHTML = trades.map(insiderRow).join('');
 
-  // Charts: one small thumbnail per chart type (its most recent year window);
-  // a click opens that chart in the Charts tab.
+  // Charts: one small thumbnail per chart (its last five years); a click
+  // opens that chart in the Charts tab. Redrawn only when the run or the
+  // theme changes, not on every Home update.
   const data = GRAPH.results && GRAPH.results.ticker === ticker ? GRAPH.results : null;
   const live = GRAPH.state === 'queued' || GRAPH.state === 'running';
-  $('#home-charts').innerHTML = data
-    ? latestCharts(data.charts).map(name => `<figure onclick="openChart('${esc(chartId(name))}')" title="Open in the Charts tab">
-        <img src="${chartSrc(data, name)}" alt="${esc(name)}" loading="lazy">
-        <figcaption><span>${esc(chartLabel(name))}</span></figcaption>
-      </figure>`).join('')
-    : `<p class="muted">${live ? 'Charts appear when the run finishes.' : 'No charts for this ticker yet.'}</p>`;
-}
-
-// Chart files are NN_name[_YYYY_YYYY].png: keep the window ending latest per NN.
-function latestCharts(charts) {
-  const best = new Map();
-  for (const name of charts) {
-    const key = name.split('_')[0];
-    const end = Number((name.match(/_(\d{4})\.png$/) || [])[1] || 0);
-    if (!best.has(key) || end > best.get(key).end) best.set(key, { name, end });
+  const spec = data && EC.spec && EC.key === `${data.ticker}|${data.modified}` ? EC.spec : null;
+  const home = $('#home-charts');
+  const key = spec ? `${EC.key}|${document.documentElement.dataset.theme}` : `none|${live}|${data ? data.charts.length : -1}`;
+  if (home.dataset.key !== key) {
+    home.dataset.key = key;
+    disposeCharts(home);
+    home.innerHTML = spec
+      ? spec.charts.map(chart => `<figure onclick="openChart('${esc(chartId(chart.id))}')" title="Open in the Charts tab">
+          <div class="ec-mini" data-chart="${esc(chart.id)}" data-panel="0"></div>
+          <figcaption><span>${esc(chart.name)}</span></figcaption>
+        </figure>`).join('')
+      : `<p class="muted">${data && data.charts.length ? 'Loading charts…' : live ? 'Charts appear when the run finishes.' : 'No charts for this ticker yet.'}</p>`;
+    if (spec) mountCharts(home, spec.charts, { mini: true });
   }
-  return [...best.values()].map(item => item.name);
 }
 
 function openHome(ticker) {
@@ -2403,11 +2570,17 @@ function renderResultsError(ticker, data, target) {
     </div>`;
 }
 
-function renderResults(data, target) {
+// The charts of the pinned run, drawn from its charts.json. A render that a
+// newer one overtook (a theme switch while loading) stops before drawing.
+let RENDER_TOKEN = 0;
+async function renderResults(data, target) {
+  const token = ++RENDER_TOKEN;
   GRAPH.results = null;
   $('#chart-index').innerHTML = '';
   syncChartView();
   if (!data.charts.length) {
+    disposeCharts($(target));
+    $('#chart-search').hidden = true;
     // A screener run writes the data but no charts.
     $(target).innerHTML = `
       <div class="card">
@@ -2420,48 +2593,30 @@ function renderResults(data, target) {
     return;
   }
   GRAPH.results = data;
-  // The chart's own title names it, so no caption: just a download icon in the
-  // top corner. Images load eagerly so jumping to a chart lands where it stays.
-  const grid = data.charts.map(name => `
-    <figure id="${esc(chartId(name))}" class="chart-fig">
-      <a href="${chartSrc(data, name)}" target="_blank">
-        <img src="${chartSrc(data, name)}" alt="${esc(chartLabel(name))}"></a>
-      <a class="fig-dl" href="/download/${esc(data.ticker)}/${esc(name)}" title="Download ${esc(chartLabel(name))}"
-         aria-label="Download ${esc(chartLabel(name))}"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download" /></svg></a>
-    </figure>`).join('');
+  const [spec] = await Promise.all([loadSpec(data).catch(() => null), FONT_READY]);
+  if (token !== RENDER_TOKEN) return;
+  disposeCharts($(target));
+  if (!spec || !window.echarts) {
+    $(target).innerHTML = `<div class="card"><p class="muted">Could not load the charts of ${esc(data.ticker)}.
+      Refresh to try again.</p></div>`;
+    return;
+  }
+  const custom = EC.custom.filter(c => c.ticker === data.ticker);
   const view = CHART_VIEW === 'grid' ? 'grid' : 'charts-full';
-  $('#chart-index').innerHTML = chartIndex(data.charts);
-  $(target).innerHTML = `<div class="${view}">${grid}</div>`;
+  $(target).innerHTML = `<div class="${view}">${custom.map(c => figureHtml(c, true)).join('')}${spec.charts.map(c => figureHtml(c)).join('')}</div>`;
+  mountCharts($(target), [...custom, ...spec.charts]);
+  $('#chart-index').innerHTML = chartIndex();
+  $('#chart-search').hidden = false;
+  fillSearchYears(spec);
   syncChartView();
   renderHome();
 }
 
-// Chart files are NN_name[_YYYY_YYYY].png: one index line per NN, with a link
-// per year window.
-function chartIndex(charts) {
-  const groups = new Map();
-  for (const name of charts) {
-    const base = name.replace(/\.png$/, '');
-    const key = base.split('_')[0];
-    const windowMatch = base.match(/_(\d{4})_(\d{4})$/);
-    const title = base.replace(/^\d+_/, '').replace(/_(\d{4})_(\d{4})$/, '').replace(/_full$/, '').replaceAll('_', ' ');
-    if (!groups.has(key)) groups.set(key, { title, items: [] });
-    groups.get(key).items.push({ name, label: windowMatch ? `${windowMatch[1]}–${windowMatch[2]}` : '' });
-  }
-  const link = (name, text) => `<a href="#${chartId(name)}" onclick="jumpToChart(event, '${esc(chartId(name))}')">${esc(text)}</a>`;
-  const lines = [...groups.values()].map(({ title, items }) => {
-    const label = title.charAt(0).toUpperCase() + title.slice(1);
-    if (items.length === 1) return `<li>${link(items[0].name, label)}</li>`;
-    return `<li>${esc(label)} <span class="windows parts">${items.map(it => link(it.name, it.label || it.name)).join('')}</span></li>`;
-  }).join('');
-  return `<ol>${lines}</ol>`;
+// One index line per chart; searched facts drawn as charts come first.
+function chartIndex() {
+  const charts = [...EC.custom.filter(c => c.ticker === GRAPH.ticker), ...(EC.spec?.charts || [])];
+  return `<ol>${charts.map(c => `<li><a href="#${chartId(c.id)}" onclick="jumpToChart(event, '${esc(chartId(c.id))}')">${esc(c.name)}</a></li>`).join('')}</ol>`;
 }
-
-const chartLabel = name => {
-  const label = name.replace(/^\d+_/, '').replace('.png', '').replaceAll('_', ' ');
-  return label.charAt(0).toUpperCase() + label.slice(1);
-};
-const chartId = name => 'chart-' + name.replace(/\.png$/, '').replace(/[^\w-]/g, '_');
 
 function jumpToChart(event, id) {
   event.preventDefault();
@@ -2474,11 +2629,762 @@ function setChartView(view) {
   if (GRAPH.results) renderResults(GRAPH.results, '#results-graph');
 }
 
-// Dark copies exist for runs made after dark charts were added.
-function chartSrc(data, name) {
-  const dark = document.documentElement.dataset.theme === 'dark'
-    && Array.isArray(data.dark_charts) && data.dark_charts.includes(name);
-  return `/files/${esc(data.ticker)}/${dark ? 'dark/' : ''}${esc(name)}`;
+/* Charts: ECharts ------------------------------------------------------------ */
+// The run's charts.json drawn in the page, to look like the matplotlib PNGs:
+// same colours, number formats, rounded bars with a surface-coloured gap,
+// faint horizontal grid, a zero line, value labels with a halo. One ECharts
+// instance per panel, made once its box has a width (a hidden tab has none).
+// The years slider under a chart scrolls through the whole history.
+const EC = { spec: null, key: '', entries: [], custom: [], facts: null, factsKey: '', observer: null };
+const FONT_READY = document.fonts ? document.fonts.load('12px "Stocky Mono"').catch(() => {}) : Promise.resolve();
+const FINE_POINTER = matchMedia('(pointer: fine)').matches;
+
+// $29,70B / −$765,62M: decimal comma and a true minus, as in the PNGs.
+function compact(value, prefix = '', decimals = 2, strip = false) {
+  const magnitude = Math.abs(value);
+  const [number, unit] = magnitude >= 1e6 ? [magnitude / 1e6, 'T'] : magnitude >= 1000 ? [magnitude / 1000, 'B'] : [magnitude, 'M'];
+  let text = number.toFixed(decimals);
+  if (strip && text.includes('.')) text = text.replace(/0+$/, '').replace(/\.$/, '');
+  return (value < 0 ? '−' : '') + prefix + text.replace('.', ',') + unit;
+}
+const comma = text => text.replace('.', ',').replace('-', '−');
+const VALUE_FMT = {
+  mm: v => compact(v, '$'),
+  shares: v => compact(v),
+  pct: v => comma((v * 100).toFixed(2)) + '%',
+  x: v => comma(v.toFixed(1)) + 'x',
+  int: v => v.toFixed(0),
+  dec1: v => comma(v.toFixed(1)),
+  usdps: v => (v < 0 ? '−$' : '$') + Math.abs(v).toFixed(2).replace('.', ','),
+};
+const AXIS_FMT = {
+  money: v => v === 0 ? '0' : compact(v, '$', 1, true),
+  shares: v => v === 0 ? '0' : compact(v, '', 2, true),
+  pct: v => comma((v * 100).toFixed(0)) + '%',
+  x: v => v.toFixed(0) + 'x',
+  usdps: v => VALUE_FMT.usdps(v),
+  plain: v => comma(String(+v.toFixed(2))),
+};
+const fmtValue = (format, v) => (VALUE_FMT[format] || String)(v);
+const yearSpan = years => years.length ? `${years[0]}–${years[years.length - 1]}` : '';
+
+function chartTheme() {
+  const css = getComputedStyle(document.documentElement);
+  const v = name => css.getPropertyValue(name).trim();
+  return { surface: v('--surface'), surface2: v('--surface-2'), text: v('--text'), muted: v('--muted'),
+           line: v('--line'), lineStrong: v('--line-strong'), grid: v('--chart-grid'), ink: v('--chart-ink'),
+           soft: v('--accent-soft'), font: getComputedStyle(document.body).fontFamily,
+           fs: parseFloat(v('--fs')) || 1 };
+}
+const inkColor = (color, t) => color === 'strong' ? t.text : color;
+
+// Axis limits like matplotlib's margins, rounded out to a tidy step so the
+// top and bottom lines carry clean numbers. Bars stick to zero; the first
+// axis, and any axis with bars, always shows zero (as in the PNGs).
+function niceStep(raw) {
+  if (!(raw > 0)) return 1;
+  const power = 10 ** Math.floor(Math.log10(raw));
+  const f = raw / power;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * power;
+}
+function axisBounds(lo, hi, margin, zero, sticky) {
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) { lo = 0; hi = 1; }
+  if (zero) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
+  const span = (hi - lo) || Math.abs(hi) || 1;
+  const top = sticky && hi === 0 ? 0 : hi + span * margin;
+  const bottom = sticky && lo === 0 ? 0 : lo - span * margin;
+  const step = niceStep((top - bottom) / 5);
+  return { min: Math.floor(bottom / step + 1e-9) * step, max: Math.ceil(top / step - 1e-9) * step, interval: step };
+}
+
+// Each axis's limits for the years ``from``..``to`` (the slider's window),
+// so a window of small early years is not flattened by later big ones.
+function yBounds(panel, from, to) {
+  const barAxes = new Set(panel.series.filter(s => s.kind === 'bar').map(s => s.axis));
+  return panel.axes.map((axis, k) => {
+    if (axis.min != null || axis.max != null) return { min: axis.min, max: axis.max, interval: axis.interval };
+    const values = panel.series.filter(s => s.axis === k)
+      .flatMap(s => s.values.slice(from, to + 1)).filter(v => v != null);
+    if (k === 0 && panel.reference) values.push(panel.reference.value);
+    const margin = k === 0 ? panel.margin : (axis.margin ?? 0.2);
+    return axisBounds(values.length ? Math.min(...values) : 0, values.length ? Math.max(...values) : 1,
+                      margin, k === 0 || barAxes.has(k), barAxes.has(k));
+  });
+}
+
+// How many years fit at once: grouped bars need room per bar.
+function visibleYears(panel, width) {
+  const bars = panel.series.filter(s => s.kind === 'bar').length;
+  const per = bars ? Math.max(84, bars * 22) : 60;
+  return Math.max(3, Math.min(panel.years.length, Math.floor(width / per) || 3));
+}
+
+// The ECharts option for one panel, plus each series' index by name.
+function panelOption(panel, t, { mini = false, width = 800 } = {}) {
+  const fs = t.fs;
+  const text = (size, color = t.muted) => ({ fontFamily: t.font, fontSize: size * fs, color });
+  const years = panel.years.map(String);
+  const barAxes = new Set(panel.series.filter(s => s.kind === 'bar').map(s => s.axis));
+  const hasBars = barAxes.size > 0;
+  const byName = {};
+  const index = {};
+  const series = [];
+  const label = (s, color) => ({
+    show: !mini, ...text(11, color), textBorderColor: t.surface, textBorderWidth: 3,
+    formatter: p => p.value == null ? '' : fmtValue(s.format, p.value),
+  });
+  for (const s of panel.series) {
+    const color = inkColor(s.color, t);
+    byName[s.label] = s;
+    index[s.label] = series.length;
+    if (s.kind === 'bar') {
+      series.push({
+        type: 'bar', name: s.label, yAxisIndex: s.axis, z: 2,
+        data: s.values.map(v => v == null ? null : { value: v, label: { position: v < 0 ? 'bottom' : 'top' } }),
+        itemStyle: { color, borderColor: t.surface, borderWidth: 1, borderRadius: 4 },
+        emphasis: { itemStyle: { borderColor: t.text, borderWidth: 2 } },
+        barGap: '0%', barCategoryGap: `${Math.round((1 - panel.group_width) * 100)}%`,
+        label: label(s, t.text), labelLayout: { hideOverlap: true },
+      });
+      continue;
+    }
+    // A line on the second axis of a bar chart (shares outstanding) runs
+    // behind the bars; its dots and numbers are drawn again in front.
+    const behind = s.axis === 1 && hasBars;
+    series.push({
+      type: 'line', name: s.label, yAxisIndex: s.axis, z: behind ? 1 : 3, data: s.values,
+      symbol: 'circle', symbolSize: 8, showSymbol: !behind,
+      lineStyle: { width: 2, color }, itemStyle: { color, borderColor: t.surface, borderWidth: 1.5 },
+      label: behind ? { show: false } : { ...label(s, t.text), position: 'top' }, labelLayout: { hideOverlap: true },
+    });
+    if (behind) {
+      series.push({
+        type: 'scatter', name: s.label, yAxisIndex: s.axis, z: 4, data: s.values, symbolSize: 8,
+        itemStyle: { color, borderColor: t.surface, borderWidth: 1.5 },
+        label: { ...label(s, color), position: 'top' }, labelLayout: { hideOverlap: true },
+      });
+    }
+  }
+  const ref = panel.reference;
+  if (ref) {
+    const color = inkColor(ref.color, t);
+    byName[ref.legend] = null;
+    series.push({
+      type: 'line', name: ref.legend, data: years.map(() => null), symbol: 'none', z: 3,
+      lineStyle: { type: 'dashed', width: 1.5, color }, itemStyle: { color },
+      markLine: {
+        silent: true, symbol: 'none', lineStyle: { type: 'dashed', width: 1.5, color },
+        label: { show: !mini, position: 'insideEndTop', formatter: ref.label, ...text(11, t.text),
+                 textBorderColor: t.surface, textBorderWidth: 3 },
+        data: [{ yAxis: ref.value }],
+      },
+    });
+  }
+  // The zero line: a rule at 0 like matplotlib's axhline, not part of the legend.
+  series.push({ type: 'line', name: '', data: [], silent: true, z: 1,
+                markLine: { silent: true, symbol: 'none', label: { show: false },
+                            lineStyle: { type: 'solid', width: 1, color: t.ink }, data: [{ yAxis: 0 }] } });
+
+  const visible = mini ? years.length : visibleYears(panel, width);
+  const zoom = !mini && visible < years.length;
+  const bounds = yBounds(panel, years.length - visible, years.length - 1);
+  const yAxis = panel.axes.map((axis, k) => {
+    const fixed = axis.min != null || axis.max != null;
+    return {
+      type: 'value', position: k ? 'right' : 'left', ...bounds[k],
+      name: mini ? '' : (axis.name || ''), nameLocation: 'middle', nameGap: 42, nameRotate: k ? -90 : 90,
+      nameTextStyle: text(12),
+      axisLabel: { show: !mini, ...text(12), formatter: AXIS_FMT[axis.format] || AXIS_FMT.plain,
+                   showMaxLabel: fixed ? false : null },
+      axisLine: { show: false }, axisTick: { show: false },
+      splitLine: { show: k === 0 && !mini, lineStyle: { color: t.grid, width: 1 } },
+    };
+  });
+
+  const option = {
+    animationDuration: 300, animationDurationUpdate: 250,
+    textStyle: { fontFamily: t.font },
+    grid: mini ? { left: 2, right: 2, top: 6, bottom: 4, containLabel: false }
+               : { left: 6, right: 6, top: 14, bottom: zoom ? 54 : 6, containLabel: true },
+    legend: { show: false, data: panel.series.map(s => s.label).concat(ref ? [ref.legend] : []) },
+    xAxis: { type: 'category', data: years, axisTick: { show: false }, axisLine: { show: false },
+             axisLabel: { show: !mini, ...text(12), hideOverlap: true }, splitLine: { show: false } },
+    yAxis,
+    series,
+    tooltip: {
+      show: !mini, trigger: 'axis', confine: true, axisPointer: { type: 'shadow', shadowStyle: { color: t.soft } },
+      backgroundColor: t.surface2, borderColor: t.line, borderWidth: 1, padding: [8, 12],
+      textStyle: text(13, t.text), extraCssText: 'border-radius:8px; box-shadow:var(--shadow-drop);',
+      formatter: params => tooltipHtml(params, byName),
+    },
+  };
+  if (zoom) {
+    option.dataZoom = [{
+      type: 'slider', xAxisIndex: 0, startValue: years.length - visible, endValue: years.length - 1,
+      minValueSpan: 1, bottom: 10, height: 24, brushSelect: false, borderColor: t.line, borderRadius: 6,
+      backgroundColor: 'transparent', fillerColor: t.soft,
+      dataBackground: { lineStyle: { color: t.lineStrong, opacity: 0.6 }, areaStyle: { color: t.lineStrong, opacity: 0.12 } },
+      selectedDataBackground: { lineStyle: { color: t.lineStrong }, areaStyle: { color: t.lineStrong, opacity: 0.2 } },
+      handleStyle: { color: t.surface, borderColor: t.lineStrong }, moveHandleStyle: { color: t.lineStrong, opacity: 0.5 },
+      emphasis: { handleStyle: { borderColor: t.text }, moveHandleStyle: { color: t.text, opacity: 0.6 } },
+      textStyle: text(11), labelFormatter: (_i, value) => value,
+    }];
+    // Drag to pan and ctrl+wheel to zoom with a mouse; touch keeps scrolling the page.
+    if (FINE_POINTER) option.dataZoom.push({ type: 'inside', xAxisIndex: 0, zoomOnMouseWheel: 'ctrl',
+                                             moveOnMouseWheel: 'shift', moveOnMouseMove: true });
+  }
+  return { option, index };
+}
+
+function tooltipHtml(params, byName) {
+  const list = (Array.isArray(params) ? params : [params]).filter(p => p.seriesName);
+  if (!list.length) return '';
+  const seen = new Set();
+  const rows = list.map(p => {
+    const s = byName[p.seriesName];
+    if (!s || seen.has(p.seriesName) || p.value == null) return '';
+    seen.add(p.seriesName);
+    return `<div class="ec-tip-row">${p.marker}<span>${esc(s.label)}${s.derived ? ' *' : ''}</span>`
+      + `<b>${esc(fmtValue(s.format, p.value))}</b></div>`;
+  }).join('');
+  return `<div class="ec-tip"><div class="ec-tip-head">${esc(list[0].axisValue)}</div>`
+    + (rows || '<div class="ec-tip-row muted">No values this year</div>') + '</div>';
+}
+
+// The legend is HTML: it wraps like text and each key toggles its series.
+function legendHtml(panel) {
+  const key = (name, color, kind, derived) => `<button class="ec-key" data-name="${esc(name)}" aria-pressed="true"
+      onclick="toggleSeries(this)"><span class="ec-swatch ${kind}" style="--c:${esc(color)}"></span>${esc(name)}${derived ? ' *' : ''}</button>`;
+  const t = chartTheme();
+  const keys = panel.series.map(s => key(s.label, inkColor(s.color, t), s.kind, s.derived));
+  if (panel.reference) keys.push(key(panel.reference.legend, inkColor(panel.reference.color, t), 'dash', false));
+  return keys.join('');
+}
+
+const chartId = id => 'chart-' + String(id).replace(/[^\w-]/g, '_');
+
+function figureHtml(chart, custom = false) {
+  const panels = chart.panels.map((panel, i) => {
+    const bars = panel.series.filter(s => s.kind === 'bar').length;
+    const height = Math.round((panel.years.length > 4 ? 44 : 0) + Math.min(440, 330 + bars * 12));
+    return `<div class="ec-panel">
+        <div class="ec-head">
+          <div class="ec-title">${esc(panel.title)}</div>
+          ${panel.subtitle ? `<div class="ec-sub" data-sub="${esc(panel.subtitle)}">${esc(panel.subtitle.replace('{span}', yearSpan(panel.years)))}</div>` : ''}
+          ${panel.series.length || panel.reference ? `<div class="ec-legend">${legendHtml(panel)}</div>` : ''}
+        </div>
+        ${panel.series.length ? `<div class="ec-canvas" style="height:${height}px" data-chart="${esc(chart.id)}" data-panel="${i}"></div>`
+          : `<p class="ec-empty">${esc(panel.empty)}</p>`}
+        ${panel.note ? `<p class="ec-note">${esc(panel.note)}</p>` : ''}
+      </div>`;
+  }).join('');
+  const action = custom
+    ? `<button class="fig-dl" onclick="removeCustomChart('${esc(chart.id)}')" title="Remove this chart" aria-label="Remove ${esc(chart.name)}">
+         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8" /></svg></button>`
+    : `<button class="fig-dl" onclick="openDownload('chart', '${esc(chart.id)}')" title="Download ${esc(chart.name)} as PNG"
+         aria-label="Download ${esc(chart.name)} as PNG"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download" /></svg></button>`;
+  return `<figure id="${chartId(chart.id)}" class="chart-fig ec-fig">
+      <div class="ec-panels${chart.panels.length > 1 ? ' two' : ''}">${panels}</div>${action}</figure>`;
+}
+
+function disposeCharts(root = null) {
+  EC.entries = EC.entries.filter(entry => {
+    if (root && !root.contains(entry.el)) return true;
+    if (EC.observer) EC.observer.unobserve(entry.el);
+    if (entry.inst) entry.inst.dispose();
+    return false;
+  });
+}
+
+// Each canvas is drawn once it has a width, and redrawn to fit when resized.
+function mountCharts(root, charts, { mini = false } = {}) {
+  if (!window.echarts) return;
+  if (!EC.observer) {
+    EC.observer = new ResizeObserver(items => {
+      for (const item of items) {
+        const entry = EC.entries.find(e => e.el === item.target);
+        if (!entry || !item.contentRect.width) continue;
+        if (!entry.inst) drawEntry(entry);
+        else entry.inst.resize();
+      }
+    });
+  }
+  for (const el of root.querySelectorAll(mini ? '.ec-mini' : '.ec-canvas')) {
+    const chart = charts.find(c => c.id === el.dataset.chart);
+    if (!chart) continue;
+    const panel = chart.panels[Number(el.dataset.panel) || 0];
+    const entry = { chart, panel, el, mini, inst: null, index: {},
+                    head: el.closest('.ec-panel')?.querySelector('.ec-head') || null };
+    EC.entries.push(entry);
+    EC.observer.observe(el);
+  }
+}
+
+function drawEntry(entry) {
+  const panel = entry.mini ? lastYears(entry.panel, 5) : entry.panel;
+  const { option, index } = panelOption(panel, chartTheme(), { mini: entry.mini, width: entry.el.clientWidth });
+  entry.inst = echarts.init(entry.el, null, { renderer: 'canvas' });
+  entry.inst.setOption(option);
+  entry.index = index;
+  if (entry.mini) return;
+  entry.inst.on('datazoom', () => {
+    const [from, to] = zoomRange(entry);
+    entry.inst.setOption({ yAxis: yBounds(entry.panel, from, to) });
+    updateSpan(entry);
+  });
+  entry.inst.on('legendselectchanged', event => {
+    for (const key of entry.head.querySelectorAll('.ec-key')) {
+      key.setAttribute('aria-pressed', String(event.selected[key.dataset.name] !== false));
+    }
+  });
+  updateSpan(entry);
+}
+
+// A panel cut to its last ``n`` years (Home's thumbnails).
+function lastYears(panel, n) {
+  const from = Math.max(0, panel.years.length - n);
+  return { ...panel, years: panel.years.slice(from),
+           series: panel.series.map(s => ({ ...s, values: s.values.slice(from) })) };
+}
+
+// Years on show, from the slider; the subtitle names them like a PNG's window.
+function zoomRange(entry) {
+  const n = entry.panel.years.length;
+  const zoom = entry.inst && entry.inst.getOption().dataZoom;
+  if (!zoom || !zoom.length) return [0, n - 1];
+  const z = zoom[0];
+  return [Math.round((z.start / 100) * (n - 1)), Math.round((z.end / 100) * (n - 1))];
+}
+
+function updateSpan(entry) {
+  const sub = entry.head && entry.head.querySelector('.ec-sub');
+  if (!sub) return;
+  const [from, to] = zoomRange(entry);
+  sub.textContent = sub.dataset.sub.replace('{span}', yearSpan(entry.panel.years.slice(from, to + 1)));
+}
+
+function toggleSeries(button) {
+  const entry = EC.entries.find(e => e.head && e.head.contains(button));
+  if (entry && entry.inst) entry.inst.dispatchAction({ type: 'legendToggleSelect', name: button.dataset.name });
+}
+
+async function loadSpec(data) {
+  const key = `${data.ticker}|${data.modified}`;
+  if (EC.key === key && EC.spec) return EC.spec;
+  const res = await fetch(`/api/charts/${encodeURIComponent(data.ticker)}`);
+  if (!res.ok) return null;
+  const spec = await res.json();
+  EC.spec = spec;
+  EC.key = key;
+  return spec;
+}
+
+/* Search: a fact and a year ---------------------------------------------------- */
+// Looks through the charted series and every statement line and fact of the
+// filings. A charted one scrolls to its chart, moves the slider to the year
+// and opens its tooltip; any other shows its values, and can be charted.
+const STATEMENT_NAMES = {
+  income: 'Income statement', balance: 'Balance sheet', cashflow: 'Cash flow', equity: 'Equity',
+  comprehensive: 'Comprehensive income', IncomeStatement: 'Income statement', BalanceSheet: 'Balance sheet',
+  CashFlowStatement: 'Cash flow', StatementOfEquity: 'Equity', CoverPage: 'Cover page',
+  Disclosures: 'Notes', NoteTable: 'Notes', Notes: 'Notes', AccountingPolicies: 'Notes',
+  ComprehensiveIncome: 'Comprehensive income',
+};
+const UNIT_FORMAT = { usd: ['mm', 1e6, 'USD'], shares: ['shares', 1e6, 'shares'], 'usd/share': ['usdps', 1, 'USD per share'],
+                      pure: ['pct', 1, 'ratio'] };
+const SEARCH = { results: [], active: -1, fact: null };
+const words = concept => String(concept).replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
+
+async function loadFacts() {
+  const ticker = GRAPH.ticker;
+  const key = `${ticker}|${GRAPH.results?.modified || ''}`;
+  if (EC.factsKey === key && EC.facts) return EC.facts;
+  EC.factsKey = key;
+  EC.facts = [];
+  try {
+    const res = await fetch(`/api/facts/${encodeURIComponent(ticker)}`);
+    if (res.ok && EC.factsKey === key) EC.facts = (await res.json()).facts || [];
+  } catch { /* charted series still search */ }
+  return EC.facts;
+}
+
+function searchEntries() {
+  const entries = [];
+  for (const chart of [...EC.custom.filter(c => c.ticker === GRAPH.ticker), ...(EC.spec?.charts || [])]) {
+    chart.panels.forEach((panel, p) => panel.series.forEach(s => entries.push({
+      kind: 'chart', label: s.label, where: chart.name, chart: chart.id, panel: p, series: s,
+      years: panel.years, text: `${s.label} ${chart.name} ${s.concepts.map(words).join(' ')}`.toLowerCase(),
+    })));
+  }
+  const charted = new Set((EC.spec?.charts || []).flatMap(c => c.panels.flatMap(p => p.series.flatMap(s => s.concepts))));
+  for (const fact of EC.facts || []) {
+    if (charted.has(fact.concept)) continue;
+    entries.push({ kind: 'fact', label: fact.label, where: STATEMENT_NAMES[fact.statement] || fact.statement,
+                   fact, text: `${fact.label} ${words(fact.concept)}`.toLowerCase() });
+  }
+  return entries;
+}
+
+async function searchFacts() {
+  const input = $('#cs-input');
+  let query = input.value.toLowerCase().trim();
+  // "goodwill 2019" picks the year too.
+  const year = query.match(/\b(19|20)\d{2}\b/);
+  if (year && [...$('#cs-year').options].some(o => o.value === year[0])) {
+    $('#cs-year').value = year[0];
+    query = query.replace(year[0], '').trim();
+  }
+  if (!query) { closeSearch(); return; }
+  await loadFacts();
+  if (input.value.toLowerCase().trim().replace(/\b(19|20)\d{2}\b/, '').trim() !== query) return;
+  const tokens = query.split(/\s+/);
+  const scored = searchEntries()
+    .filter(e => tokens.every(token => e.text.includes(token)))
+    .map(e => {
+      const label = e.label.toLowerCase();
+      return { e, score: (label === query ? 0 : label.startsWith(query) ? 1 : label.includes(query) ? 2 : 3)
+                         + (e.kind === 'chart' ? 0 : 4) + Math.min(label.length, 80) / 1000 };
+    })
+    .sort((a, b) => a.score - b.score)
+    .slice(0, 12);
+  SEARCH.results = scored.map(item => item.e);
+  SEARCH.active = SEARCH.results.length ? 0 : -1;
+  renderSearch();
+}
+
+function renderSearch() {
+  const list = $('#cs-results');
+  list.hidden = false;
+  $('#cs-input').setAttribute('aria-expanded', 'true');
+  list.innerHTML = SEARCH.results.length ? SEARCH.results.map((e, i) => `
+      <li role="option" id="cs-opt-${i}" aria-selected="${i === SEARCH.active}" onmousedown="event.preventDefault()" onclick="pickSearch(${i})">
+        <span class="cs-label">${esc(e.label)}</span><span class="cs-where">${esc(e.where)}</span>
+        <span class="cs-tag">${e.kind === 'chart' ? 'chart' : 'values'}</span></li>`).join('')
+    : '<li class="cs-none" aria-disabled="true">Nothing in this ticker’s filings matches.</li>';
+  if (SEARCH.active >= 0) $('#cs-input').setAttribute('aria-activedescendant', `cs-opt-${SEARCH.active}`);
+}
+
+function closeSearch() {
+  $('#cs-results').hidden = true;
+  $('#cs-input').setAttribute('aria-expanded', 'false');
+  $('#cs-input').removeAttribute('aria-activedescendant');
+}
+
+function searchKey(event) {
+  const list = $('#cs-results');
+  if (event.key === 'Escape') { closeSearch(); return; }
+  if (list.hidden || !SEARCH.results.length) return;
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    const step = event.key === 'ArrowDown' ? 1 : -1;
+    SEARCH.active = (SEARCH.active + step + SEARCH.results.length) % SEARCH.results.length;
+    renderSearch();
+    $(`#cs-opt-${SEARCH.active}`)?.scrollIntoView({ block: 'nearest' });
+  } else if (event.key === 'Enter') {
+    event.preventDefault();
+    pickSearch(Math.max(SEARCH.active, 0));
+  }
+}
+
+// The year to show: the one picked, else the latest with a value.
+function pickYear(years, values) {
+  const chosen = Number($('#cs-year').value);
+  if (chosen && years.includes(chosen)) return chosen;
+  for (let i = years.length - 1; i >= 0; i--) if (values[i] != null) return years[i];
+  return years[years.length - 1];
+}
+
+function pickSearch(i) {
+  const e = SEARCH.results[i];
+  if (!e) return;
+  closeSearch();
+  $('#cs-input').value = e.label;
+  if (e.kind === 'chart') {
+    SEARCH.fact = null;
+    $('#fact-card').innerHTML = '';
+    const year = pickYear(e.years, e.series.values);
+    const value = e.series.values[e.years.indexOf(year)];
+    $('#cs-status').textContent = `${e.label}, ${year}: `
+      + (value == null ? 'no value this year' : fmtValue(e.series.format, value)) + ` · ${e.where}`;
+    focusSeries(e.chart, e.panel, e.series.label, year);
+  } else {
+    showFact(e.fact);
+  }
+}
+
+// Scroll to the chart, slide the year into view and point at the value.
+function focusSeries(id, panelIndex, name, year) {
+  const figure = document.getElementById(chartId(id));
+  if (!figure) return;
+  scrollToChart(chartId(id));
+  const entry = EC.entries.find(en => !en.mini && en.chart.id === id && en.chart.panels.indexOf(en.panel) === panelIndex);
+  if (!entry) return;
+  const key = [...entry.head.querySelectorAll('.ec-key')].find(k => k.dataset.name === name);
+  if (key) {
+    key.classList.remove('is-found');
+    void key.offsetWidth;   // restart the flash
+    key.classList.add('is-found');
+  }
+  const run = () => {
+    if (!entry.inst) { if (entry.el.clientWidth) drawEntry(entry); else return; }
+    const n = entry.panel.years.length;
+    const at = entry.panel.years.indexOf(year);
+    if (at < 0) return;
+    const [from, to] = zoomRange(entry);
+    if (at < from || at > to) {
+      const span = to - from;
+      const start = Math.max(0, Math.min(n - 1 - span, at - Math.floor(span / 2)));
+      entry.inst.dispatchAction({ type: 'dataZoom', startValue: start, endValue: start + span });
+    }
+    entry.inst.dispatchAction({ type: 'legendSelect', name });
+    const seriesIndex = entry.index[name];
+    entry.inst.dispatchAction({ type: 'downplay' });
+    entry.inst.dispatchAction({ type: 'highlight', seriesIndex, dataIndex: at });
+    entry.inst.dispatchAction({ type: 'showTip', seriesIndex, dataIndex: at });
+  };
+  // After the scroll settles, so the tooltip opens where the chart stops.
+  setTimeout(run, SMOOTH === 'smooth' ? 450 : 0);
+}
+
+function showFact(fact) {
+  SEARCH.fact = fact;
+  const years = Object.keys(fact.values).map(Number).sort((a, b) => a - b);
+  const values = years.map(y => fact.values[y]);
+  const year = pickYear(years, values);
+  const [format, divisor, unitName] = UNIT_FORMAT[fact.unit] || UNIT_FORMAT.usd;
+  const cell = v => v == null ? '–' : fmtValue(format, v / divisor);
+  const asked = Number($('#cs-year').value);
+  $('#cs-status').textContent = asked && asked !== year
+    ? `${fact.label} has no value for ${asked}; latest, ${year}: ${cell(fact.values[year])}`
+    : `${fact.label}, ${year}: ${cell(fact.values[year])}`;
+  $('#fact-card').innerHTML = `
+    <div class="fact-card">
+      <div class="fact-head">
+        <div class="fact-name"><b>${esc(fact.label)}</b>
+          <span class="muted">${esc(STATEMENT_NAMES[fact.statement] || fact.statement)} · ${esc(fact.concept)} · ${esc(unitName)} · not in a chart</span></div>
+        <span class="panel-actions">
+          <button class="panel-btn" onclick="chartFact()">Draw as a chart</button>
+          <button class="panel-btn icon-btn" onclick="closeFact()" title="Close" aria-label="Close these values">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8" /></svg></button>
+        </span>
+      </div>
+      <div class="table-wrap"><table class="data fact-table">
+        <thead><tr>${years.map(y => `<th class="${y === year ? 'is-year' : ''}">${y}</th>`).join('')}</tr></thead>
+        <tbody><tr>${years.map(y => `<td class="${y === year ? 'is-year' : ''}">${esc(cell(fact.values[y]))}</td>`).join('')}</tr></tbody>
+      </table></div>
+    </div>`;
+  const wrap = $('#fact-card .table-wrap');
+  const picked = $('#fact-card th.is-year');
+  if (wrap && picked) wrap.scrollLeft = picked.offsetLeft - wrap.clientWidth / 2 + picked.offsetWidth / 2;
+}
+
+function closeFact() {
+  SEARCH.fact = null;
+  $('#fact-card').innerHTML = '';
+  $('#cs-status').textContent = '';
+}
+
+// A searched fact as its own chart, above the others until the page reloads.
+function chartFact() {
+  const fact = SEARCH.fact;
+  if (!fact || !EC.spec) return;
+  const id = 'fact_' + fact.concept;
+  if (!EC.custom.some(c => c.id === id && c.ticker === GRAPH.ticker)) {
+    const years = EC.spec.years.length ? EC.spec.years : Object.keys(fact.values).map(Number).sort((a, b) => a - b);
+    const [format, divisor, unitName] = UNIT_FORMAT[fact.unit] || UNIT_FORMAT.usd;
+    const axis = { mm: 'money', shares: 'shares', usdps: 'usdps', pct: 'pct' }[format];
+    EC.custom.unshift({
+      id, ticker: GRAPH.ticker, name: fact.label, panels: [{
+        title: `${GRAPH.ticker} · ${fact.label}`, subtitle: `Fiscal years {span} · ${unitName}`, years,
+        series: [{ label: fact.label, kind: 'bar', format, axis: 0, derived: false, color: '#4c72b0',
+                   concepts: [fact.concept], values: years.map(y => fact.values[y] == null ? null : fact.values[y] / divisor) }],
+        axes: [{ format: axis }], margin: 0.14, note: null, reference: null, empty: 'No data', group_width: 0.6,
+      }],
+    });
+  }
+  closeFact();
+  renderResults(GRAPH.results, '#results-graph').then(() => {
+    const chart = EC.custom.find(c => c.id === id);
+    if (!chart) return;
+    const panel = chart.panels[0];
+    focusSeries(id, 0, fact.label, pickYear(panel.years, panel.series[0].values));
+  });
+}
+
+function removeCustomChart(id) {
+  EC.custom = EC.custom.filter(c => !(c.id === id && c.ticker === GRAPH.ticker));
+  const figure = document.getElementById(chartId(id));
+  if (figure) { disposeCharts(figure); figure.remove(); }
+  $('#chart-index').innerHTML = chartIndex();
+}
+
+function fillSearchYears(spec) {
+  const select = $('#cs-year');
+  const current = select.value;
+  const years = [...spec.years].sort((a, b) => b - a);
+  select.innerHTML = '<option value="">Latest year</option>' + years.map(y => `<option value="${y}">${y}</option>`).join('');
+  if (years.includes(Number(current))) select.value = current;
+}
+
+// Picking another year re-runs the last pick.
+function searchYearChanged() {
+  if (SEARCH.fact) { showFact(SEARCH.fact); return; }
+  const label = $('#cs-input').value.trim();
+  const hit = label && searchEntries().find(e => e.kind === 'chart' && e.label === label);
+  if (hit) {
+    SEARCH.results = [hit];
+    pickSearch(0);
+  }
+}
+
+/* Download dialog ---------------------------------------------------------------- */
+// Ticks what goes in the zip: charts (PNGs drawn by the server only now, in
+// windows of 5 or 10 years or one wide image), the run's data files, and
+// extras. The Charts tab's choices are remembered; Home starts with
+// everything, a chart's own button with just that chart.
+const DL = { ticker: '', mode: 'graph', opener: null, years: 5, theme: 'light', spec: null, busy: false };
+const FILE_INFO = {
+  'financial_data.csv': 'Key figures and ratios per year',
+  'statements.csv': 'Every line of the three statements',
+  'facts.csv': 'Every XBRL fact in the filings',
+  'notes.csv': 'Note schedules: debt, leases and more',
+  'evaluation.csv': 'Valuation: price, P/E, F- and Z-score',
+  'data_quality.csv': 'Which chart values are reported, derived or missing',
+  'charts.json': 'The charts as data',
+  'insider.json': 'Insider trades as collected',
+  'run.log': 'Log of the last run',
+};
+const EXTRAS = [
+  ['insiders', 'insiders.csv', () => `Insider trades of the last ${INSIDER.months} month(s)`],
+  ['news', 'news.csv', () => 'Headlines, with the News tab’s options'],
+  ['screener', 'screener.csv', () => 'This ticker’s screener row'],
+  ['debug', '_debug folder', () => 'Version, run logs and diagnostics, for bug reports'],
+];
+
+function dlPrefs() {
+  try { return JSON.parse(localStorage.getItem('stocky-download') || '{}') || {}; } catch { return {}; }
+}
+
+async function openDownload(mode = 'graph', only = '') {
+  const ticker = GRAPH.ticker;
+  if (!ticker) return;
+  let data = GRAPH.results && GRAPH.results.ticker === ticker ? GRAPH.results : null;
+  if (!data) {
+    const res = await fetch(`/api/files/${encodeURIComponent(ticker)}`).catch(() => null);
+    if (!res || !res.ok) { alert('Nothing to download yet.'); return; }
+    data = await res.json();
+  }
+  const spec = data.charts.length ? await loadSpec(data) : null;
+  const prefs = dlPrefs();
+  const saved = mode === 'graph' ? prefs.graph : null;
+  Object.assign(DL, { ticker, mode, spec, opener: document.activeElement, busy: false,
+                      years: [5, 10, 0].includes(prefs.years) ? prefs.years : 5,
+                      theme: prefs.theme || document.documentElement.dataset.theme || 'light' });
+  const charts = spec ? spec.charts : [];
+  const ticked = (kind, value, fallback) => mode === 'chart' ? kind === 'charts' && value === only
+    : mode === 'home' ? true : saved && saved[kind] ? saved[kind].includes(value) : fallback;
+  $('#dl-title').textContent = `Download ${ticker}`;
+  $('#dl-charts').innerHTML = charts.length ? charts.map(chart => `
+      <label class="dl-item"><input type="checkbox" name="dl-chart" value="${esc(chart.id)}" onchange="syncDownload()"
+        ${ticked('charts', chart.id, true) ? 'checked' : ''}><span class="dl-name">${esc(chart.name)}</span>
+        <span class="dl-meta" data-images="${esc(chart.id)}"></span></label>`).join('')
+    : '<p class="muted">No charts for this run: a screener run collects the data only.</p>';
+  $('#dl-files').innerHTML = (data.files || []).map(name => `
+      <label class="dl-item"><input type="checkbox" name="dl-file" value="${esc(name)}" onchange="syncDownload()"
+        ${ticked('files', name, true) ? 'checked' : ''}><span class="dl-name">${esc(name)}</span>
+        <span class="dl-meta">${esc(FILE_INFO[name] || '')}</span></label>`).join('');
+  $('#dl-extras').innerHTML = EXTRAS.map(([key, name, info]) => `
+      <label class="dl-item"><input type="checkbox" name="dl-extra" value="${key}" onchange="syncDownload()"
+        ${ticked('extras', key, false) ? 'checked' : ''}><span class="dl-name">${esc(name)}</span>
+        <span class="dl-meta">${esc(info())}</span></label>`).join('');
+  $('#dl-backdrop').classList.remove('hidden');
+  syncDownload();
+  $('#dl-go').focus();
+}
+
+function closeDownload() {
+  if (DL.busy) return;
+  $('#dl-backdrop').classList.add('hidden');
+  if (DL.opener && DL.opener.focus) DL.opener.focus();
+}
+
+const dlChecked = name => [...document.querySelectorAll(`input[name="${name}"]:checked`)].map(input => input.value);
+
+function dlGroup(box) {
+  for (const input of document.querySelectorAll(`input[name="${box.dataset.group}"]`)) input.checked = box.checked;
+  syncDownload();
+}
+
+function setDlOption(key, value) {
+  DL[key] = value;
+  syncDownload();
+}
+
+function syncDownload() {
+  for (const box of document.querySelectorAll('.dl-group input')) {
+    const all = document.querySelectorAll(`input[name="${box.dataset.group}"]`);
+    const on = dlChecked(box.dataset.group).length;
+    box.checked = all.length > 0 && on === all.length;
+    box.indeterminate = on > 0 && on < all.length;
+    box.disabled = all.length === 0;
+  }
+  let images = 0;
+  for (const chart of DL.spec ? DL.spec.charts : []) {
+    const years = new Set(chart.panels.flatMap(p => p.years)).size;
+    const count = DL.years ? Math.ceil(years / DL.years) : 1;
+    const meta = document.querySelector(`[data-images="${CSS.escape(chart.id)}"]`);
+    if (meta) meta.textContent = `${count} image${count === 1 ? '' : 's'}`;
+    if (dlChecked('dl-chart').includes(chart.id)) images += count;
+  }
+  for (const button of document.querySelectorAll('#dl-years button')) {
+    button.classList.toggle('active', Number(button.dataset.value) === DL.years);
+  }
+  for (const button of document.querySelectorAll('#dl-theme button')) {
+    button.classList.toggle('active', button.dataset.value === DL.theme);
+  }
+  $('#dl-png-opts').classList.toggle('is-off', !dlChecked('dl-chart').length);
+  const files = dlChecked('dl-file').length + dlChecked('dl-extra').length;
+  const parts = [images ? `${images} image${images === 1 ? '' : 's'}` : '', files ? `${files} file${files === 1 ? '' : 's'}` : ''].filter(Boolean);
+  const summary = $('#dl-summary');
+  summary.classList.remove('is-error');
+  summary.textContent = parts.length ? parts.join(' and ') : 'Tick something to download.';
+  $('#dl-go').disabled = !parts.length || DL.busy;
+}
+
+async function runDownload() {
+  const charts = dlChecked('dl-chart'), files = dlChecked('dl-file'), extras = dlChecked('dl-extra');
+  if (!charts.length && !files.length && !extras.length) return;
+  const prefs = dlPrefs();
+  prefs.years = DL.years;
+  prefs.theme = DL.theme;
+  if (DL.mode === 'graph') prefs.graph = { charts, files, extras };
+  try { localStorage.setItem('stocky-download', JSON.stringify(prefs)); } catch {}
+  const query = new URLSearchParams({
+    charts: charts.join(','), files: files.join(','), extras: extras.join(','),
+    years: String(DL.years), theme: DL.theme, months: String(INSIDER.months),
+    news_limit: String($('#news-limit').value || PREFS.newsLimit), news_days: String($('#news-days').value || PREFS.newsDays),
+  });
+  DL.busy = true;
+  syncDownload();
+  const summary = $('#dl-summary');
+  summary.textContent = charts.length ? 'Drawing the charts… the first download of a run takes a few seconds.' : 'Packing…';
+  try {
+    const res = await fetch(`/download/${encodeURIComponent(DL.ticker)}/all?${query}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const name = (disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i) || [])[1] || `${DL.ticker}.zip`;
+    saveBlob(await res.blob(), decodeURIComponent(name));
+    DL.busy = false;
+    closeDownload();
+  } catch (err) {
+    DL.busy = false;
+    syncDownload();
+    summary.textContent = `Download failed: ${err.message}`;
+    summary.classList.add('is-error');
+  }
 }
 
 // Every ticker drop-down reads "TICKER · last run date".
@@ -2920,11 +3826,7 @@ function saveCsv(rows, name, first = []) {
 const today = () => new Date().toISOString().slice(0, 10);
 
 function downloadHome() {
-  const ticker = GRAPH.ticker;
-  if (!ticker) return;
-  const query = `months=${INSIDER.months}&news_limit=${$('#news-limit').value || PREFS.newsLimit}`
-    + `&news_days=${$('#news-days').value || PREFS.newsDays}`;
-  location.href = `/download/${encodeURIComponent(ticker)}/all?${query}`;
+  openDownload('home');
 }
 
 function downloadInsiders() {
