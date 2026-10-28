@@ -43,7 +43,6 @@
    * critique: the page sat in a 1060px column at any width; one 2200px container now holds every row,
    *   text grows past 1600px of window, charts and the simulation fit one screen
    */
-  /* Hallmark · dropped onclick="loadNews(true)" · News refresh now calls refreshNews(), which reloads the company and the economy halves */
   /* Hallmark · waive 24b · the spacing inside panels, dialogs and the check list kept as found · this redesign widens Stocky's container and moves the Charts index; it does not re-space each panel */
   /* The app's font, bundled (static/fonts) so the page and the charts match
      on every machine. */
@@ -253,7 +252,7 @@
   .badge-link:hover { text-decoration:underline; }
   /* Pressed: every button sinks a pixel (no transition, so nothing to reduce). */
   :where(button):active:not(:disabled) { transform:translateY(1px); }
-  .panel-title, .home-block h3, .sim-section h3, .sim-market h3, .news-half h3, .opt-pane h2 { text-wrap:balance; }
+  .panel-title, .home-block h3, .sim-section h3, .sim-market h3, .opt-pane h2 { text-wrap:balance; }
   /* Keyboard focus: one visible ring for every control (mouse clicks stay clean). */
   :where(button, a, select, input, textarea, [tabindex]):focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   @media (prefers-reduced-motion: reduce) {
@@ -270,8 +269,8 @@
   .graph-main { display:flex; flex-direction:column; gap:16px; min-width:0; }
   .graph-note { margin:0; }
   .graph-note.hidden, .graph-note:empty, #fact-card:empty { display:none; }
-  .chart-index ol { display:flex; flex-wrap:wrap; gap:4px; margin:0 -4px; padding:0; list-style:none; }
-  .chart-index a, .chart-index .is-off { display:block; padding:6px 12px; border-radius:var(--radius); color:var(--muted);
+  .chart-index ol { display:flex; flex-wrap:wrap; gap:4px; margin:0; padding:0; list-style:none; }
+  .chart-index a, .chart-index .is-off { display:block; padding:6px 12px; border-radius:var(--radius-lg); color:var(--muted);
                    font-size:calc(var(--fs) * 16); text-decoration:none; }
   .chart-index a:hover { color:var(--text); background:var(--hover); }
   .chart-index a[aria-current="true"] { color:var(--text); background:var(--accent-soft); font-weight:700; }
@@ -286,16 +285,15 @@
     /* Only the index and the check scroll, so the search's list can hang
        out of the rail over the charts. */
     .chart-rail > .panel-body { display:flex; flex-direction:column; min-height:0; flex:1; }
-    .chart-rail .rail-scroll { overflow:auto; min-height:0; }
+    .chart-rail .rail-scroll { overflow:hidden auto; min-height:0; }
     .chart-rail .chart-search { flex-wrap:wrap; }
     .chart-rail #cs-year { flex:1 1 100%; }
     .chart-rail .cs-results { right:auto; width:min(560px, 60vw); }
     .chart-index ol { flex-direction:column; gap:2px; }
     .chart-index a, .chart-index .is-off { padding:8px 12px; }
   }
-                     background:none; color:var(--muted); cursor:pointer; }
-  /* One chart per row, as wide as the middle column. */
-  .charts-full { display:flex; flex-direction:column; gap:16px; }
+  /* One chart per row, as wide as the middle column, with room between them. */
+  .charts-full { display:flex; flex-direction:column; gap:24px; }
   .charts-full figure { scroll-margin-top:calc(var(--topbar-h) + 12px); }
   figcaption { display:flex; justify-content:space-between; font-size:calc(var(--fs) * 14); color:var(--muted);
                margin-top:8px; }
@@ -320,7 +318,7 @@
   .panel-title { font-size:calc(var(--fs) * 24); font-weight:700; color:var(--heading); }
   /* Section headings in every tab: bold, in the heading colour, so they read
      as labels over the white content. */
-  .home-block h3, .sim-section h3, .sim-market h3, .news-half h3, .opt-pane h2 {
+  .home-block h3, .sim-section h3, .sim-market h3, .opt-pane h2 {
     font-size:calc(var(--fs) * 20); font-weight:700; color:var(--heading); }
   .panel-actions { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
   .panel-btn { padding:6px 12px; border:1px solid var(--line); border-radius:var(--radius);
@@ -578,7 +576,8 @@
   .icon-link.danger:hover { color:var(--badge-error-fg); background:var(--badge-error-bg); }
   .icon-link svg { width:18px; height:18px; display:block; }
   .chart-fig { position:relative; }
-  .fig-dl { position:absolute; top:14px; right:14px; display:flex; padding:6px; border-radius:var(--radius);
+  .fig-actions { position:absolute; top:14px; right:14px; display:flex; gap:6px; }
+  .fig-dl { display:flex; padding:6px; border-radius:var(--radius);
             color:var(--muted); background:var(--surface); border:1px solid var(--line-soft); }
   .fig-dl:hover { color:var(--text); border-color:var(--line-strong); }
   .fig-dl svg { width:18px; height:18px; display:block; }
@@ -590,7 +589,13 @@
   .ec-panels { display:grid; gap:24px; }
   @media (min-width:980px) { .charts-full .ec-panels.two { grid-template-columns:1fr 1fr; } }
   .ec-panel { min-width:0; }
-  .ec-head { padding-right:44px; }      /* room for the download button */
+  .ec-head { padding-right:84px; }      /* room for the full-view and download buttons */
+  /* Full view: the chart fills the browser window (not the screen) over the
+     page, every year that fits on show; Esc or the button closes it. */
+  .chart-fig.is-max { position:fixed; inset:0; z-index:50; margin:0; border-radius:0; border:0;
+                      padding:20px var(--gutter) 16px; overflow:auto; background:var(--surface); }
+  .chart-fig.is-max .ec-canvas { height:calc(100vh - 210px); }
+  html.has-max-chart { overflow:hidden; }
   .ec-panels.two .ec-panel:first-child .ec-head { padding-right:0; }
   .ec-title { font-size:calc(var(--fs) * 21); font-weight:700; color:var(--text); line-height:1.3; }
   .ec-sub { margin-top:2px; font-size:calc(var(--fs) * 16); color:var(--muted); }
@@ -612,7 +617,7 @@
   /* On a desktop a chart, its head and its slider fit one screen: taller on a
      tall screen, never so tall the slider falls below the fold. */
   @media (min-width:1200px) {
-    .ec-canvas { height:clamp(300px, calc(100vh - var(--topbar-h) - 250px), calc(var(--h, 360px) * 1.4)); }
+    .ec-canvas { height:clamp(320px, calc(100vh - var(--topbar-h) - 230px), calc(var(--h, 360px) * 1.6)); }
   }
   /* The years slider: one step per year, the handle as wide as the window,
      a tick per position; an arrow either side steps one year. */
@@ -768,9 +773,8 @@
   /* News tab: two halves side by side on a desktop (company, economy), each a
      column of compact rows: the headline (two lines at most), its meta and a
      save button. The saved list runs its rows two or three across. */
-  .news-split { display:grid; grid-template-columns:minmax(0, 1fr); gap:28px; }
-  @media (min-width:1000px) { .news-split { grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); gap:0 40px; } }
-  .news-half h3 { margin:0 0 6px; }
+  .news-split { display:grid; grid-template-columns:minmax(0, 1fr); gap:0 16px; }
+  @media (min-width:1000px) { .news-split { grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); align-items:start; } }
   .news-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(min(100%, 520px), 1fr)); gap:0 28px; }
   .news-rows li, .news-grid li { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:12px; align-items:center;
                   padding:9px 0; border-bottom:1px solid var(--line-soft); }
@@ -786,11 +790,9 @@
   /* Remove: the Cancel button's red cross. */
   .news-act.remove { color:var(--badge-error-fg); border-color:var(--badge-error-fg); }
   .news-act.remove:hover { background:var(--badge-error-bg); }
-  .saved-btn { display:flex; align-items:center; gap:6px; height:32px; }
-  .saved-btn svg { width:18px; height:18px; display:block; }
-  .saved-btn[aria-pressed="true"] { color:var(--text); background:var(--accent-soft); }
-  .saved-count { color:var(--muted); font-variant-numeric:tabular-nums; }
-  .saved-search { max-width:520px; margin:0 0 10px; }
+  .saved-count { color:var(--muted); font-weight:400; font-variant-numeric:tabular-nums; }
+  .saved-search { width:min(420px, 60vw); }
+  .saved-search input { padding-top:6px; padding-bottom:6px; }
   .news-meta { color:var(--muted); font-size:calc(var(--fs) * 14); margin-top:3px; }
   /* Meta strings: the parts stand apart by space, not by a separator glyph. */
   .parts { display:flex; flex-wrap:wrap; gap:0 20px; }
@@ -828,6 +830,16 @@
     <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
       <path d="M6.5 4.5h11v16l-5.5-4l-5.5 4z" fill="currentColor" style="opacity:var(--fill-op, .2)" stroke="none" />
       <path d="M6.5 4.5h11v16l-5.5-4l-5.5 4z" />
+    </g>
+  </symbol>
+  <symbol id="i-expand" viewBox="0 0 24 24">
+    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
+      <path d="M4.5 9V4.5H9M15 4.5h4.5V9M19.5 15v4.5H15M9 19.5H4.5V15" />
+    </g>
+  </symbol>
+  <symbol id="i-shrink" viewBox="0 0 24 24">
+    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
+      <path d="M9 4.5V9H4.5M19.5 9H15V4.5M15 19.5V15h4.5M4.5 15H9v4.5" />
     </g>
   </symbol>
   <symbol id="i-cross" viewBox="0 0 24 24">
@@ -1107,9 +1119,12 @@
 
   <!-- News tab: recent articles about the company, newest coverage first by relevance. -->
   <section id="pane-news" class="hidden">
+    <!-- Company news (Google News) and the economy (CNBC, MarketWatch, NPR)
+         side by side, each its own panel; the saved articles under both. -->
+    <div class="news-split">
     <div class="panel">
       <div class="panel-head">
-        <span class="panel-title">News</span>
+        <span class="panel-title">Company news</span>
         <span class="panel-actions">
           <select id="news-limit" title="Articles" aria-label="Articles" onchange="setNewsOption()">
             <option value="20">20 articles</option><option value="30">30 articles</option>
@@ -1120,45 +1135,61 @@
             <option value="14">14 days</option><option value="30">30 days</option>
           </select>
           <select id="news-run" title="Ticker" aria-label="Ticker" onchange="loadNews()"></select>
-          <button class="panel-btn saved-btn" id="news-saved-btn" aria-pressed="false" onclick="toggleSavedNews()"
-                  title="Your saved articles">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-bookmark" /></svg>
-            Saved <span class="saved-count" id="news-saved-count"></span>
-          </button>
           <button class="panel-btn icon-btn" onclick="downloadNews()" title="Download these articles as CSV" aria-label="Download these articles as CSV">
             <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download" /></svg>
           </button>
-          <button class="panel-btn icon-btn" onclick="refreshNews()" title="Refresh" aria-label="Refresh">
+          <button class="panel-btn icon-btn" onclick="loadNews(true)" title="Refresh" aria-label="Refresh">
             <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh" /></svg>
           </button>
         </span>
       </div>
       <div class="panel-body">
-        <!-- Two halves: the ticker's own news (Google News) and the economy
-             from the outlets' own feeds (CNBC, MarketWatch, NPR). -->
-        <div id="news-feed" class="news-split">
-          <section class="news-half" aria-labelledby="news-company-title">
-            <h3 id="news-company-title">Company news</h3>
-            <p class="sim-meta" id="news-status"></p>
-            <ol id="news-list" class="news-list news-rows"></ol>
-          </section>
-          <section class="news-half" aria-labelledby="econ-title">
-            <h3 id="econ-title">Economy and markets</h3>
-            <p class="sim-meta" id="econ-status"></p>
-            <ol id="econ-list" class="news-list news-rows"></ol>
-          </section>
-        </div>
-        <!-- Saved articles: kept on the account, searchable, each with a remove cross. -->
-        <div id="news-saved" hidden>
+        <p class="sim-meta" id="news-status"></p>
+        <ol id="news-list" class="news-list news-rows"></ol>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">Economy and markets</span>
+        <span class="panel-actions">
+          <select id="econ-limit" title="Articles" aria-label="Economy articles" onchange="loadEconomy()">
+            <option value="20">20 articles</option><option value="30">30 articles</option>
+            <option value="40">40 articles</option><option value="50">50 articles</option>
+          </select>
+          <select id="econ-days" title="How far back" aria-label="How far back for economy news" onchange="loadEconomy()">
+            <option value="1">24 hours</option><option value="7">7 days</option>
+            <option value="14">14 days</option><option value="30">30 days</option>
+          </select>
+          <button class="panel-btn icon-btn" onclick="downloadEconomy()" title="Download these articles as CSV" aria-label="Download the economy articles as CSV">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download" /></svg>
+          </button>
+          <button class="panel-btn icon-btn" onclick="loadEconomy(true)" title="Refresh" aria-label="Refresh the economy news">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh" /></svg>
+          </button>
+        </span>
+      </div>
+      <div class="panel-body">
+        <p class="sim-meta" id="econ-status"></p>
+        <ol id="econ-list" class="news-list news-rows"></ol>
+      </div>
+    </div>
+    </div>
+    <!-- Saved articles: kept on the account, searchable, each with a remove cross. -->
+    <div class="panel" id="news-saved">
+      <div class="panel-head">
+        <span class="panel-title">Saved articles <span class="saved-count" id="news-saved-count"></span></span>
+        <span class="panel-actions">
           <div class="cs-field saved-search">
             <svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.6">
               <circle cx="10.5" cy="10.5" r="6" /><path d="M15 15l5 5" /></g></svg>
             <input id="saved-search" type="search" placeholder="Search saved articles…" autocomplete="off"
                    aria-label="Search saved articles" oninput="renderSavedNews()">
           </div>
-          <p class="sim-meta" id="saved-status" role="status"></p>
-          <ol id="saved-list" class="news-list news-grid"></ol>
-        </div>
+        </span>
+      </div>
+      <div class="panel-body">
+        <p class="sim-meta" id="saved-status" role="status"></p>
+        <ol id="saved-list" class="news-list news-grid"></ol>
       </div>
     </div>
   </section>
@@ -1732,8 +1763,8 @@ function applyPrefs(changed = '') {
   }
   if (changed === 'date' || changed === 'number') rerenderAll();
   if (all || changed.startsWith('news')) {
-    $('#news-limit').value = String(PREFS.newsLimit);
-    $('#news-days').value = String(PREFS.newsDays);
+    for (const id of ['#news-limit', '#econ-limit']) $(id).value = String(PREFS.newsLimit);
+    for (const id of ['#news-days', '#econ-days']) $(id).value = String(PREFS.newsDays);
     if (changed && $('#news-run').value) loadNews();
     if (changed && ECON.loaded) loadEconomy();
   }
@@ -2208,6 +2239,8 @@ async function runConfirm() {
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && !$('#dl-backdrop').classList.contains('hidden')) { closeDownload(); return; }
+  const maxed = $('.chart-fig.is-max .fig-max');
+  if (e.key === 'Escape' && maxed && $('#opt-backdrop').classList.contains('hidden')) { toggleChartMax(maxed, false); return; }
   if (e.key !== 'Escape' || $('#opt-backdrop').classList.contains('hidden')) return;
   if (OPT.confirm) closeConfirm();
   else closeOptions();
@@ -3039,7 +3072,11 @@ function visibleYears(panel, width) {
 }
 
 // The ECharts option for one panel, plus each series' index by name.
-function panelOption(panel, t, { mini = false, width = 800 } = {}) {
+// The page shows the last six years at most (the slider reaches the rest);
+// the full view shows every year that fits.
+const NORMAL_YEARS = 6;
+
+function panelOption(panel, t, { mini = false, width = 800, full = false } = {}) {
   const fs = t.fs;
   const text = (size, color = t.muted) => ({ fontFamily: t.font, fontSize: size * fs, color });
   const years = panel.years.map(String);
@@ -3104,7 +3141,7 @@ function panelOption(panel, t, { mini = false, width = 800 } = {}) {
                 markLine: { silent: true, symbol: 'none', label: { show: false },
                             lineStyle: { type: 'solid', width: 1, color: t.ink }, data: [{ yAxis: 0 }] } });
 
-  const visible = mini ? years.length : visibleYears(panel, width);
+  const visible = mini ? years.length : Math.min(full ? Infinity : NORMAL_YEARS, visibleYears(panel, width));
   const zoom = !mini && visible < years.length;
   const bounds = yBounds(panel, years.length - visible, years.length - 1);
   const yAxis = panel.axes.map((axis, k) => {
@@ -3208,8 +3245,31 @@ function figureHtml(chart, custom = false) {
          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8" /></svg></button>`
     : `<button class="fig-dl" onclick="openDownload('chart', '${esc(chart.id)}')" title="Download ${esc(chart.name)} as PNG"
          aria-label="Download ${esc(chart.name)} as PNG"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download" /></svg></button>`;
+  const max = `<button class="fig-dl fig-max" onclick="toggleChartMax(this)" aria-pressed="false"
+       title="Fill the window with this chart (Esc to close)" aria-label="Fill the window with ${esc(chart.name)}">
+       <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-expand" /></svg></button>`;
   return `<figure id="${chartId(chart.id)}" class="chart-fig ec-fig">
-      <div class="ec-panels${chart.panels.length > 1 ? ' two' : ''}">${panels}</div>${action}</figure>`;
+      <div class="ec-panels${chart.panels.length > 1 ? ' two' : ''}">${panels}</div>
+      <div class="fig-actions">${max}${action}</div></figure>`;
+}
+
+// Full view for one chart: the figure fills the window and its panels are
+// drawn again, so the number of years follows the new width.
+function toggleChartMax(button, open = !button.closest('.chart-fig').classList.contains('is-max')) {
+  const figure = button.closest('.chart-fig');
+  if (open) for (const other of document.querySelectorAll('.chart-fig.is-max')) if (other !== figure) toggleChartMax(other.querySelector('.fig-max'), false);
+  figure.classList.toggle('is-max', open);
+  document.documentElement.classList.toggle('has-max-chart', open);
+  button.setAttribute('aria-pressed', String(open));
+  button.title = open ? 'Back to the page (Esc)' : 'Fill the window with this chart (Esc to close)';
+  button.querySelector('use').setAttribute('href', open ? '#i-shrink' : '#i-expand');
+  for (const entry of EC.entries) {
+    if (!figure.contains(entry.el) || !entry.inst) continue;
+    entry.inst.dispose();
+    entry.inst = null;
+    drawEntry(entry);
+  }
+  if (!open) scrollToChart(figure.id);
 }
 
 function disposeCharts(root = null) {
@@ -3247,7 +3307,8 @@ function mountCharts(root, charts, { mini = false } = {}) {
 
 function drawEntry(entry) {
   const panel = entry.mini ? lastYears(entry.panel, 5) : entry.panel;
-  const { option, index } = panelOption(panel, chartTheme(), { mini: entry.mini, width: entry.el.clientWidth });
+  const full = !!entry.el.closest('.chart-fig.is-max');
+  const { option, index } = panelOption(panel, chartTheme(), { mini: entry.mini, width: entry.el.clientWidth, full });
   entry.inst = echarts.init(entry.el, null, { renderer: 'canvas' });
   entry.inst.setOption(option);
   entry.index = index;
@@ -3878,6 +3939,7 @@ const fmtAgo = iso => {
 async function initNews() {
   const select = $('#news-run');
   if (!SAVED.loaded) loadSaved();
+  else renderSavedNews();
   if (!ECON.loaded) loadEconomy();
   try {
     const { items } = await (await fetch('/api/recent')).json();
@@ -3903,16 +3965,10 @@ const NEWS = { articles: [], ticker: '' };
 
 function setNewsOption() {
   if ($('#news-run').value) loadNews();
-  loadEconomy();
 }
 
-function refreshNews() {
-  loadNews(true);
-  loadEconomy(true);
-}
-
-// The right half: economy and markets from CNBC, MarketWatch and NPR, by
-// turns, over the same period and count as the company half.
+// The economy panel: CNBC, MarketWatch and NPR by turns, with its own
+// count and period (Options → Defaults sets where both panels start).
 const ECON = { articles: [], loaded: false, token: 0 };
 
 async function loadEconomy(fresh = false) {
@@ -3920,7 +3976,7 @@ async function loadEconomy(fresh = false) {
   ECON.loaded = true;
   $('#econ-status').textContent = 'Looking for economy and market news…';
   try {
-    const res = await fetch(`/api/news-economy?${newsQuery()}${fresh ? '&fresh=1' : ''}`);
+    const res = await fetch(`/api/news-economy?limit=${$('#econ-limit').value}&days=${$('#econ-days').value}${fresh ? '&fresh=1' : ''}`);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Economy news unavailable.');
     if (token !== ECON.token) return;
@@ -3967,11 +4023,11 @@ async function loadNews(fresh = false) {
 }
 
 // One article row: the headline, outlet and age, then one action button.
-function newsRow(a, action) {
+function newsRow(a, action, showTicker = false) {
   return `<li>
       <div>
         <a href="${esc(a.link)}" target="_blank" rel="noopener noreferrer">${esc(a.title)}</a>
-        <div class="news-meta parts">${parts([a.source, a.ticker && SAVED.open ? a.ticker : '', fmtAgo(a.published)])}</div>
+        <div class="news-meta parts">${parts([a.source, showTicker ? a.ticker : '', fmtAgo(a.published)])}</div>
       </div>
       ${action}
     </li>`;
@@ -3979,18 +4035,18 @@ function newsRow(a, action) {
 
 // Saved articles live on the account (/api/saved-news), so they follow you
 // to every device.
-const SAVED = { articles: [], links: new Set(), open: false, loaded: false };
+const SAVED = { articles: [], shown: [], links: new Set(), loaded: false };
 
 function setSaved(articles) {
   SAVED.articles = articles;
   SAVED.links = new Set(articles.map(a => a.link));
   SAVED.loaded = true;
-  $('#news-saved-count').textContent = articles.length || '';
-  for (const button of $('#news-feed').querySelectorAll('.news-act')) {
+  $('#news-saved-count').textContent = articles.length ? `(${articles.length})` : '';
+  for (const button of $('#pane-news .news-split').querySelectorAll('.news-act')) {
     const article = NEWS_LISTS[button.dataset.list]()[Number(button.dataset.i)];
     if (article) button.setAttribute('aria-pressed', String(SAVED.links.has(article.link)));
   }
-  if (SAVED.open) renderSavedNews();
+  renderSavedNews();
 }
 
 async function loadSaved() {
@@ -4039,18 +4095,6 @@ async function removeSaved(index) {
   catch (err) { $('#saved-status').textContent = err.message; }
 }
 
-function toggleSavedNews(open = !SAVED.open) {
-  SAVED.open = open;
-  $('#news-saved-btn').setAttribute('aria-pressed', String(open));
-  $('#news-saved').hidden = !open;
-  $('#news-feed').hidden = open;
-  if (open) {
-    renderSavedNews();
-    if (!SAVED.loaded) loadSaved();
-    $('#saved-search').focus();
-  }
-}
-
 function renderSavedNews() {
   const words = $('#saved-search').value.toLowerCase().split(/\s+/).filter(Boolean);
   SAVED.shown = SAVED.articles.filter(a => {
@@ -4063,7 +4107,7 @@ function renderSavedNews() {
       : `${SAVED.articles.length} saved article${SAVED.articles.length === 1 ? '' : 's'}, newest first.`;
   $('#saved-list').innerHTML = SAVED.shown.map((a, i) => newsRow(a, `<button class="news-act remove"
       onclick="removeSaved(${i})" title="Remove from saved" aria-label="Remove from saved: ${esc(a.title)}">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-cross" /></svg></button>`)).join('');
+      <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-cross" /></svg></button>`, true)).join('');
 }
 
 /* Insiders ----------------------------------------------------------------- */
@@ -4440,10 +4484,13 @@ function downloadScreener() {
 }
 
 function downloadNews() {
-  const rows = [...NEWS.articles.map(a => ({ feed: NEWS.ticker, ...a })),
-                ...ECON.articles.map(a => ({ feed: 'economy', ...a }))];
-  saveCsv(rows, `${NEWS.ticker || 'economy'}_news_${$('#news-days').value}d_${today()}.csv`,
-          ['feed', 'title', 'source', 'published', 'link']);
+  saveCsv(NEWS.articles, `${NEWS.ticker}_news_${$('#news-days').value}d_${today()}.csv`,
+          ['title', 'source', 'published', 'link']);
+}
+
+function downloadEconomy() {
+  saveCsv(ECON.articles, `economy_news_${$('#econ-days').value}d_${today()}.csv`,
+          ['title', 'source', 'published', 'link']);
 }
 
 // The price chart as drawn (current theme) with the projection under it.
