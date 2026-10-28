@@ -6,9 +6,16 @@ Consumes the artifacts the extraction pipeline already writes
 split-adjusted price history from Yahoo Finance, and writes
 ``evaluation.csv`` next to them.
 
-Money is in USD millions. Share counts are normalised for stock splits so that
-they line up with Yahoo's split-adjusted closes; without that, a 10:1 split
-would multiply the apparent market cap of every earlier year.
+Money is in millions of the filer's reporting currency. Share counts are
+normalised for stock splits so that they line up with Yahoo's split-adjusted
+closes; without that, a 10:1 split would multiply the apparent market cap of
+every earlier year.
+
+Foreign filers trade in New York as American Depositary Shares priced in USD
+while they report in EUR, TWD, JPY... ``market_scale`` turns each year's
+quoted price into a price per ordinary share in the reporting currency (FX
+rate at the fiscal year end, divided by the ordinary shares per ADS), so
+market cap, P/E and the rest compare like with like.
 
 Usage:
     python valuation.py NFLX
@@ -21,8 +28,9 @@ import json
 import os
 import re
 import sys
-from urllib.parse import quote
-from urllib.request import Request, urlopen
+from http.cookiejar import CookieJar
+from urllib.parse import quote, urlencode
+from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
 import numpy as np
 import pandas as pd
@@ -36,12 +44,22 @@ PRICE_MATCH_DAYS = 10
 MIN_F_SCORE_TESTS = 6
 PRICE_RANGE_YEARS = 10
 PRICE_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) Stocky/1.0"
+# Yahoo's quote API (cookie + crumb) wants a full browser User-Agent; the same as app.py's.
+YAHOO_BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64) Stocky/1.0"
 BASE_OUTPUT_DIR = "financial_graphs"
 OUTPUT_COLUMNS = [
     "fiscal_year", "price", "shares", "market_cap", "pe", "pb", "pfcf",
     "ev_ebit", "ev_ebitda", "earnings_yield", "return_on_capital", "fcf_yield",
     "pe_median_hist", "pe_percentile", "f_score", "z_score", "accruals_ratio",
+    # Money columns are in ``currency``; ``price`` is as quoted, in
+    # ``price_currency``, per traded share (an ADS for foreign filers).
+    "currency", "price_currency",
 ]
+# Ordinary shares per ADS seen in practice; an inferred ratio snaps to one.
+NICE_RATIOS = (0.01, 0.02, 0.025, 0.04, 0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 3, 4, 5, 6, 8, 10,
+               12, 15, 20, 25, 30, 40, 50, 100)
+# The usual ratios only, for the rough Yahoo estimate (Toyota's 11.5 is 10, not 12).
+COMMON_RATIOS = (0.1, 0.2, 0.25, 0.5, 1, 2, 3, 4, 5, 10, 20, 25, 50, 100)
 
 # Candidate standard concepts / labels for the balance-sheet inputs that the
 # ratio dataframe does not carry (total assets and liabilities, retained
@@ -54,11 +72,11 @@ TOTAL_LIABILITIES = (
 )
 # For deriving total liabilities when a filer reports no total line.
 NONCURRENT_LIABILITIES = (
-    ["NonCurrentLiabilitiesTotal", "LiabilitiesNoncurrent"],
+    ["NonCurrentLiabilitiesTotal", "LiabilitiesNoncurrent", "NoncurrentLiabilities"],
     ["total noncurrent liabilities", "total non-current liabilities"],
 )
 LIABILITIES_AND_EQUITY = (
-    ["LiabilitiesAndEquity", "LiabilitiesAndStockholdersEquity"],
+    ["LiabilitiesAndEquity", "LiabilitiesAndStockholdersEquity", "EquityAndLiabilities"],
     ["total liabilities and equity", "total liabilities and stockholders' equity",
      "total liabilities and shareholders' equity"],
 )
@@ -79,13 +97,15 @@ EQUITY = (
     [
         "AllEquityBalance", "StockholdersEquity",
         "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
-        "Equity", "CommonEquity",
+        "Equity", "CommonEquity", "EquityAttributableToOwnersOfParent",
     ],
     ["total stockholders' equity", "total shareholders' equity", "total equity"],
 )
 LONG_TERM_DEBT = (
-    ["LongTermDebt", "LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations"],
-    ["long-term debt"],
+    ["LongTermDebt", "LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations",
+     # IFRS spellings of borrowings due after a year.
+     "NoncurrentPortionOfNoncurrentBorrowings", "LongtermBorrowings", "NoncurrentBorrowings", "BondsIssued"],
+    ["long-term debt", "long-term borrowings", "non-current borrowings", "bonds payable"],
 )
 CURRENT_ASSETS = (
     ["CurrentAssetsTotal", "AssetsCurrent", "CurrentAssets"],
@@ -97,7 +117,8 @@ CURRENT_LIABILITIES = (
 )
 DEPRECIATION = (
     ["DepreciationExpense", "DepreciationDepletionAndAmortization",
-     "DepreciationAmortizationAndAccretionNet"],
+     "DepreciationAmortizationAndAccretionNet",
+     "DepreciationAndAmortisationExpense", "AdjustmentsForDepreciationAndAmortisationExpense"],
     ["depreciation and amortization"],
 )
 
@@ -233,6 +254,12 @@ def _statement_metric(
         frame["_std"] = frame["standard_concept"].map(_norm)
     else:
         frame["_std"] = ""
+    # The tag itself (``ifrs-full_Borrowings`` -> ``borrowings``): IFRS lines
+    # often carry no standard_concept.
+    if "concept" in frame.columns:
+        frame["_tag"] = frame["concept"].astype(str).str.split(r"[:_]", n=1, regex=True).str[-1].map(_norm)
+    else:
+        frame["_tag"] = ""
     if "label" in frame.columns:
         frame["_label"] = frame["label"].map(_norm)
     else:
@@ -246,9 +273,9 @@ def _statement_metric(
         if rows.empty:
             continue
         value = np.nan
-        # 1. Exact standard_concept match, in candidate order.
+        # 1. Exact standard_concept (or tag) match, in candidate order.
         for key in concept_keys:
-            hit = rows[rows["_std"] == key]
+            hit = rows[(rows["_std"] == key) | (rows["_tag"] == key)]
             if not hit.empty:
                 value = hit.iloc[0]["_value"]
                 break
@@ -293,8 +320,12 @@ def _total_liabilities(statements: pd.DataFrame, years: list[int]) -> pd.Series:
     return total.where(total.notna(), assets - equity)
 
 
-def _fact_metric(facts: pd.DataFrame, years: list[int], concepts: list[str]) -> pd.Series:
-    """Fallback lookup of a single fact concept per fiscal year (millions)."""
+def _fact_metric(facts: pd.DataFrame, years: list[int], concepts: list[str],
+                 currency: str | None = None) -> pd.Series:
+    """Fallback lookup of a single fact concept per fiscal year (millions).
+
+    Facts in another currency (a foreign filer's USD convenience copy) are skipped.
+    """
     out = pd.Series(np.nan, index=years, dtype="float64")
     if facts is None or facts.empty or "concept" not in facts.columns:
         return out
@@ -305,6 +336,8 @@ def _fact_metric(facts: pd.DataFrame, years: list[int], concepts: list[str]) -> 
     frame = frame[frame["_fy"].isin(years)]
     frame["_value"] = pd.to_numeric(frame["value"], errors="coerce")
     frame = frame[frame["_value"].notna()]
+    if currency and "currency" in frame.columns:
+        frame = frame[frame["currency"].isna() | (frame["currency"].astype(str).str.upper() == currency)]
     if frame.empty:
         return out
     names = frame["concept"].astype(str).str.split(":").str[-1]
@@ -425,7 +458,9 @@ def _extract_shares(facts: pd.DataFrame, year: int) -> float:
         return np.nan
     names = frame["concept"].astype(str).str.split(":").str[-1]
     for concept in ("CommonStockSharesOutstanding",
-                    "EntityCommonStockSharesOutstanding"):
+                    "EntityCommonStockSharesOutstanding",
+                    # IFRS filers.
+                    "NumberOfSharesOutstanding"):
         value, _ = _latest_value(frame, names, concept)
         if np.isfinite(value):
             return value
@@ -439,7 +474,10 @@ def _extract_shares(facts: pd.DataFrame, year: int) -> float:
                 return issued - treasury
 
     for concept in ("WeightedAverageNumberOfDilutedSharesOutstanding",
-                    "WeightedAverageNumberOfSharesOutstandingBasic"):
+                    "WeightedAverageNumberOfSharesOutstandingBasic",
+                    # IFRS filers.
+                    "AdjustedWeightedAverageShares",
+                    "WeightedAverageShares"):
         value, _ = _latest_value(frame, names, concept)
         if np.isfinite(value):
             return value
@@ -516,6 +554,164 @@ def _f_score(
 # Evaluation build
 # --------------------------------------------------------------------------- #
 
+def _reporting_currency(data: pd.DataFrame) -> str:
+    """The latest filing's reporting currency (ratio data from the pipeline)."""
+    if "currency" in data.columns:
+        values = data["currency"].dropna().astype(str)
+        if len(values):
+            return values.iloc[-1].upper()
+    return "USD"
+
+
+def snap_ratio(value: float | None, tolerance: float = 0.03, ratios: tuple = NICE_RATIOS) -> float | None:
+    """The ADS ratio ``value`` is close to (within ``tolerance``), else None.
+
+    Tight by default: the filing's own figures give the ratio almost exactly.
+    The Yahoo estimate (trailing EPS against the last annual EPS) passes more.
+    """
+    if value is None or not np.isfinite(value) or value <= 0:
+        return None
+    best = min(ratios, key=lambda nice: abs(np.log(value / nice)))
+    return float(best) if abs(value / best - 1) <= tolerance else None
+
+
+def fetch_fx_history(base: str, quote_currency: str, years: int = PRICE_RANGE_YEARS) -> list[dict]:
+    """Monthly ``quote_currency`` per one ``base`` (EUR -> USD: about 1.1), as price bars."""
+    if base == quote_currency:
+        return []
+    return fetch_price_history(f"{base}{quote_currency}=X", years)
+
+
+def _yahoo_summary(ticker: str, modules: str) -> dict:
+    """Yahoo's quoteSummary modules (needs the cookie and crumb its site sets)."""
+    opener = build_opener(HTTPCookieProcessor(CookieJar()))
+    # A browser User-Agent and no Accept header: the crumb endpoint answers 406 otherwise.
+    headers = {"User-Agent": YAHOO_BROWSER_UA}
+    try:
+        opener.open(Request("https://fc.yahoo.com", headers=headers), timeout=10).close()
+    except Exception:  # noqa: BLE001, S110 - the 404 still sets the cookie
+        pass
+    with opener.open(Request("https://query1.finance.yahoo.com/v1/test/getcrumb", headers=headers),
+                     timeout=10) as response:
+        crumb = response.read().decode("utf-8", "replace").strip()
+    url = (f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{quote(ticker)}?"
+           + urlencode({"modules": modules, "crumb": crumb}))
+    with opener.open(Request(url, headers=headers), timeout=15) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return ((payload.get("quoteSummary") or {}).get("result") or [{}])[0] or {}
+
+
+def _latest_eps(facts: pd.DataFrame, currency: str) -> float:
+    """The newest annual basic EPS per ordinary share, in ``currency``."""
+    if facts is None or facts.empty or "concept" not in facts.columns:
+        return np.nan
+    names = facts["concept"].astype(str).str.split(":").str[-1]
+    frame = facts[names.isin(["BasicEarningsLossPerShare", "EarningsPerShareBasic"])]
+    if "is_dimensioned" in frame.columns:
+        frame = frame[~frame["is_dimensioned"].astype(bool)]
+    if "currency" in frame.columns:
+        frame = frame[frame["currency"].isna() | (frame["currency"].astype(str).str.upper() == currency)]
+    frame = frame.assign(_value=pd.to_numeric(frame["value"], errors="coerce"),
+                         _fy=pd.to_numeric(frame.get("fiscal_year"), errors="coerce")).dropna(subset=["_value", "_fy"])
+    if frame.empty:
+        return np.nan
+    return float(frame.sort_values("_fy").iloc[-1]["_value"])
+
+
+def market_scale(
+    ticker: str,
+    data: pd.DataFrame,
+    facts: pd.DataFrame,
+    statements: pd.DataFrame,
+) -> tuple[dict[int, float] | None, str, str]:
+    """Per fiscal year, quoted price -> price per ordinary share in the reporting currency.
+
+    Returns ``(scale, price_currency, note)``. ``scale`` is ``None`` when the
+    quote needs nothing (USD reporting, no ADSs). The ADS ratio comes from the
+    pipeline (cover page or EPS per ADS), else from Yahoo's trailing EPS per
+    traded share against the latest EPS per ordinary share; when it cannot be
+    found the scale is empty, so market-based ratios stay blank, not wrong.
+    """
+    currency = _reporting_currency(data)
+    print("[*] Valuation: reading the quote currency (Yahoo Finance)")
+    quote_info = fetch_quote(ticker) or {}
+    price_currency = str(quote_info.get("currency") or "USD").upper()
+    is_adr = "ads" in data.columns and data["ads"].astype(str).str.lower().isin(["true", "1"]).any()
+    ratio, source = np.nan, ""
+    if "ads_ratio" in data.columns:
+        known = pd.to_numeric(data["ads_ratio"], errors="coerce").dropna()
+        if len(known):
+            ratio = float(known.iloc[-1])
+            sources = data.get("ads_ratio_source")
+            source = str(sources.dropna().iloc[-1]) if sources is not None and sources.notna().any() else "filing"
+    if currency == price_currency and not is_adr:
+        return None, price_currency, ""
+
+    if currency != price_currency:
+        print(f"[*] Valuation: fetching {currency}/{price_currency} exchange rates (Yahoo Finance)")
+    fx_history = fetch_fx_history(currency, price_currency)
+    if currency != price_currency and not fx_history:
+        return {}, price_currency, f"no {currency}/{price_currency} exchange rates; price-based ratios skipped"
+    period_dates = _period_dates(data, statements)
+
+    def fx_at(year: int) -> float:
+        return 1.0 if currency == price_currency else _close_near(fx_history, period_dates.get(year))
+
+    if not np.isfinite(ratio):
+        if not is_adr:
+            ratio, source = 1.0, "ordinary shares"
+        else:
+            print("[*] Valuation: ADS ratio not in the filings; estimating it from Yahoo's market cap")
+            latest = int(pd.to_numeric(data["fiscal_year"], errors="coerce").max())
+            ratio, source = _yahoo_ratio(ticker, data, facts, quote_info, latest, fx_at(latest))
+    if not np.isfinite(ratio):
+        return {}, price_currency, "ADS ratio unknown; price-based ratios skipped"
+    scale = {}
+    for year in pd.to_numeric(data["fiscal_year"], errors="coerce").dropna().astype(int):
+        rate = fx_at(int(year))
+        if np.isfinite(rate) and rate > 0:
+            scale[int(year)] = 1.0 / (rate * ratio)
+    note = (f"{price_currency} price per ADS = {ratio:g} ordinary shares ({source}), converted to {currency}"
+            if is_adr else f"{price_currency} price converted to {currency}")
+    return scale, price_currency, note
+
+
+def _yahoo_ratio(ticker: str, data: pd.DataFrame, facts: pd.DataFrame, quote_info: dict,
+                 latest: int, fx_latest: float) -> tuple[float, str]:
+    """Ordinary shares per ADS from Yahoo, snapped to a usual ratio; (nan, "") when unsure.
+
+    First the market cap: quoted price x ordinary shares / market cap (Shell
+    2,00, TSMC 5,00, Toyota 11,1 with its treasury shares, so 10). Else the
+    trailing EPS per ADS against the last annual EPS per share, which drifts
+    when earnings move.
+    """
+    try:
+        summary = _yahoo_summary(ticker, "summaryDetail,defaultKeyStatistics")
+    except Exception:  # noqa: BLE001 - best effort
+        return np.nan, ""
+    details = summary.get("summaryDetail") or {}
+    market_cap = _finite((details.get("marketCap") or {}).get("raw"))
+    price = _finite(quote_info.get("price"))
+    shares = _extract_shares(facts, latest)
+    same_currency = str(details.get("currency") or quote_info.get("currency") or "").upper() == \
+        str(quote_info.get("currency") or "USD").upper()
+    if same_currency and np.isfinite(market_cap) and market_cap > 0 and np.isfinite(price) and np.isfinite(shares):
+        guess = snap_ratio(price * shares / market_cap, tolerance=0.15, ratios=COMMON_RATIOS)
+        if guess:
+            return guess, "Yahoo market cap"
+    eps_ads = _finite(((summary.get("defaultKeyStatistics") or {}).get("trailingEps") or {}).get("raw"))
+    eps = _latest_eps(facts, _reporting_currency(data))
+    if not np.isfinite(eps):
+        # No EPS fact (Shell's recent years): net income over shares.
+        income = _numeric(data, "NetIncomeLoss")[pd.to_numeric(data["fiscal_year"], errors="coerce") == latest]
+        if len(income) and np.isfinite(shares) and shares > 0:
+            eps = float(income.iloc[-1]) * USD_TO_MILLIONS / shares
+    eps_share = eps * fx_latest
+    guess = (snap_ratio(eps_ads / eps_share, tolerance=0.25, ratios=COMMON_RATIOS)
+             if np.isfinite(eps_ads) and np.isfinite(eps_share) and eps_share else None)
+    return (guess, "Yahoo EPS") if guess else (np.nan, "")
+
+
 def _empty_evaluation() -> pd.DataFrame:
     return pd.DataFrame({column: pd.Series(dtype="float64") for column in OUTPUT_COLUMNS})
 
@@ -526,8 +722,16 @@ def build_evaluation(
     statements: pd.DataFrame,
     facts: pd.DataFrame,
     price_history: list[dict],
+    price_scale: dict[int, float] | None = None,
+    price_currency: str | None = None,
 ) -> pd.DataFrame:
-    """One row per fiscal year with valuation ratios and quality scores."""
+    """One row per fiscal year with valuation ratios and quality scores.
+
+    ``price_scale`` turns a year's quoted price into a price per ordinary
+    share in the reporting currency (see ``market_scale``); a year missing
+    from it gets no market-based ratios. ``None`` means the price needs no
+    conversion (a US filer reporting in USD).
+    """
     if df is None or df.empty or "fiscal_year" not in df.columns:
         return _empty_evaluation()
 
@@ -543,6 +747,7 @@ def build_evaluation(
         .reset_index(drop=True)
     )
     years = [int(year) for year in data["fiscal_year"]]
+    currency = _reporting_currency(data)
 
     statement_metrics = {
         "total_assets": _statement_metric(statements, years, *TOTAL_ASSETS),
@@ -560,7 +765,9 @@ def build_evaluation(
             facts, years,
             ["DepreciationDepletionAndAmortization",
              "DepreciationAmortizationAndAccretionNet",
-             "DepreciationExpense"],
+             "DepreciationExpense",
+             "DepreciationAndAmortisationExpense"],
+            currency,
         )
 
     # Financial-data columns first; fall back to statements when a filer did
@@ -615,8 +822,10 @@ def build_evaluation(
     for position, year in enumerate(years):
         price = _finite(prices[year])
         shares = _finite(share_counts.get(year, np.nan))
-        market_cap = price * shares / USD_TO_MILLIONS if (
-            np.isfinite(price) and np.isfinite(shares)
+        # Price per ordinary share in the reporting currency.
+        share_price = price if price_scale is None else price * _finite(price_scale.get(year, np.nan))
+        market_cap = share_price * shares / USD_TO_MILLIONS if (
+            np.isfinite(share_price) and np.isfinite(shares)
         ) else np.nan
 
         net_income_value = _finite(net_income.iloc[position])
@@ -717,6 +926,8 @@ def build_evaluation(
             "f_score": _f_score(year, metrics, share_counts),
             "z_score": z_score,
             "accruals_ratio": accruals_ratio,
+            "currency": currency,
+            "price_currency": price_currency or "USD",
         })
 
     evaluation = pd.DataFrame(rows, columns=OUTPUT_COLUMNS)

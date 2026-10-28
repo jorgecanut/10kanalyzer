@@ -38,6 +38,22 @@ import seaborn as sns
 USD_TO_MILLIONS = 1_000_000
 CHART_WINDOW = 5
 
+# Money is in the filer's reporting currency (USD for a 10-K; EUR, TWD, JPY...
+# for most 20-F filers). The symbol prefixes values ($29,70B, €29,70B); a
+# currency without one shows its code (CHF 29,70B).
+CURRENCY_SYMBOLS = {
+    "USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥", "CNY": "CN¥", "TWD": "NT$", "KRW": "₩", "INR": "₹",
+    "CAD": "C$", "AUD": "A$", "HKD": "HK$", "BRL": "R$", "MXN": "MX$", "ILS": "₪", "SGD": "S$",
+    "NZD": "NZ$", "DKK": "kr ", "SEK": "kr ", "NOK": "kr ", "CHF": "CHF ", "ZAR": "R ",
+}
+# The currency being built or drawn; set by build_spec and render_pngs.
+_CURRENCY = "USD"
+
+
+def currency_symbol(code: str | None) -> str:
+    code = (code or "USD").upper()
+    return CURRENCY_SYMBOLS.get(code, f"{code} ")
+
 # --------------------------------------------------------------------------- #
 # Font: the web app's own monospace, bundled in static/fonts so the charts match
 # the page on every machine (Docker has no fonts installed).
@@ -208,8 +224,8 @@ def _compact(value: float, prefix: str = "", decimals: int = 2, strip: bool = Fa
 
 
 def _fmt_mm(value: float) -> str:
-    """Abbreviate a USD-millions value as $XX,XXB."""
-    return _compact(value, "$")
+    """Abbreviate a millions value as $XX,XXB (in the chart's currency)."""
+    return _compact(value, currency_symbol(_CURRENCY))
 
 
 def _fmt_pct(value: float) -> str:
@@ -222,8 +238,8 @@ def _fmt_shares(value: float) -> str:
 
 
 def _axis_money(value: float, _pos=None) -> str:
-    """Y-axis ticks for USD millions: $10B, $2,5B, 0."""
-    return "0" if value == 0 else _compact(value, "$", decimals=1, strip=True)
+    """Y-axis ticks for millions: $10B, $2,5B, 0."""
+    return "0" if value == 0 else _compact(value, currency_symbol(_CURRENCY), decimals=1, strip=True)
 
 
 def _axis_shares(value: float, _pos=None) -> str:
@@ -278,7 +294,12 @@ def _stmt_series(
     statements["fiscal_year"] = pd.to_numeric(statements["fiscal_year"], errors="coerce").astype("Int64")
     statements = statements.dropna(subset=["fiscal_year"])
     concepts = list(concepts)
-    std_mask = statements["standard_concept"].fillna("").isin(concepts)
+    # edgartools' standard_concept, or the tag itself (``ifrs-full_Borrowings``
+    # -> ``Borrowings``): many IFRS lines carry no standard_concept.
+    tag = statements["concept"].fillna("").astype(str).str.split(r"[:_]", n=1, regex=True).str[-1] \
+        if "concept" in statements.columns else pd.Series("", index=statements.index)
+    standard = statements["standard_concept"].fillna("")
+    std_mask = standard.isin(concepts) | tag.isin(concepts)
     label_mask = pd.Series(False, index=statements.index)
     if include_labels:
         labels = statements["label"].fillna("").str.lower()
@@ -302,8 +323,10 @@ def _stmt_series(
         sub.loc[outflow, "value"] = -sub.loc[outflow, "value"].abs()
         sub.loc[inflow, "value"] = sub.loc[inflow, "value"].abs()
     priority = {concept: i for i, concept in enumerate(concepts)}
+    by_standard = sub["standard_concept"].map(priority)
+    by_tag = tag.loc[sub.index].map(priority)
     sub = sub.assign(
-        _priority=sub["standard_concept"].map(priority).fillna(len(concepts))
+        _priority=pd.concat([by_standard, by_tag], axis=1).min(axis=1).fillna(len(concepts))
     ).sort_values(["fiscal_year", "_priority"])
     s = sub.groupby("fiscal_year")["value"].first() / USD_TO_MILLIONS
     return s.reindex(years)
@@ -462,14 +485,14 @@ def _bar_chart(
     years: list[int],
     note: str | None = None,
 ) -> dict:
-    """Grouped bars in USD; metrics without a single value are left out."""
+    """Grouped bars in the reporting currency; metrics without a single value are left out."""
     series = [
         _series(label, values, source, concepts=concepts)
         for label, values, source, concepts in metrics
         if not values.dropna().empty
     ]
     return _chart(chart_id, name, _panel(
-        f"{ticker} · {name}", "Fiscal years {span} · USD", years, series, note=note,
+        f"{ticker} · {name}", f"Fiscal years {{span}} · {_CURRENCY}", years, series, note=note,
     ))
 
 
@@ -510,6 +533,9 @@ def chart_income_statement(
         "ImpairmentOfLongLivedAssetsHeldAndUsed",
         "ImpairmentOfLongLivedAssets",
     ]
+    # IFRS calls interest expense finance costs.
+    interest = ["InterestExpense", "FinanceCosts", "InterestExpenseOnBorrowings"]
+    goodwill_loss = ["GoodwillImpairmentLoss", "ImpairmentLossRecognisedInProfitOrLossGoodwill"]
     metrics = [
         ("Revenue", _df_series(df, "Revenues", years), "reported", ["Revenues"]),
         ("Cost of Revenue", _df_series(df, "CostOfRevenue", years), "reported", ["CostOfRevenue"]),
@@ -519,10 +545,9 @@ def chart_income_statement(
         ("R&D", _df_series(df, "ResearchAndDevelopmentExpense", years), "reported",
          ["ResearchAndDevelopmentExpense"]),
         ("Operating Income", _df_series(df, "OperatingIncomeLoss", years), "reported", ["OperatingIncomeLoss"]),
-        ("Interest Expense", _stmt_series(statements, "income", ["InterestExpense"], years), "reported",
-         ["InterestExpense"]),
-        ("Goodwill Impairment", _stmt_series(statements, "income", ["GoodwillImpairmentLoss"], years), "reported",
-         ["GoodwillImpairmentLoss"]),
+        ("Interest Expense", _stmt_series(statements, "income", interest, years), "reported", interest),
+        ("Goodwill Impairment", _stmt_series(statements, "income", goodwill_loss, years), "reported",
+         goodwill_loss),
         ("Asset Writedown", _stmt_series(statements, "income", impairments, years), "derived", impairments),
         ("Net Income", _df_series(df, "NetIncomeLoss", years), "reported", ["NetIncomeLoss"]),
     ]
@@ -551,8 +576,11 @@ def chart_balance(
     facts: pd.DataFrame,
     years: list[int],
 ) -> dict:
-    ppe = ["NetPropertyPlantAndEquipment", "PlantPropertyEquipmentNet", "PropertyPlantAndEquipmentNet"]
-    intangibles = ["IntangibleAssetsNetExcludingGoodwill", "IntangibleAssetsNet", "IntangibleAssets"]
+    ppe = ["NetPropertyPlantAndEquipment", "PlantPropertyEquipmentNet", "PropertyPlantAndEquipmentNet",
+           # IFRS filers.
+           "PropertyPlantAndEquipment", "PropertyPlantAndEquipmentIncludingRightofuseAssets"]
+    intangibles = ["IntangibleAssetsNetExcludingGoodwill", "IntangibleAssetsNet", "IntangibleAssets",
+                   "IntangibleAssetsOtherThanGoodwill"]
     inventory = ["InventoryNet", "Inventory", "Inventories"]
     retained = ["RetainedEarningsAccumulatedDeficit", "RetainedEarnings"]
     usd_metrics = [
@@ -562,7 +590,7 @@ def chart_balance(
         ("Other Intangibles", _stmt_series(statements, "balance", intangibles, years), "reported", intangibles),
         ("Inventory", _stmt_series(statements, "balance", inventory, years), "reported", inventory),
         ("Total Current Liabilities", _df_series(df, "LiabilitiesCurrent", years), "reported",
-         ["LiabilitiesCurrent"]),
+         ["LiabilitiesCurrent", "CurrentLiabilities"]),
         ("Total Liabilities", _stmt_series(statements, "balance", ["Liabilities"], years), "reported",
          ["Liabilities"]),
         ("Total Equity", _df_series(df, "StockholdersEquity", years), "reported", ["StockholdersEquity"]),
@@ -571,12 +599,16 @@ def chart_balance(
     share_concepts = [
         "CommonStockSharesOutstanding",
         "EntityCommonStockSharesOutstanding",
+        "NumberOfSharesOutstanding",
         "WeightedAverageNumberOfDilutedSharesOutstanding",
+        # IFRS filers.
+        "AdjustedWeightedAverageShares",
+        "WeightedAverageShares",
     ]
     shares = _shares_series(facts, share_concepts, years)
     chart = _bar_chart("03_balance", "Balance sheet", ticker, usd_metrics, years)
     panel = chart["panels"][0]
-    panel["subtitle"] = "Fiscal years {span} · USD, shares on the right axis"
+    panel["subtitle"] = f"Fiscal years {{span}} · {_CURRENCY}, shares on the right axis"
     panel["margin"] = 0.16
     if not shares.dropna().empty:
         _record_quality("Total Shares Outstanding", shares, "reported")
@@ -602,7 +634,10 @@ def chart_debt(
     lt_debt = _df_series(df, "LongTermDebt", years)
     # IFRS / foreign filers may not tag a plain LongTermDebt concept for all
     # years, so fill missing years from the balance-sheet statement.
-    lt_concepts = ["LongTermDebt", "LongTermDebtNoncurrent", "Borrowings"]
+    lt_concepts = ["LongTermDebt", "LongTermDebtNoncurrent", "Borrowings",
+                   # IFRS filers.
+                   "NoncurrentPortionOfNoncurrentBorrowings", "LongtermBorrowings", "NoncurrentBorrowings",
+                   "BondsIssued"]
     stmt_lt_debt = _stmt_series(
         statements,
         "balance",
@@ -621,6 +656,11 @@ def chart_debt(
         "FinanceLeaseLiabilityCurrent",
         "CapitalLeaseObligationsCurrent",
         "LongTermDebtAndCapitalLeaseObligationsCurrent",
+        # IFRS filers.
+        "CurrentPortionOfLongtermBorrowings",
+        "CurrentPortionOfNoncurrentBorrowings",
+        "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings",
+        "CurrentLeaseLiabilities",
     ]
     current_debt = _stmt_series(
         statements,
@@ -637,6 +677,8 @@ def chart_debt(
         "FinanceLeaseLiabilityNoncurrent",
         "CapitalLeaseObligationsNoncurrent",
         "LongTermDebtAndCapitalLeaseObligationsNoncurrent",
+        # IFRS filers: every lease is on the balance sheet.
+        "NoncurrentLeaseLiabilities",
     ]
     capital_leases = _stmt_series(
         statements,
@@ -689,6 +731,9 @@ def chart_cashflow_operations(
         "AmortizationOfIntangibleAssets",
         "DepreciationExpense",
         "AmortizationOfIntangibles",
+        # IFRS filers.
+        "AdjustmentsForDepreciationAndAmortisationExpense",
+        "DepreciationAndAmortisationExpense",
     ]
     da = _stmt_series(
         statements,
@@ -723,6 +768,9 @@ def chart_cashflow_financing(
         "ProceedsFromIssuanceOfCommonStock",
         "ProceedsFromIssuanceOfCommonShares",
         "ProceedsFromStockOptionsExercised",
+        # IFRS filers.
+        "ProceedsFromIssuingShares",
+        "ProceedsFromExerciseOfOptions",
     ]
     issuance = _stmt_series(
         statements,
@@ -737,6 +785,9 @@ def chart_cashflow_financing(
         "PaymentsForRepurchaseOfCommonStock",
         "PaymentsToAcquireTreasuryStock",
         "PaymentsForRepurchaseOfCommonShares",
+        # IFRS filers.
+        "PaymentsToAcquireOrRedeemEntitysShares",
+        "PurchaseOfTreasuryShares",
     ]
     repurchase = _stmt_series(
         statements,
@@ -749,6 +800,10 @@ def chart_cashflow_financing(
     dividend_concepts = [
         "PaymentsOfDividends",
         "PaymentsOfDividendsCommonStock",
+        # IFRS filers.
+        "DividendsPaidClassifiedAsFinancingActivities",
+        "DividendsPaidToEquityHoldersOfParentClassifiedAsFinancingActivities",
+        "DividendsPaid",
     ]
     dividends = _stmt_series(
         statements,
@@ -759,7 +814,9 @@ def chart_cashflow_financing(
         exclude_labels=["preferred"],
         normalize_cashflow=True,
     )
-    sbc_concepts = ["ShareBasedCompensation", "NoncashShareBasedCompensation", "StockBasedCompensationExpense"]
+    sbc_concepts = ["ShareBasedCompensation", "NoncashShareBasedCompensation", "StockBasedCompensationExpense",
+                    # IFRS filers.
+                    "AdjustmentsForSharebasedPayments"]
     sbc = _stmt_series(
         statements,
         "cashflow",
@@ -1004,11 +1061,20 @@ def _style_axes(ax: plt.Axes, years: list[int], yfmt=_axis_money) -> None:
 
 
 def _apply_axis(ax: plt.Axes, spec: dict, margin: float) -> None:
-    """Fixed limits, tick step and name from an axis spec; else the margin."""
+    """Fixed limits, tick step and name from an axis spec; else the margin.
+
+    A nearly flat series (a share count that moves 0,01%) gets at least ±2% of
+    room, so it is not blown up and the tick labels do not repeat.
+    """
     if "min" in spec or "max" in spec:
         ax.set_ylim(spec.get("min"), spec.get("max"))
     else:
         ax.margins(y=margin)
+        low, high = ax.get_ylim()
+        floor = 0.04 * max(abs(low), abs(high))
+        if 0 < high - low < floor and not low <= 0 <= high:
+            middle = (low + high) / 2
+            ax.set_ylim(middle - floor / 2, middle + floor / 2)
     if spec.get("interval"):
         ax.yaxis.set_major_locator(mticker.MultipleLocator(spec["interval"]))
     if spec.get("name"):
@@ -1250,12 +1316,13 @@ def render_pngs(
     ``years_per_image`` 0 puts every year in one (wider) image. Returns the
     paths in chart order; ``skip_existing`` keeps images already drawn.
     """
-    global _INK
+    global _INK, _CURRENCY
     os.makedirs(output_dir, exist_ok=True)
     wanted = None if ids is None else set(ids)
     paths: list[str] = []
     with _RENDER_LOCK:
         _INK = DARK_INK if dark else LIGHT_INK
+        _CURRENCY = str(spec.get("currency") or "USD")
         try:
             with plt.rc_context(DARK_RC if dark else LIGHT_RC):
                 for chart in spec.get("charts", []):
@@ -1271,7 +1338,7 @@ def render_pngs(
                                 plt.close("all")
                         paths.append(path)
         finally:
-            _INK = LIGHT_INK
+            _INK, _CURRENCY = LIGHT_INK, "USD"
     return paths
 
 
@@ -1286,8 +1353,10 @@ def build_spec(
     facts: pd.DataFrame,
 ) -> dict:
     """Every chart's spec; fills the data-quality rows as a side effect."""
+    global _CURRENCY
     _QUALITY_ROWS.clear()
     years = sorted(df["fiscal_year"].dropna().astype(int).unique().tolist())
+    _CURRENCY = _spec_currency(df)
     charts: list[dict] = []
     if years:
         charts = [
@@ -1302,7 +1371,16 @@ def build_spec(
         valuation = chart_valuation(ticker, output_dir)
         if valuation:
             charts.append(valuation)
-    return {"version": SPEC_VERSION, "ticker": ticker, "years": years, "charts": charts}
+    return {"version": SPEC_VERSION, "ticker": ticker, "currency": _CURRENCY, "years": years, "charts": charts}
+
+
+def _spec_currency(df: pd.DataFrame) -> str:
+    """The latest filing's reporting currency; USD for runs made before it was kept."""
+    if "currency" in df.columns:
+        values = df.sort_values("fiscal_year")["currency"].dropna().astype(str)
+        if len(values):
+            return values.iloc[-1].upper()
+    return "USD"
 
 
 def clear_images(output_dir: str) -> None:
@@ -1319,10 +1397,18 @@ def render_all(
     df: pd.DataFrame,
     statements: pd.DataFrame,
     facts: pd.DataFrame,
+    log=None,
 ) -> list[str]:
-    """Write ``charts.json`` and ``data_quality.csv``; returns the chart ids."""
+    """Write ``charts.json`` and ``data_quality.csv``; returns the chart ids.
+
+    ``log`` (``print`` in the pipeline) gets one line per chart.
+    """
     with _SPEC_LOCK:
         spec = build_spec(ticker, output_dir, df, statements, facts)
+        for chart in spec["charts"] if log else []:
+            series = sum(len(panel["series"]) for panel in chart["panels"])
+            years = sorted({year for panel in chart["panels"] for year in panel["years"]})
+            log(f"    [+] Chart {chart['name']}: {series} series, {_span(years)}")
         if not spec["charts"]:
             return []
         clear_images(output_dir)

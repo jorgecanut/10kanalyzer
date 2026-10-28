@@ -42,7 +42,7 @@ NOTE_SCHEDULES: dict[str, str] = {
 }
 
 _FACT_COLUMNS = [
-    "concept", "label", "numeric_value", "unit_ref", "decimals",
+    "concept", "label", "numeric_value", "unit_ref", "currency", "decimals",
     "period_start", "period_end", "period_instant", "is_dimensioned",
     "dimension", "member", "full_dimension_label", "statement_type",
 ]
@@ -96,8 +96,21 @@ def _classify_section(rows: list[dict]) -> None:
             r["section"] = "LIABILITIES AND EQUITY"
 
 
-def extract_statements(xbrl, period_of_report: str) -> list[dict]:
-    """Every dimension-free line of the five primary statements, long-form."""
+def extract_statements(
+    xbrl,
+    period_of_report: str,
+    values: dict[str, dict] | None = None,
+    convenience: dict[str, list[float]] | None = None,
+) -> list[dict]:
+    """Every dimension-free line of the five primary statements, long-form.
+
+    For some foreign filers edgartools renders a line's USD convenience copy
+    (TSMC's 2019 equity) among lines in TWD. A rendered number that equals
+    one of ``convenience`` (``calc_check.convenience_values``) is replaced by
+    the reporting-currency value from ``values`` (``calc_check.period_values``),
+    keeping the statement's presentation sign. Every other number is kept as
+    rendered (signs, opening balances).
+    """
     rows: list[dict] = []
     for key, (method, _label) in STATEMENTS.items():
         try:
@@ -126,6 +139,11 @@ def extract_statements(xbrl, period_of_report: str) -> list[dict]:
                 if bool(row.get("dimension")):  # breakdown row, not the consolidated line
                     continue
                 value = pd.to_numeric(row.get(column), errors="coerce")
+                if pd.notna(value) and value and convenience and values and concept in values:
+                    for other in convenience.get(concept, []):
+                        if other and abs(abs(value) / abs(other) - 1) < 1e-6:
+                            value = values[concept]["value"] * (value / other)
+                            break
                 if pd.isna(value):
                     continue
                 standard = row.get("standard_concept")
@@ -190,6 +208,8 @@ def extract_facts(xbrl, period_of_report: str) -> list[dict]:
             "label": str(row.get("label") or ""),
             "value": None if pd.isna(value) else float(value),
             "unit": _clean(row.get("unit_ref")),
+            # ISO code of a money fact (TWD, and USD for a convenience copy).
+            "currency": _clean(row.get("currency")),
             "decimals": _clean(row.get("decimals")),
             "period_start": _clean(row.get("period_start")),
             "period_end": _clean(row.get("period_end")),

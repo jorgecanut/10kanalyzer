@@ -63,6 +63,7 @@ financial_graphs/
 │   ├── facts.csv            # every fact for each period, dimensions included
 │   ├── notes.csv            # key schedules: debt, segments, EPS, taxes, shares
 │   ├── charts.json          # the charts as specs (drawn by the page)
+│   ├── calc_check.csv       # each linkbase total against the sum of its parts
 │   ├── data_quality.csv     # per chart value: reported, derived or missing
 │   └── .png_cache/          # web app only: PNGs drawn by a download, until the next run
 ├── AAPL/   # same CSVs
@@ -144,6 +145,7 @@ Routes:
 | `DELETE` | `/api/recent/<ticker>` | Deletes that ticker's results folder |
 | `GET` | `/api/files/<ticker>` | Chart ids and data files of a ticker's run |
 | `GET` | `/api/charts/<ticker>` | `charts.json`: every chart's spec, drawn by the page |
+| `GET` | `/api/checks/<ticker>` | The calculation check: counts for statements and notes, and every total that does not add up with its parts |
 | `GET` | `/api/facts/<ticker>` | Every statement line and plain fact of the filings' own periods (concept, label, unit, value per year), for the Charts search |
 | `GET` | `/api/evaluation/<ticker>` | `evaluation.csv` rows for one ticker |
 | `GET` | `/api/insiders/<ticker>` | `insider.json` trades for one ticker |
@@ -173,11 +175,25 @@ Options default is used.
 latest search (the pinned ticker). It shows that company's key numbers (the
 only place outside the Screener with stats), its spot in the screener's Magic
 Formula ranking with the two tickers above and below (names only, click one to
-switch to it), the top five market headlines (see the News tab below), the
-five latest insider trades (with a
-link to the Insiders tab), and one small thumbnail per chart
-(its last five years) that opens in the Charts tab. Running a single
-ticker switches to Home; the run's progress and log are in the Charts tab.
+switch to it), then one small thumbnail per chart (its last five years) that
+opens in the Charts tab, the top five market headlines (see the News tab
+below) and the five latest insider trades (with a link to the Insiders tab).
+Running a single ticker switches to Home; the run's progress is in the Charts
+tab and its log in the Logs tab.
+
+**Logs** (`/#logs`) is optional: Options → General → Logs tab shows it in the
+tab row; hidden (the default) it still opens from a queued or running badge
+(the header's or the Charts tab's), from "Open the log" under the Charts
+header, or by typing the URL. It has two parts. **Run**: the whole log of a
+run (pick the ticker; the running one is preselected), every line timed
+(`15:45:44 [*] Filing 2/20: 10-K for the year ended 2025-06-30, downloading
+and parsing its XBRL`), updated every 1,5 s while it runs; the pipeline says
+what it is doing at each step: looking up the company, listing filings,
+each filing's download and parse time and linkbase result, insider Form 4s
+read so far, prices and exchange rates, the ADS ratio, every chart.
+**This page**: what the page asked the server for since it loaded, in words
+("Looking for news about AAPL (Google News)", "Packing the download of KO:
+drawing the chart PNGs"), with how long each took or why it failed.
 
 **Downloads.** Every tab has a download icon and downloads what it shows, with
 the options chosen there. **Home** and **Charts** open a dialog with a checkbox
@@ -196,14 +212,13 @@ The ticker bar decides the mode. **One ticker** runs the full pipeline: charts
 plus screener data. It is pinned to the **Charts** tab and stays there until you
 run/open another ticker; the pin survives page reloads and cancel. Its scores
 and ratios live in the **Screener** tab only. The Charts tab is empty until
-then. The pipeline log is closed by default, even during a run: the line under
-the header shows its latest line while the run is queued or running, and the
-error if it fails. The **log** button opens it above the chart index, set apart
-by its own background and a rule. The chart index sits inside the Charts
-panel, one line per chart. Each chart shows as many recent years as fit its
-width; the slider under it (or dragging the chart, ctrl+wheel to zoom) scrolls
-through every year, the axis rescales to the years on show and the subtitle
-names them. Hovering a year lists every value; legend keys hide and show a
+then. The line under the header shows the latest log line while the run is
+queued or running, and the error if it fails, with a link to the Logs tab. The
+chart index sits inside the Charts panel, one line per chart. Each chart shows
+as many recent years as fit its width; the slider under it (or the arrows at
+its ends, one year at a time, or dragging the chart, ctrl+wheel to zoom)
+scrolls through every year, the axis rescales to the years on show and the
+subtitle names them. Moving the window redraws at once, without animation. Hovering a year lists every value; legend keys hide and show a
 series. The **search** above the index looks for a fact (goodwill, buybacks,
 income taxes paid…) in the charted series and in every statement line and fact
 of the filings; pick a year beside it, or type it ("goodwill 2019"). A charted
@@ -474,7 +489,7 @@ curl -s localhost:8053/healthz
 
 ```json
 {"status":"ok","version":"1.0.0","commit":"…","dirty":null,"code_sha1":"…",
- "features":["valuation","insider"],"pipeline_sha1":"…","charts_sha1":"…",
+ "features":["valuation","insider","calc_check"],"pipeline_sha1":"…","charts_sha1":"…",
  "data":{"graph_dir":"/app/data","exists":true,"readable":true,
          "writable":true,"uid":10001}}
 ```
@@ -541,7 +556,8 @@ sending that one zip. "Remove all data" deletes the log too.
 Derived in-script: **Gross Margin**, **Operating Margin**, **Net Margin**
 (`NetIncomeLoss / Revenues`), **Free Cash Flow** (`OperatingCashFlow - CapEx`),
 **Current Ratio** (`AssetsCurrent / LiabilitiesCurrent`), **Debt-to-Equity**
-(`LongTermDebt / StockholdersEquity`). All monetary values are in USD millions.
+(`LongTermDebt / StockholdersEquity`). All monetary values are in millions of
+the filer's reporting currency (USD for a 10-K; see § Foreign filers).
 
 ### Balance-sheet and debt extraction
 
@@ -596,9 +612,74 @@ maintenance.
   the value with the greatest decimal precision is used.
 - Unparseable or missing filings are skipped with a warning rather than
   aborting the run, so one bad document cannot sink a whole dashboard.
-- This workflow targets US domestic **10-K** filers (US-GAAP, XBRL). Foreign
-  private issuers that report under IFRS / file 20-F, and companies with no
-  EDGAR annual filings at all (e.g. Volkswagen), are out of scope.
+- Companies with no EDGAR annual filings at all (e.g. Volkswagen, which files
+  in Germany only) are out of scope.
+
+## Foreign filers (20-F / 40-F, IFRS)
+
+Foreign companies listed in the US file a **20-F** (or a **40-F** from Canada)
+instead of a 10-K, mostly under **IFRS**, in their own currency: SAP in EUR,
+TSMC in TWD, Toyota and Sony in JPY, Novo Nordisk in DKK. Some report under US
+GAAP but still in euros (ASML). The pipeline reads them like a 10-K:
+
+- **Currency.** Each filing's reporting currency is the one most of its money
+  facts are in (`currency` in `financial_data.csv`, `facts.csv` and
+  `charts.json`). Values stay in it, in millions, as the filer reports them;
+  charts, tooltips and the search label them (€29,70B, NT$3,81T, ¥48,04T).
+  Facts in another currency are ignored: TSMC also tags a USD "convenience
+  translation" of its latest year, and edgartools sometimes renders that copy
+  in a statement (TSMC's 2019 equity), which is swapped back for the TWD figure.
+- **IFRS tags.** The curated metrics, the chart lines and the valuation inputs
+  list the IFRS spellings next to the US-GAAP ones (`Revenue`, `CostOfSales`,
+  `FinanceCosts`, `ImpairmentLossRecognisedInProfitOrLossGoodwill`,
+  `PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities`,
+  `NoncurrentLeaseLiabilities`, `PaymentsToAcquireOrRedeemEntitysShares`,
+  `DividendsPaidClassifiedAsFinancingActivities`,
+  `AdjustmentsForSharebasedPayments`, `NumberOfSharesOutstanding`, ...). Lines
+  edgartools gives no `standard_concept` are matched by their tag. When no
+  total is tagged, **SG&A** is selling (distribution) plus administrative
+  costs, and IFRS **long-term debt** is bonds plus long-term bank loans.
+- **Valuation.** The New York listing is usually an **ADS** priced in USD that
+  stands for some number of ordinary shares (TSMC 5, Toyota 10, SAP 1). Each
+  year's price is converted to the reporting currency at the fiscal-year-end
+  exchange rate (Yahoo, e.g. `TWDUSD=X`) and divided by that number, so market
+  cap, P/E, EV/EBIT and the Z-score compare like with like. The ratio comes
+  from the 20-F cover page ("each representing five ordinary shares"), else
+  from earnings per ADS over earnings per share in the filing, else from
+  Yahoo: quoted price x ordinary shares / Yahoo's market cap, then its trailing
+  EPS per ADS against the last annual EPS (both snapped to a usual ratio: 1, 2,
+  3, 4, 5, 10, 20...). When none works, the price-based ratios are left blank
+  rather than wrong. A company-specific capex line counts when it is the only
+  investing line naming PP&E or capital expenditure (Toyota, Shell, Alibaba). The run log says which: `Valuation: USD price per ADS = 5 ordinary
+  shares (eps), converted to TWD`. `evaluation.csv` keeps the quoted price and
+  names both currencies (`currency`, `price_currency`).
+- Foreign private issuers need not file Form 4, so the Insiders tab is often
+  empty for them (TSMC's officers file voluntarily).
+
+## Calculation check
+
+Every filing ships a **calculation linkbase**: for each total on its
+statements and notes (total assets, gross profit, operating cash flow...) the
+lines that make it up and their sign. `calc_check.py` takes the filing's own
+period values (dimension-free, in the reporting currency) and checks each total
+against the weighted sum of its parts, allowing for rounding (half a unit of
+each value's precision). A total that fails within its own statement is tried
+again with its parts from every statement (TSMC splits profit and other
+comprehensive income across two). Results go to `calc_check.csv`, the run log
+and the **Calculation check** section under the Charts tab's index:
+
+- **ok**: the total adds up.
+- **mismatch** ("off by"): every part has a value and the sum still differs, so
+  a line is tagged in an unexpected way or missing from the linkbase. These are
+  the ones worth a look: they name the line the curated metrics may be missing.
+- **incomplete** ("untagged parts"): some parts have no plain value that year
+  (tagged only per segment or tranche), so the sum cannot close.
+
+Statement totals come first; note tables, where parts are often tagged only
+per category, are folded away. Opening a row lists every part and its value.
+For example, SAP's 8 filings add up in all 295 statement totals; TSMC's show
+its comprehensive income without the profit line in its linkbase, and
+investing cash flows with parts it tags only in some years.
 
 ## Verification
 

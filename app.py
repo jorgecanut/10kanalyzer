@@ -742,7 +742,7 @@ def build_info() -> dict:
     ``sha1sum edgar_dashboard.py charts.py``.
     """
     info = {"version": app_version(), **git_commit(), "code_sha1": code_sha1(), "features": []}
-    for module in ("valuation", "insider"):
+    for module in ("valuation", "insider", "calc_check"):
         if (BASE_DIR / f"{module}.py").is_file():
             info["features"].append(module)
     for name, key in (("edgar_dashboard.py", "pipeline_sha1"), ("charts.py", "charts_sha1")):
@@ -1035,13 +1035,15 @@ def jobs():
 
 @app.get("/api/status/<ticker>")
 def status(ticker: str):
+    """The ticker's job and the end of its run log (the whole log, up to 5000 lines, with ``?full=1``)."""
     ticker = _normalise_ticker(ticker)
+    lines = 5000 if request.args.get("full") else 200
     with JOBS_LOCK:
         job = dict(JOBS.get(_job_key(g.user["id"], ticker), {}))
     job.pop("uid", None)
 
     if job:
-        job["log"] = _log_tail(ticker)
+        job["log"] = _log_tail(ticker, lines)
         summary = _results_summary(ticker)
         job["charts"] = summary["charts"] if summary else []
         return jsonify(job)
@@ -1049,7 +1051,7 @@ def status(ticker: str):
     summary = _results_summary(ticker)
     if summary:
         # No in-memory job (e.g. after a restart) but results exist on disk.
-        return jsonify(status="done", ticker=ticker, charts=summary["charts"], log=_log_tail(ticker))
+        return jsonify(status="done", ticker=ticker, charts=summary["charts"], log=_log_tail(ticker, lines))
     return jsonify(status="idle", ticker=ticker)
 
 
@@ -1114,8 +1116,9 @@ def chart_spec(ticker: str):
     return jsonify(spec)
 
 
-# Fact units as the search shows them; anything else (counts, text) is left out.
-FACT_UNITS = {"usd": "usd", "shares": "shares", "usdpershare": "usd/share", "pure": "pure"}
+# Fact units as the search shows them: money (in the reporting currency),
+# money per share, shares and ratios; anything else (counts, text) is left out.
+FACT_UNITS = {"shares": "shares", "pure": "pure"}
 
 
 def _fact_concept(concept) -> str:
@@ -1126,14 +1129,37 @@ def _fact_concept(concept) -> str:
 
 def _statement_unit(concept: str, label: str) -> str:
     if "PerShare" in concept or "per share" in label.lower():
-        return "usd/share"
+        return "money/share"
     if "Shares" in concept or "shares" in label.lower():
         return "shares"
-    return "usd"
+    return "money"
+
+
+def _run_currency(folder: Path) -> str:
+    """The latest filing's reporting currency (USD for runs made before it was kept)."""
+    try:
+        rows = _csv_records(folder / "financial_data.csv")
+    except OSError:
+        rows = []
+    currencies = [str(row.get("currency") or "").upper() for row in rows if row.get("currency")]
+    return currencies[-1] if currencies else "USD"
+
+
+def _fact_unit(unit, currency, reporting: str) -> str | None:
+    """A fact's unit for the search; None for money in another currency or other units."""
+    unit = str(unit or "").lower().replace("_", "").replace("unit", "")
+    code = str(currency or "").upper()
+    if code and code != "NAN":
+        if code != reporting:
+            return None                       # a USD convenience copy, not the filer's figure
+        return "money/share" if "per" in unit else "money"
+    if unit in ("usd", "usdpershare"):       # runs from before facts carried a currency
+        return "money/share" if "per" in unit else "money"
+    return FACT_UNITS.get(unit)
 
 
 @lru_cache(maxsize=16)
-def _fact_index(directory: str, stamp: tuple) -> list[dict]:
+def _fact_index(directory: str, stamp: tuple, reporting: str = "USD") -> list[dict]:
     """Every statement line, then every other plain fact of the filing's own period.
 
     One row per concept: label, statement, unit and the value per fiscal year.
@@ -1163,7 +1189,8 @@ def _fact_index(directory: str, stamp: tuple) -> list[dict]:
     except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
         facts = pd.DataFrame()
     if not facts.empty and {"unit", "is_dimensioned", "period_of_report"} <= set(facts.columns):
-        facts["unit"] = facts["unit"].astype(str).str.lower().map(FACT_UNITS)
+        currencies = facts["currency"] if "currency" in facts.columns else pd.Series(None, index=facts.index)
+        facts["unit"] = [_fact_unit(unit, currency, reporting) for unit, currency in zip(facts["unit"], currencies)]
         facts["value"] = pd.to_numeric(facts["value"], errors="coerce")
         facts["fiscal_year"] = pd.to_numeric(facts["fiscal_year"], errors="coerce")
         # Only the filing's own period: a 10-K also tags the prior years it compares against.
@@ -1194,7 +1221,55 @@ def fact_index(ticker: str):
             stamp.append(None)
     if stamp == [None, None]:
         abort(404, "No facts for that ticker yet.")
-    return jsonify(facts=_fact_index(str(folder), tuple(stamp)))
+    currency = _run_currency(folder)
+    return jsonify(currency=currency, facts=_fact_index(str(folder), tuple(stamp), currency))
+
+
+@app.get("/api/checks/<ticker>")
+def calc_checks(ticker: str):
+    """The calculation check of the run: counts, and every total that does not add up."""
+    ticker = _normalise_ticker(ticker)
+    folder = _ticker_dir(ticker)
+    path = folder / "calc_check.csv"
+    if not path.is_file():
+        abort(404, "No calculation check for that ticker yet.")
+    try:
+        rows = _csv_records(path)
+    except OSError:
+        abort(404, "No calculation check for that ticker yet.")
+    counts = {kind: {"totals": 0, "ok": 0, "mismatch": 0, "incomplete": 0} for kind in ("statement", "note")}
+    issues = []
+    for row in rows:
+        kind = row.get("kind") if row.get("kind") in counts else "statement"
+        status = row.get("status") or ""
+        counts[kind]["totals"] += 1
+        if status in counts[kind]:
+            counts[kind][status] += 1
+        if status == "ok":
+            continue
+        try:
+            parts = json.loads(row.get("detail") or "[]")
+        except ValueError:
+            parts = []
+        issues.append({
+            "fiscal_year": row.get("fiscal_year"), "kind": kind, "status": status,
+            "statement": row.get("statement"), "concept": row.get("concept"), "label": row.get("label"),
+            "reported": _number(row.get("reported")), "computed": _number(row.get("computed")),
+            "difference": _number(row.get("difference")), "parts": parts,
+        })
+    # Newest year first; within a year the real mismatches before untagged parts.
+    issues.sort(key=lambda item: (-(int(_number(item["fiscal_year"]) or 0)), item["status"] != "mismatch",
+                                  item["kind"] != "statement", str(item["label"])))
+    return jsonify(currency=_run_currency(folder), counts=counts,
+                   filings=len({row.get("period_of_report") for row in rows}), issues=issues)
+
+
+def _number(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 @app.get("/api/simulation/<ticker>")
