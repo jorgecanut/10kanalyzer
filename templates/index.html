@@ -661,7 +661,10 @@
   table.ck-table td:first-child { width:1.5em; text-align:center; color:var(--muted); }
   table.ck-table td:nth-child(2) { text-align:left; white-space:normal; }
   table.ck-table tr.ck-sum td { font-weight:700; border-bottom:0; }
+  table.ck-table tr.ck-sum .muted { font-weight:400; font-size:calc(var(--fs) * 12); overflow-wrap:anywhere; }
   table.ck-table tr.muted td { color:var(--muted); }
+  .ck-why { margin:2px 0 6px; padding:6px 10px; border-left:3px solid var(--badge-queued-fg);
+            background:var(--badge-queued-bg); border-radius:var(--radius-sm); font-size:calc(var(--fs) * 13); }
   .ck-notes { margin-top:6px; }
   .ck-notes > summary { color:var(--muted); font-size:calc(var(--fs) * 14); padding:2px 0; }
 
@@ -1538,6 +1541,8 @@ const TICKER_RE = /^[A-Z][A-Z0-9.\-]{0,9}$/;
 // The Charts tab shows one pinned ticker. It survives reloads and cancel, and
 // changes only when a single ticker is run or opened, or it is removed.
 const GRAPH = { ticker: '', state: '', results: null };
+// The calculation check shown under the Charts index (see renderChecks).
+const CHECKS = { key: '', data: null };
 try {
   const saved = localStorage.getItem('stocky-graph') || '';
   if (TICKER_RE.test(saved)) GRAPH.ticker = saved;
@@ -2210,6 +2215,8 @@ function setGraph(ticker) {
   } catch {}
   $('#results-graph').innerHTML = '';
   $('#chart-index').innerHTML = '';
+  $('#calc-checks').innerHTML = '';
+  CHECKS.key = '';
   GRAPH.results = null;
   setGraphProgress('');
   setTermLog('');
@@ -2224,6 +2231,11 @@ function renderGraph() {
   // its latest line (or the error) and links there.
   $('#graph-empty').classList.toggle('hidden', !!ticker);
   for (const id of ['#graph-download-btn', '#graph-refresh-btn']) $(id).hidden = !ticker;
+  // A new run makes the shown calculation check stale: drop it until the run is done.
+  if (state === 'queued' || state === 'running') {
+    CHECKS.key = '';
+    $('#calc-checks').innerHTML = '';
+  }
   const cls = state === 'cancelled' ? 'idle' : state;
   const live = state === 'queued' || state === 'running';
   // A live badge opens the run's log, like the one in the header.
@@ -3447,7 +3459,6 @@ function searchYearChanged() {
 // Each total in the filings' calculation linkbase against the sum of its
 // parts (calc_check.py). Statement totals that do not add up come first: they
 // name the line a filer reports in an unexpected way. Notes are folded away.
-const CHECKS = { key: '', data: null };
 
 async function loadChecks(data) {
   const key = `${data.ticker}|${data.modified}`;
@@ -3474,6 +3485,7 @@ function checkIssue(item) {
   return `<li><details>
       <summary><span class="ck-year">${esc(Number(item.fiscal_year) || '')}</span>
         <span class="ck-label">${esc(item.label)}</span><span class="ck-where">${esc(item.statement)}</span>${verdict}</summary>
+      ${item.hint ? `<p class="ck-why">${esc(item.hint)}</p>` : ''}
       <div class="table-wrap"><table class="data ck-table">
         <tbody>${parts}
           <tr class="ck-sum"><td>=</td><td>Sum of the parts</td><td>${esc(money(item.computed))}</td></tr>
@@ -3485,7 +3497,9 @@ function checkIssue(item) {
 function renderChecks() {
   const box = $('#calc-checks');
   const data = CHECKS.data;
-  if (!data) { box.innerHTML = ''; return; }
+  // A run in progress replaces the check: show none until it is done.
+  const live = GRAPH.state === 'queued' || GRAPH.state === 'running';
+  if (!data || live) { box.innerHTML = ''; return; }
   setCurrency(data.currency);
   const { statement: st, note } = data.counts;
   const issues = kind => data.issues.filter(item => item.kind === kind);

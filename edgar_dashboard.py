@@ -486,6 +486,78 @@ CAPEX_ASSET_RE = re.compile(r"PropertyPlant|PropertyAndEquipment|FixedAssets|Cap
 CAPEX_ACTION_RE = re.compile(r"Purchase|Payment|Acquire|Acquisition|Addition|Expenditure|Outflow", re.IGNORECASE)
 
 
+# Words that say nothing about which revenue stream a line belongs to.
+STREAM_STOPWORDS = {"and", "of", "the", "total", "revenue", "revenues", "net", "sales", "other", "cost", "costs",
+                    "expense", "expenses", "from", "to", "for", "in", "on", "a", "an"}
+# Parents that hold the costs of an income statement by function.
+COST_PARENT_RE = re.compile(r"CostsAndExpenses|OperatingExpenses|CostOf", re.IGNORECASE)
+
+
+def _stream_words(label: str) -> set[str]:
+    return {word for word in re.findall(r"[a-z]+", str(label).lower()) if word not in STREAM_STOPWORDS}
+
+
+def _cost_lines(statement_rows: list[dict]) -> dict[str, float]:
+    """The income statement's cost-of-revenue lines: element -> value.
+
+    A line counts when edgartools files it as cost of goods and services
+    sold (and it says "cost"), its tag starts with ``CostOf``, or it sits among the costs and is
+    named after revenue streams: Oracle has no cost-of-revenue total, only
+    "Cloud and software", "Hardware" and "Services" expenses beside the
+    revenues of the same names. A line that is the total of others counts
+    alone.
+    """
+    income = [row for row in statement_rows if row.get("statement") == "income"]
+    revenue = [row for row in income
+               if row.get("standard_concept") == "Revenue"
+               or ("Revenue" in _concept_name(str(row.get("concept") or ""))
+                   and not _concept_name(str(row.get("concept") or "")).startswith("CostOf"))]
+    revenue_concepts = {row["concept"] for row in revenue}
+    revenue_words = set().union(*(_stream_words(row.get("label")) for row in revenue)) if revenue else set()
+    lines: dict[str, tuple[float, str]] = {}
+    for row in income:
+        concept = str(row.get("concept") or "")
+        name = _concept_name(concept)
+        parent = str(row.get("parent_concept") or "")
+        value = row.get("value")
+        if concept in revenue_concepts or value is None or not value > 0:
+            continue
+        words = _stream_words(row.get("label"))
+        stream = bool(words) and words <= revenue_words and COST_PARENT_RE.search(parent)
+        # edgartools also files a bank's "Compensation expense" as cost of goods
+        # sold: its classification counts only for a line that says "cost".
+        filed_as_cost = row.get("standard_concept") == "CostOfGoodsAndServicesSold" and (
+            "cost" in name.lower() or "cost" in str(row.get("label") or "").lower())
+        if filed_as_cost or name.startswith("CostOf") or stream:
+            lines.setdefault(concept, (float(value), parent))
+    totals = [concept for concept in lines if any(parent == concept for _, parent in lines.values())]
+    if totals:
+        return {totals[0]: lines[totals[0]][0]}
+    return {concept: value for concept, (value, _) in lines.items()}
+
+
+def _cost_of_revenue(row: dict, statement_rows: list[dict]) -> None:
+    """Cost of revenue from its lines when no total was found or the one found is a single line.
+
+    Oracle tags its hardware cost alone with ``CostOfRevenue`` (FY2010) and
+    has no total later on. Gross profit is then derived (revenue minus cost),
+    unless the income statement itself shows a gross profit line: a tagged
+    gross profit elsewhere (a segment note) is not the company's.
+    """
+    lines = _cost_lines(statement_rows)
+    if not lines:
+        return
+    current = row.get("CostOfRevenue")
+    single = pd.notna(current) and len(lines) > 1 and any(
+        abs(current - value) <= max(1.0, abs(value) * 1e-6) for value in lines.values())
+    if pd.notna(current) and not single:
+        return
+    row["CostOfRevenue"] = float(sum(lines.values()))
+    on_statement = {_concept_name(str(r.get("concept") or "")) for r in statement_rows if r.get("statement") == "income"}
+    if "GrossProfit" not in on_statement:
+        row["GrossProfit"] = np.nan
+
+
 def _capex_line(statement_rows: list[dict]) -> float:
     """Capex from the one investing line that is clearly it, else nan.
 
@@ -640,6 +712,7 @@ def build_dataset(ticker: str, n_filings: int) -> tuple[pd.DataFrame, pd.DataFra
                                                     METRIC_CONCEPTS[metric][1], statement_values, currency)
             if pd.isna(row["CapEx"]):
                 row["CapEx"] = _capex_line(statement_rows)
+            _cost_of_revenue(row, statement_rows)
             filing_facts = xbrl_extract.extract_facts(xbrl, period_key)
             try:
                 filing_checks = calc_check.check_filing(xbrl, facts, period_key, currency)

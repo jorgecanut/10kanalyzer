@@ -1256,6 +1256,7 @@ def calc_checks(ticker: str):
             "statement": row.get("statement"), "concept": row.get("concept"), "label": row.get("label"),
             "reported": _number(row.get("reported")), "computed": _number(row.get("computed")),
             "difference": _number(row.get("difference")), "parts": parts,
+            "hint": row.get("hint") or "",
         })
     # Newest year first; within a year the real mismatches before untagged parts.
     issues.sort(key=lambda item: (-(int(_number(item["fiscal_year"]) or 0)), item["status"] != "mismatch",
