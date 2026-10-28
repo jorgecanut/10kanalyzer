@@ -181,19 +181,15 @@ below) and the five latest insider trades (with a link to the Insiders tab).
 Running a single ticker switches to Home; the run's progress is in the Charts
 tab and its log in the Logs tab.
 
-**Logs** (`/#logs`) is optional: Options → General → Logs tab shows it in the
-tab row; hidden (the default) it still opens from a queued or running badge
-(the header's or the Charts tab's), from "Open the log" under the Charts
-header, or by typing the URL. It has two parts. **Run**: the whole log of a
-run (pick the ticker; the running one is preselected), every line timed
-(`15:45:44 [*] Filing 2/20: 10-K for the year ended 2025-06-30, downloading
-and parsing its XBRL`), updated every 1,5 s while it runs; the pipeline says
-what it is doing at each step: looking up the company, listing filings,
-each filing's download and parse time and linkbase result, insider Form 4s
-read so far, prices and exchange rates, the ADS ratio, every chart.
-**This page**: what the page asked the server for since it loaded, in words
-("Looking for news about AAPL (Google News)", "Packing the download of KO:
-drawing the chart PNGs"), with how long each took or why it failed.
+**Logs** (`/#logs`, the terminal icon in the tab row; a queued or running
+badge and "Open the log" under the Charts header open it too) shows the whole
+log of a run: pick the ticker (the running one is preselected); every line is
+timed (`15:45:44 [*] Filing 2/20: 10-K for the year ended 2025-06-30,
+downloading and parsing its XBRL`) and the view updates every 1,5 s while it
+runs. The pipeline says what it is doing at each step: looking up the company,
+listing filings, each filing's download and parse time and linkbase result,
+insider Form 4s read so far, prices and exchange rates, the ADS ratio, every
+chart. Its icon can be moved like any tab (Options → General → Tab order).
 
 **Downloads.** Every tab has a download icon and downloads what it shows, with
 the options chosen there. **Home** and **Charts** open a dialog with a checkbox
@@ -217,15 +213,18 @@ queued or running, and the error if it fails, with a link to the Logs tab. The
 chart index sits inside the Charts panel, one line per chart. Each chart shows
 as many recent years as fit its width; the slider under it (or the arrows at
 its ends, one year at a time, or dragging the chart, ctrl+wheel to zoom)
-scrolls through every year, the axis rescales to the years on show and the
-subtitle names them. Moving the window redraws at once, without animation. Hovering a year lists every value; legend keys hide and show a
+scrolls through every year and the subtitle names the years on show. The axis
+rescales to them when you let go of the slider (rescaling mid-drag made the
+handle stutter). A line keeps going past the window's edges toward the years
+off screen, without their numbers, so you can see where it comes from and
+goes. Hovering a year lists every value; legend keys hide and show a
 series. The **search** above the index looks for a fact (goodwill, buybacks,
 income taxes paid…) in the charted series and in every statement line and fact
 of the filings; pick a year beside it, or type it ("goodwill 2019"). A charted
 fact scrolls to its chart, slides that year into view and opens its values;
 any other shows its values per year, with **Draw as a chart** to chart it until
-the page is reloaded. The layout switch
-(one chart per row, as wide as the page column, or a grid) is the joined pair of buttons left of the other actions. **Several tickers** switch to screener mode:
+the page is reloaded. Charts show one per row, as wide as the page column.
+**Several tickers** switch to screener mode:
 data only, no charts (`--no-charts`), and the pinned graph is left as is.
 Running a single ticker that is queued as a screener job upgrades it to a graph
 run; if it is already running, a graph run is queued after it. The **Insiders**,
@@ -675,8 +674,9 @@ and the **Calculation check** section under the Charts tab's index:
 - **incomplete** ("untagged parts"): some parts have no plain value that year
   (tagged only per segment or tranche), so the sum cannot close.
 
-Statement totals come first; note tables, where parts are often tagged only
-per category, are folded away. Opening a row lists every part and its value.
+The section is one line (the counts) until opened. Statement totals come
+first; note tables, where parts are often tagged only per category, are folded
+away. Opening a row lists every part and its value.
 For example, SAP's 8 filings add up in all 295 statement totals; TSMC's show
 its comprehensive income without the profit line in its linkbase, and
 investing cash flows with parts it tags only in some years.
