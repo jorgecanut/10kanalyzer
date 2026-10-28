@@ -211,13 +211,13 @@ and ratios live in the **Screener** tab only. The Charts tab is empty until
 then. The line under the header shows the latest log line while the run is
 queued or running, and the error if it fails, with a link to the Logs tab. The
 chart index sits inside the Charts panel, one line per chart. Each chart shows
-as many recent years as fit its width; the slider under it (or the arrows at
-its ends, one year at a time, or dragging the chart, ctrl+wheel to zoom)
-scrolls through every year and the subtitle names the years on show. The axis
-rescales to them when you let go of the slider (rescaling mid-drag made the
-handle stutter). A line keeps going past the window's edges toward the years
-off screen, without their numbers, so you can see where it comes from and
-goes. Hovering a year lists every value; legend keys hide and show a
+as many recent years as fit its width; the years slider under it moves the
+window through every year in steps of exactly one year (no gliding): its
+handle is as wide as the window, with a tick per position, and the arrows
+either side (or the keyboard's arrow keys on the slider) step one year. The
+subtitle names the years on show and the axis rescales to them at each step.
+A line keeps going past the window's edges toward the years off screen,
+without their numbers, so you can see where it comes from and goes. Hovering a year lists every value; legend keys hide and show a
 series. The **search** above the index looks for a fact (goodwill, buybacks,
 income taxes paid…) in the charted series and in every statement line and fact
 of the filings; pick a year beside it, or type it ("goodwill 2019"). A charted
