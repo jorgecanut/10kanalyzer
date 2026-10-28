@@ -10,6 +10,7 @@
 <meta name="description" content="Stocky: ten years of SEC 10-K filings per company, as charts, insider trades, a screener and a price simulation.">
 <script>
   // Apply the saved theme before first paint to avoid a flash.
+  document.documentElement.classList.add('js');
   try {
     document.documentElement.dataset.theme = localStorage.getItem('stocky-theme') || 'dark';
   } catch { document.documentElement.dataset.theme = 'dark'; }
@@ -34,9 +35,12 @@
   try { applyProfileColor(localStorage.getItem('stocky-color')); } catch { applyProfileColor('orange'); }
 </script>
 <style>
-  /* Hallmark · checked: 2026-10-25 · genre: modern-minimal (inferred) · scope: app
-   * floor: fixed 34, 39a, 40, 48, 19, 63 · structural: printed (24b spacing, header alignment)
-   * built: the project · redesign: polish · v2.0.0 */
+  /* Hallmark · built: 2026-10-28 · genre: modern-minimal (inferred) · scope: app · shape: app screen
+   * theme: brand (Stocky Mono, profile colour, the dark and light tokens) · redesign: full · v2.0.0
+   * signature: the Charts index as a sticky rail beside the charts, the chart in view marked
+   * critique: the page sat in a 1060px column at any width; one 1600px container now holds every row
+   */
+  /* Hallmark · waive 24b · the spacing inside panels, dialogs and the check list kept as found · this redesign widens Stocky's container and moves the Charts index; it does not re-space each panel */
   /* The app's font, bundled (static/fonts) so the page and the charts match
      on every machine. */
   @font-face { font-family:"Stocky Mono"; font-weight:400; font-display:swap;
@@ -81,6 +85,10 @@
     /* One rule per role: white fill = the main action, soft fill = selected,
        no border = chrome. Radii: containers, controls, inner pieces. */
     --radius-lg:12px; --radius:8px; --radius-sm:6px;
+    /* One container for the header, the toolbar and the page: wide on a
+       desktop, capped and centred past it; the gutters grow with the screen. */
+    --page:1600px; --gutter:clamp(16px, 2.4vw, 40px);
+    --topbar-h:128px;   /* measured by the script; the Charts rail sticks under it */
     /* Charts: the PNGs' grid and zero-line greys. */
     --chart-grid:#3a3c41;
     --chart-ink:#8d919a;
@@ -113,7 +121,7 @@
   html, body { overflow-x:clip; }
   /* Room for the scrollbar is always kept, so panels never shift sideways
      between a short tab and a long one. */
-  html { scroll-padding-top:130px; scrollbar-gutter:stable; }
+  html { scroll-padding-top:calc(var(--topbar-h) + 12px); scrollbar-gutter:stable; }
   body { margin:0; font:calc(var(--fs) * 17)/1.55 var(--mono);
          background:var(--bg); color:var(--text); }
   button, input, select, textarea { font-family: var(--mono); }
@@ -121,14 +129,14 @@
   /* Header + ticker bar stay pinned to the top of the viewport. */
   .topbar { position:sticky; top:0; z-index:30; background:var(--bg);
             border-bottom:1px solid var(--line); }
-  header { padding:12px 20px; }
+  header { padding:12px var(--gutter); }
   .brand { display:flex; align-items:center; gap:11px; }
   .brand-link { display:flex; align-items:center; gap:11px; color:inherit; text-decoration:none; }
   .brand-link:hover { text-decoration:none; }
   .brand-link:hover h1 { color:var(--heading); }
   .brand .brand-icon { width:36px; height:36px; display:block; color:var(--accent); }
   header h1 { margin:0; font-size:calc(var(--fs) * 24); letter-spacing:.01em; }
-  .head-row { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+  .head-row { max-width:var(--page); margin:0 auto; display:flex; align-items:center; justify-content:space-between; gap:16px; }
   .head-actions { display:flex; align-items:center; gap:10px; }
   .theme-btn { display:flex; align-items:center; gap:7px; padding:9px; border-radius:var(--radius);
                border:0; background:none; color:var(--muted);
@@ -170,9 +178,9 @@
   .user-id { font-size:calc(var(--fs) * 15); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:230px; }
 
   /* Ticker bar: always visible under the title bar. */
-  .toolbar { padding:8px 20px; border-top:1px solid var(--line-soft); background:var(--bg); }
+  .toolbar { padding:8px var(--gutter); border-top:1px solid var(--line-soft); background:var(--bg); }
   /* One row: ticker bar left, tabs right; as wide as the page column below. */
-  .toolbar-inner { max-width:1060px; margin:0 auto; display:flex; gap:8px; flex-wrap:nowrap;
+  .toolbar-inner { max-width:var(--page); margin:0 auto; display:flex; gap:8px; flex-wrap:nowrap;
                    align-items:center; }
   .toolbar #tab-recent { margin-left:auto; }
   .bar { display:flex; gap:8px; align-items:center; flex:0 1 auto; min-width:0; }
@@ -194,7 +202,7 @@
   .toolbar button.tab-icon svg, .toolbar #cancel-btn svg { flex:none; width:var(--ctl-icon); height:var(--ctl-icon); }
   #ticker:focus { border-color:var(--accent); }
 
-  main { max-width:1100px; margin:0 auto; padding:20px 20px 40px; }
+  main { max-width:calc(var(--page) + 2 * var(--gutter)); margin:0 auto; padding:24px var(--gutter) 48px; }
   /* Tabs slide sideways when they do not fit (phones); the scrollbar is
      hidden and an edge fade shows there is more. */
   .tabs { position:relative; display:flex; gap:4px; flex:0 1 auto; min-width:0; overflow-x:auto; overscroll-behavior-x:contain;
@@ -217,7 +225,6 @@
     /* The ticker bar stays on top; the tabs and, at their right, Recent go under it. */
     .bar { flex:1 1 100%; justify-content:center; order:-1; }
     .toolbar .tabs { flex:1 1 0; }
-    html { scroll-padding-top:180px; }
   }
   .card { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-lg); padding:18px; margin-bottom:16px; }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
@@ -246,20 +253,38 @@
   /* Keyboard focus: one visible ring for every control (mouse clicks stay clean). */
   :where(button, a, select, input, textarea, [tabindex]):focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   @media (prefers-reduced-motion: reduce) {
-    .dropbar, .dropbar.open { transition:none; }
+    .js .dropbar, .js .dropbar.open { transition:none; }
     .dropbar.open .dropbar-progress { animation:none; }
   }
   .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:14px; }
   figure { margin:0; background:var(--surface); border:1px solid var(--line-soft); border-radius:var(--radius-lg); padding:8px; }
   figure img { width:100%; border-radius:var(--radius-sm); display:block; background:var(--surface); }
-  /* Charts: an index, then each chart as wide as the screen allows (or a grid). */
+  /* Charts: the search on top, the charts below. The index is a row of
+     links under the search; on a desktop it becomes a rail at the left that
+     stays in view, the chart on screen marked in it. */
+  .graph-layout { display:grid; grid-template-columns:minmax(0, 1fr); gap:16px; }
+  .chart-rail:not(:has(#chart-index:not(:empty))) { display:none; }
   .chart-index:empty { display:none; }
-  .chart-index ol { margin:0; padding-left:26px; font-size:calc(var(--fs) * 16); line-height:1.9; }
+  .chart-index ol { display:flex; flex-wrap:wrap; gap:4px; margin:0; padding:0; list-style:none; }
+  .chart-index a { display:block; padding:6px 12px; border-radius:var(--radius); color:var(--muted);
+                   font-size:calc(var(--fs) * 16); text-decoration:none; }
+  .chart-index a:hover { color:var(--text); background:var(--hover); }
+  .chart-index a[aria-current="true"] { color:var(--text); background:var(--accent-soft); font-weight:700; }
   .chart-index .windows { color:var(--muted); }
+  .chart-rail { padding:10px; }
+  .chart-rail .checks { margin:10px 4px 0; }
+  @media (min-width:1200px) {
+    .graph-layout:has(#chart-index:not(:empty)) { grid-template-columns:280px minmax(0, 1fr); align-items:start; }
+    .graph-layout:has(#chart-index:not(:empty)) > .chart-rail { grid-column:1; grid-row:1 / span 2; position:sticky;
+      top:calc(var(--topbar-h) + 16px); max-height:calc(100vh - var(--topbar-h) - 32px); overflow:auto; }
+    .graph-layout:has(#chart-index:not(:empty)) > :not(.chart-rail) { grid-column:2; }
+    .chart-index ol { flex-direction:column; gap:2px; }
+    .chart-index a { padding:8px 12px; }
+  }
                      background:none; color:var(--muted); cursor:pointer; }
   /* One chart per row, as wide as the middle column. */
   .charts-full { display:flex; flex-direction:column; gap:16px; }
-  .charts-full figure { scroll-margin-top:150px; }
+  .charts-full figure { scroll-margin-top:calc(var(--topbar-h) + 12px); }
   figcaption { display:flex; justify-content:space-between; font-size:calc(var(--fs) * 14); color:var(--muted);
                margin-top:8px; }
   a { color:var(--accent); text-decoration:none; }
@@ -489,11 +514,13 @@
 
   /* Drop-down notice bar (cached charts) with a visible countdown. */
   .dropbar { position:fixed; top:0; left:50%; z-index:70; width:min(580px, calc(100% - 32px));
-             transform:translate(-50%, -120%); visibility:hidden;
-             transition:transform .25s ease, visibility 0s linear .25s;
+             transform:translate(-50%, 12px);
              background:var(--surface-2); border:1px solid var(--line); border-radius:var(--radius-lg);
              box-shadow:var(--shadow-drop); overflow:hidden; }
-  .dropbar.open { transform:translate(-50%, 12px); visibility:visible; transition:transform .25s ease; }
+  /* Off screen only once the script runs: it is the one that opens it. */
+  .js .dropbar { transform:translate(-50%, -120%); visibility:hidden;
+                 transition:transform .25s ease, visibility 0s linear .25s; }
+  .js .dropbar.open { transform:translate(-50%, 12px); visibility:visible; transition:transform .25s ease; }
   .dropbar-row { display:flex; align-items:center; gap:10px 12px; padding:10px 14px; font-size:calc(var(--fs) * 15); flex-wrap:wrap; }
   .dropbar-text { flex:1; min-width:200px; }
   .dropbar-count { color:var(--muted); font-size:calc(var(--fs) * 14); font-variant-numeric:tabular-nums; white-space:nowrap; }
@@ -522,6 +549,7 @@
   .home-more:hover { color:var(--text); }
   #pane-home .news-list a { font-weight:400; }   /* lighter than the headings */
   .home-charts { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:10px; }
+  @media (min-width:1200px) { .home-charts { grid-template-columns:repeat(4, minmax(0, 1fr)); gap:14px; } }
   .home-charts figure { padding:6px; cursor:pointer; }
   .home-charts figure:hover { border-color:var(--line-strong); }
   .home-charts figcaption { margin-top:4px; font-size:calc(var(--fs) * 13); }
@@ -546,11 +574,11 @@
   .ec-panel { min-width:0; }
   .ec-head { padding-right:44px; }      /* room for the download button */
   .ec-panels.two .ec-panel:first-child .ec-head { padding-right:0; }
-  .ec-title { font-size:calc(var(--fs) * 19); font-weight:700; color:var(--text); line-height:1.3; }
-  .ec-sub { margin-top:2px; font-size:calc(var(--fs) * 15); color:var(--muted); }
+  .ec-title { font-size:calc(var(--fs) * 21); font-weight:700; color:var(--text); line-height:1.3; }
+  .ec-sub { margin-top:2px; font-size:calc(var(--fs) * 16); color:var(--muted); }
   .ec-legend { display:flex; flex-wrap:wrap; gap:2px 14px; margin:10px 0 4px; }
   .ec-key { display:inline-flex; align-items:center; gap:7px; padding:3px 4px; border:0; border-radius:var(--radius-sm);
-            background:none; color:var(--text); font-size:calc(var(--fs) * 14); cursor:pointer; }
+            background:none; color:var(--text); font-size:calc(var(--fs) * 15); cursor:pointer; }
   .ec-key:hover { background:var(--hover); }
   .ec-key[aria-pressed="false"] { color:var(--muted); text-decoration:line-through; }
   .ec-key[aria-pressed="false"] .ec-swatch { opacity:.35; }
@@ -561,7 +589,9 @@
   .ec-swatch.line::after { content:""; position:absolute; left:4px; top:-3px; width:8px; height:8px;
                            border-radius:50%; background:var(--c); }
   .ec-swatch.dash { background:repeating-linear-gradient(90deg, var(--c) 0 4px, transparent 4px 7px); }
-  .ec-canvas { width:100%; }
+  .ec-canvas { width:100%; height:var(--h, 360px); }
+  /* Wide charts get taller, so the bars keep their shape. */
+  @media (min-width:1200px) { .ec-canvas { height:calc(var(--h, 360px) * 1.2); } }
   /* The years slider: one step per year, the handle as wide as the window,
      a tick per position; an arrow either side steps one year. */
   .ec-wrap { position:relative; }
@@ -571,7 +601,7 @@
              padding:0; border:1px solid var(--line); border-radius:var(--radius-sm);
              background:var(--surface); color:var(--muted); cursor:pointer; }
   .ec-step:hover:not(:disabled) { color:var(--text); border-color:var(--line-strong); }
-  .ec-step:disabled { opacity:.35; cursor:default; }
+  .ec-step:disabled { color:var(--line-strong); background:var(--bg); border-color:var(--line-soft); cursor:not-allowed; }
   .ec-range { flex:1; min-width:0; height:26px; margin:0; padding:0; background:transparent; cursor:pointer;
               -webkit-appearance:none; appearance:none; }
   .ec-range:focus { outline:none; }
@@ -663,7 +693,7 @@
   table.ck-table tr.ck-sum td { font-weight:700; border-bottom:0; }
   table.ck-table tr.ck-sum .muted { font-weight:400; font-size:calc(var(--fs) * 12); overflow-wrap:anywhere; }
   table.ck-table tr.muted td { color:var(--muted); }
-  .ck-why { margin:2px 0 6px; padding:6px 10px; border-left:3px solid var(--badge-queued-fg);
+  .ck-why { margin:2px 0 6px; padding:6px 10px; border:1px solid var(--badge-queued-fg);
             background:var(--badge-queued-bg); border-radius:var(--radius-sm); font-size:calc(var(--fs) * 13); }
   .ck-notes { margin-top:6px; }
   .ck-notes > summary { color:var(--muted); font-size:calc(var(--fs) * 14); padding:2px 0; }
@@ -925,6 +955,7 @@
 
   <!-- Charts tab: the pinned ticker stays until it is removed or replaced. -->
   <section id="pane-graph" class="hidden">
+   <div class="graph-layout">
     <section class="panel" id="graph-panel">
       <div class="panel-head">
         <span class="panel-title">Charts</span>
@@ -966,11 +997,16 @@
         </div>
         <p class="cs-status" id="cs-status" role="status"></p>
         <div id="fact-card"></div>
-        <div id="chart-index" class="chart-index"></div>
-        <div id="calc-checks"></div>
       </div>
     </section>
+    <!-- The index of the charts and the calculation check: a rail at the
+         left on a desktop, a row of links under the search otherwise. -->
+    <aside class="panel chart-rail" aria-label="Charts index">
+      <nav id="chart-index" class="chart-index" aria-label="Charts"></nav>
+      <div id="calc-checks"></div>
+    </aside>
     <div id="results-graph"></div>
+   </div>
   </section>
 
   <!-- Insiders tab -->
@@ -1164,7 +1200,7 @@
           </div>
           <aside class="sim-market">
             <h3 id="sim-title">Market data</h3>
-            <div id="sim-stats" class="sim-stats"><div class="stat"><span>Loading…</span><b>—</b></div></div>
+            <div id="sim-stats" class="sim-stats"><div class="stat"><span>Loading…</span><b>…</b></div></div>
           </aside>
         </div>
         <div class="sim-section">
@@ -2742,6 +2778,7 @@ async function renderResults(data, target) {
   $(target).innerHTML = `<div class="charts-full">${custom.map(c => figureHtml(c, true)).join('')}${spec.charts.map(c => figureHtml(c)).join('')}</div>`;
   mountCharts($(target), [...custom, ...spec.charts]);
   $('#chart-index').innerHTML = chartIndex();
+  watchIndex();
   $('#chart-search').hidden = false;
   loadChecks(data);
   fillSearchYears(spec);
@@ -2753,6 +2790,26 @@ function chartIndex() {
   const charts = [...EC.custom.filter(c => c.ticker === GRAPH.ticker), ...(EC.spec?.charts || [])];
   return `<ol>${charts.map(c => `<li><a href="#${chartId(c.id)}" onclick="jumpToChart(event, '${esc(chartId(c.id))}')">${esc(c.name)}</a></li>`).join('')}</ol>`;
 }
+
+// The index marks the chart crossing the middle of the screen.
+let INDEX_SPY = null;
+function watchIndex() {
+  if (INDEX_SPY) INDEX_SPY.disconnect();
+  INDEX_SPY = new IntersectionObserver(items => {
+    for (const item of items) {
+      if (!item.isIntersecting) continue;
+      for (const link of $('#chart-index').querySelectorAll('a')) {
+        link.setAttribute('aria-current', String(link.getAttribute('href') === '#' + item.target.id));
+      }
+    }
+  }, { rootMargin: '-45% 0px -50% 0px' });
+  for (const figure of $('#results-graph').querySelectorAll('.chart-fig')) INDEX_SPY.observe(figure);
+}
+
+// The sticky header's height, for the rail and the scroll offsets under it.
+new ResizeObserver(([entry]) => document.documentElement.style.setProperty(
+  '--topbar-h', `${Math.round(entry.borderBoxSize?.[0]?.blockSize || entry.target.offsetHeight)}px`,
+)).observe(document.querySelector('.topbar'));
 
 function jumpToChart(event, id) {
   event.preventDefault();
@@ -2875,7 +2932,7 @@ function panelOption(panel, t, { mini = false, width = 800 } = {}) {
   const index = {};
   const series = [];
   const label = (s, color) => ({
-    show: !mini, ...text(11, color), textBorderColor: t.surface, textBorderWidth: 3,
+    show: !mini, ...text(12, color), textBorderColor: t.surface, textBorderWidth: 3,
     formatter: p => p.value == null ? '' : fmtValue(s.format, p.value),
   });
   for (const s of panel.series) {
@@ -2919,7 +2976,7 @@ function panelOption(panel, t, { mini = false, width = 800 } = {}) {
       lineStyle: { type: 'dashed', width: 1.5, color }, itemStyle: { color },
       markLine: {
         silent: true, symbol: 'none', lineStyle: { type: 'dashed', width: 1.5, color },
-        label: { show: !mini, position: 'insideEndTop', formatter: ref.label, ...text(11, t.text),
+        label: { show: !mini, position: 'insideEndTop', formatter: ref.label, ...text(12, t.text),
                  textBorderColor: t.surface, textBorderWidth: 3 },
         data: [{ yAxis: ref.value }],
       },
@@ -2938,8 +2995,8 @@ function panelOption(panel, t, { mini = false, width = 800 } = {}) {
     return {
       type: 'value', position: k ? 'right' : 'left', ...bounds[k],
       name: mini ? '' : (axis.name || ''), nameLocation: 'middle', nameGap: 42, nameRotate: k ? -90 : 90,
-      nameTextStyle: text(12),
-      axisLabel: { show: !mini, ...text(12), formatter: AXIS_FMT[axis.format] || AXIS_FMT.plain,
+      nameTextStyle: text(13),
+      axisLabel: { show: !mini, ...text(13), formatter: AXIS_FMT[axis.format] || AXIS_FMT.plain,
                    showMaxLabel: fixed ? false : null },
       axisLine: { show: false }, axisTick: { show: false },
       splitLine: { show: k === 0 && !mini, lineStyle: { color: t.grid, width: 1 } },
@@ -2953,22 +3010,22 @@ function panelOption(panel, t, { mini = false, width = 800 } = {}) {
                : { left: 6, right: 6, top: 14, bottom: 6, containLabel: true },
     legend: { show: false, data: panel.series.map(s => s.label).concat(ref ? [ref.legend] : []) },
     xAxis: { type: 'category', data: years, axisTick: { show: false }, axisLine: { show: false },
-             axisLabel: { show: !mini, ...text(12), hideOverlap: true }, splitLine: { show: false } },
+             axisLabel: { show: !mini, ...text(13), hideOverlap: true }, splitLine: { show: false } },
     yAxis,
     series,
     tooltip: {
       show: !mini, trigger: 'axis', confine: true, axisPointer: { type: 'shadow', shadowStyle: { color: t.soft } },
       backgroundColor: t.surface2, borderColor: t.line, borderWidth: 1, padding: [8, 12],
-      textStyle: text(13, t.text), extraCssText: 'border-radius:8px; box-shadow:var(--shadow-drop);',
+      textStyle: text(14, t.text), extraCssText: 'border-radius:8px; box-shadow:var(--shadow-drop);',
       formatter: params => tooltipHtml(params, byName),
     },
   };
   if (zoom) {
     option.dataZoom = [{
       type: 'inside', xAxisIndex: 0, startValue: years.length - visible, endValue: years.length - 1,
-      // Years off the window stay in the data, so a line runs on to the plot's
-      // edge toward them and shows where it comes from and where it goes.
-      filterMode: 'none',
+      // Years off the window are dropped: a line starts and ends at the
+      // window's first and last years, with no run to the plot's edge.
+      filterMode: 'filter',
       // No dragging or wheel: the window moves only in whole years.
       zoomLock: true, zoomOnMouseWheel: false, moveOnMouseWheel: false, moveOnMouseMove: false,
       preventDefaultMouseMove: false,
@@ -3015,7 +3072,7 @@ function figureHtml(chart, custom = false) {
           ${panel.series.length || panel.reference ? `<div class="ec-legend">${legendHtml(panel)}</div>` : ''}
         </div>
         ${panel.series.length ? `<div class="ec-wrap">
-            <div class="ec-canvas" style="height:${height}px" data-chart="${esc(chart.id)}" data-panel="${i}"></div>
+            <div class="ec-canvas" style="--h:${height}px" data-chart="${esc(chart.id)}" data-panel="${i}"></div>
             <div class="ec-years" hidden>
               <button class="ec-step prev" onclick="stepYears(this, -1)" title="One year back" aria-label="One year back">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
@@ -3434,6 +3491,7 @@ function removeCustomChart(id) {
   const figure = document.getElementById(chartId(id));
   if (figure) { disposeCharts(figure); figure.remove(); }
   $('#chart-index').innerHTML = chartIndex();
+  watchIndex();
 }
 
 function fillSearchYears(spec) {
