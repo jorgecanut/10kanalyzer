@@ -23,7 +23,9 @@ Rules, after the XBRL calculation spec:
   under different roles); adding up that way counts as adding up.
 
 Status: ``ok``; ``mismatch`` when every part has a value and the sum is
-still off (worth a look); ``incomplete`` when parts have no plain value this
+still off (worth a look; ``hint`` says why when one simple fix explains it:
+a part or the total tagged with the wrong sign, a part that does not belong,
+a part listed next to its own parts); ``incomplete`` when parts have no plain value this
 year (usually tagged only per segment or tranche, so the sum cannot close).
 ``kind`` tells the primary statements from the notes.
 """
@@ -142,6 +144,44 @@ def _arcs(tree) -> list[tuple[str, str, float]]:
     return out
 
 
+def _descendants(element: str, children: dict[str, list[tuple[str, float]]]) -> set[str]:
+    found: set[str] = set()
+    stack = [child for child, _ in children.get(element, [])]
+    while stack:
+        item = stack.pop()
+        if item not in found:
+            found.add(item)
+            stack.extend(child for child, _ in children.get(item, []))
+    return found
+
+
+def _hint(total: float, computed: float, tolerance: float, parts: list[tuple[str, float]],
+          values: dict[str, dict], children: dict[str, list[tuple[str, float]]]) -> str:
+    """Why a total that has every part does not add up, when one simple fix explains it.
+
+    Oracle's filings show each case: a tax line tagged with the wrong sign, a
+    total and some of its own parts listed side by side, so they count twice.
+    """
+    label = lambda element: values[element]["label"] if element in values else _words(element)
+    present = [(child, weight) for child, weight in parts if child in values]
+    if total and abs(total + computed) <= tolerance:
+        return "The total has the opposite sign of its parts' sum: the filing tags one side with the wrong sign."
+    for child, weight in present:
+        if abs(total - (computed - 2 * weight * values[child]["value"])) <= tolerance:
+            return f"Adds up if “{label(child)}” had the opposite sign: the filing tags it with the wrong sign."
+    for child, weight in present:
+        if abs(total - (computed - weight * values[child]["value"])) <= tolerance:
+            return f"Adds up without “{label(child)}”: the linkbase counts it in this total by mistake."
+    elements = [child for child, _ in parts]
+    for child in elements:
+        inside = [other for other in elements if other != child and other in _descendants(child, children)]
+        if inside:
+            names = ", ".join(f"“{label(other)}”" for other in inside[:3]) + (" and more" if len(inside) > 3 else "")
+            return (f"“{label(child)}” and its own parts ({names}) are listed in the same total, so they count "
+                    "twice: the linkbase mixes two ways of reaching it.")
+    return ""
+
+
 def _sum(parts: list[tuple[str, float]], values: dict[str, dict]) -> tuple[float, float, list[tuple[str, float]]]:
     """Weighted sum of the parts with a value, its rounding tolerance, and those parts."""
     present = [(child, weight) for child, weight in parts if child in values]
@@ -166,6 +206,7 @@ def check_filing(xbrl, facts: pd.DataFrame, period_of_report: str, currency: str
             every_part.setdefault(parent, {}).setdefault(child, weight)
         by_role[role] = (_role_name(role, getattr(tree, "definition", None)), children)
 
+    every_children = {parent: list(parts.items()) for parent, parts in every_part.items()}
     rows: list[dict] = []
     seen: set[tuple] = set()
     for role, (statement, children) in by_role.items():
@@ -195,6 +236,10 @@ def check_filing(xbrl, facts: pd.DataFrame, period_of_report: str, currency: str
             missing = [item["label"] for item in listing if item["value"] is None]
             if status == STATUS_MISMATCH and missing:
                 status = STATUS_INCOMPLETE
+            # A part's own parts may be listed in another statement (the income
+            # statement links operating income to its revenue and costs).
+            hint = _hint(total["value"], computed, tolerance, parts, values, every_children) \
+                if status == STATUS_MISMATCH else ""
             rows.append({
                 "period_of_report": period_of_report,
                 "kind": kind,
@@ -208,6 +253,7 @@ def check_filing(xbrl, facts: pd.DataFrame, period_of_report: str, currency: str
                 "parts": len(parts),
                 "missing": "; ".join(missing),
                 "status": status,
+                "hint": hint,
                 "detail": json.dumps(listing, ensure_ascii=False),
             })
     return rows

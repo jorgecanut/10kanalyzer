@@ -575,6 +575,15 @@ maintenance.
 ## Notes on the data
 
 - `amendments=False` excludes `10-K/A` amendments so each fiscal year appears once.
+- **Cost of revenue** is the filer's total when it reports one. When it does
+  not, or the value found is just one of its lines, it is the sum of the income
+  statement's cost lines: those edgartools files as cost of goods and services
+  sold, those tagged `CostOf…`, and the costs named after a revenue stream
+  (Oracle reports "Cloud and software", "Hardware" and "Services" expenses
+  beside the revenues of the same names, with no total, and in FY2010 tagged
+  its hardware cost alone as `CostOfRevenue`). Gross profit is then revenue
+  minus that cost, unless the income statement itself shows a gross profit
+  line: a gross profit tagged only in a segment note is not used.
 - Duration facts are restricted to periods of **≥ 300 days**. Without this, the
   quarterly facts tagged in the notes (which share a `period_end` with the
   annual figure) can be selected instead of the full-year value.
@@ -673,6 +682,15 @@ and the **Calculation check** section under the Charts tab's index:
   the ones worth a look: they name the line the curated metrics may be missing.
 - **incomplete** ("untagged parts"): some parts have no plain value that year
   (tagged only per segment or tranche), so the sum cannot close.
+
+A mismatch says why when one simple fix explains it: the total (or one part)
+is tagged with the wrong sign, a part does not belong in the total, or a part
+is listed next to its own parts so they count twice. Oracle shows all three:
+its FY2024 current tax is filed as −3 413M (SEC's own XBRL API has the same
+value), and its FY2020 linkbase puts operating income and the revenue and
+costs it is made of under income before taxes. These are the filer's errors,
+not the extractor's. While a ticker runs again, its old check is hidden until
+the new run is done.
 
 The section is one line (the counts) until opened. Statement totals come
 first; note tables, where parts are often tagged only per category, are folded

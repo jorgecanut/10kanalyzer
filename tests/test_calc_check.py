@@ -96,6 +96,32 @@ class CheckTests(unittest.TestCase):
         rows = self.check({note: tree(("x_Debt", "x_Bonds", 1))}, [fact("x:Debt", 5e6), fact("x:Bonds", 5e6)])
         self.assertEqual(rows[0]["kind"], "note")
 
+    def test_hints_name_the_simple_fix(self):
+        income = "http://example.com/role/IncomeTaxDetails"
+        duration = {"instant": None, "start": "2025-01-01", "end": PERIOD}
+        # Oracle FY2024: current tax tagged negative; the provision is current + deferred.
+        rows = self.check({income: tree(("x_Provision", "x_Current", 1), ("x_Provision", "x_Deferred", 1))},
+                          [fact("x:Provision", 1274e6, **duration), fact("x:Current", -3413e6, **duration),
+                           fact("x:Deferred", -2139e6, **duration)])
+        self.assertIn("“Current” had the opposite sign", rows[0]["hint"])
+        rows = self.check({income: tree(("x_Deferred", "x_Federal", 1), ("x_Deferred", "x_State", 1))},
+                          [fact("x:Deferred", -2300e6, **duration), fact("x:Federal", 2020e6, **duration),
+                           fact("x:State", 280e6, **duration)])
+        self.assertIn("opposite sign of its parts' sum", rows[0]["hint"])
+
+    def test_a_total_listed_beside_its_own_parts_is_explained(self):
+        # Oracle FY2020: operating income and its own revenue and costs under income before taxes.
+        duration = {"instant": None, "start": "2025-01-01", "end": PERIOD}
+        role = "http://example.com/role/StatementOfOperations"
+        rows = self.check({role: tree(("x_Pretax", "x_Operating", 1), ("x_Pretax", "x_Revenue", 1),
+                                      ("x_Pretax", "x_Costs", -1), ("x_Operating", "x_Revenue", 1),
+                                      ("x_Operating", "x_Costs", -1))},
+                          [fact("x:Pretax", 40e6, **duration), fact("x:Operating", 40e6, **duration),
+                           fact("x:Revenue", 100e6, **duration), fact("x:Costs", 55e6, **duration)])
+        pretax = next(r for r in rows if r["concept"] == "x_Pretax")
+        self.assertEqual(pretax["status"], "mismatch")
+        self.assertIn("count twice", pretax["hint"])
+
     def test_summary_counts_by_kind(self):
         rows = [{"kind": "statement", "status": "ok", "period_of_report": PERIOD},
                 {"kind": "statement", "status": "mismatch", "period_of_report": PERIOD},
