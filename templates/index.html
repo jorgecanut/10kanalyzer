@@ -562,16 +562,36 @@
                            border-radius:50%; background:var(--c); }
   .ec-swatch.dash { background:repeating-linear-gradient(90deg, var(--c) 0 4px, transparent 4px 7px); }
   .ec-canvas { width:100%; }
-  /* One year back / forward, either side of the years slider. */
+  /* The years slider: one step per year, the handle as wide as the window,
+     a tick per position; an arrow either side steps one year. */
   .ec-wrap { position:relative; }
-  .ec-step { position:absolute; bottom:10px; display:flex; align-items:center; justify-content:center;
-             width:28px; height:24px; padding:0; border:1px solid var(--line); border-radius:var(--radius-sm);
+  .ec-years { display:flex; align-items:center; gap:8px; margin:6px 0 2px; }
+  .ec-years[hidden] { display:none; }
+  .ec-step { flex:none; display:flex; align-items:center; justify-content:center; width:28px; height:26px;
+             padding:0; border:1px solid var(--line); border-radius:var(--radius-sm);
              background:var(--surface); color:var(--muted); cursor:pointer; }
-  .ec-step[hidden] { display:none; }
-  .ec-step.prev { left:6px; }
-  .ec-step.next { right:6px; }
   .ec-step:hover:not(:disabled) { color:var(--text); border-color:var(--line-strong); }
   .ec-step:disabled { opacity:.35; cursor:default; }
+  .ec-range { flex:1; min-width:0; height:26px; margin:0; padding:0; background:transparent; cursor:pointer;
+              -webkit-appearance:none; appearance:none; }
+  .ec-range:focus { outline:none; }
+  .ec-range:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:var(--radius-sm); }
+  .ec-range::-webkit-slider-runnable-track {
+    height:26px; box-sizing:border-box; border:1px solid var(--line); border-radius:var(--radius-sm);
+    background:repeating-linear-gradient(to right, var(--line-strong) 0 1px, transparent 1px var(--tick-gap, 20px))
+               var(--tick-start, 14px) 50% / calc(100% - var(--thumb-w, 28px) + 1px) 8px no-repeat; }
+  .ec-range::-moz-range-track {
+    height:24px; border:1px solid var(--line); border-radius:var(--radius-sm);
+    background:repeating-linear-gradient(to right, var(--line-strong) 0 1px, transparent 1px var(--tick-gap, 20px))
+               var(--tick-start, 14px) 50% / calc(100% - var(--thumb-w, 28px) + 1px) 8px no-repeat; }
+  .ec-range::-webkit-slider-thumb {
+    -webkit-appearance:none; appearance:none; width:var(--thumb-w, 28px); height:24px; border-radius:5px;
+    background:color-mix(in srgb, var(--text) 16%, var(--surface)); border:1px solid var(--line-strong); }
+  .ec-range::-moz-range-thumb {
+    width:var(--thumb-w, 28px); height:22px; border-radius:5px;
+    background:color-mix(in srgb, var(--text) 16%, var(--surface)); border:1px solid var(--line-strong); }
+  .ec-range:hover::-webkit-slider-thumb { border-color:var(--text); }
+  .ec-range:hover::-moz-range-thumb { border-color:var(--text); }
   .ec-step svg { width:16px; height:16px; display:block; }
   .ec-empty, .ec-note { margin:8px 0 0; text-align:center; color:var(--muted); font-size:calc(var(--fs) * 15); }
   .ec-empty { padding:60px 0; }
@@ -2735,7 +2755,6 @@ function jumpToChart(event, id) {
 // The years slider under a chart scrolls through the whole history.
 const EC = { spec: null, key: '', entries: [], custom: [], facts: null, factsKey: '', observer: null };
 const FONT_READY = document.fonts ? document.fonts.load('12px "Stocky Mono"').catch(() => {}) : Promise.resolve();
-const FINE_POINTER = matchMedia('(pointer: fine)').matches;
 
 // $29,70B / −$765,62M: decimal comma and a true minus, as in the PNGs.
 function compact(value, prefix = '', decimals = 2, strip = false) {
@@ -2919,7 +2938,7 @@ function panelOption(panel, t, { mini = false, width = 800 } = {}) {
     animationDuration: 250, animationDurationUpdate: 0,
     textStyle: { fontFamily: t.font },
     grid: mini ? { left: 2, right: 2, top: 6, bottom: 4, containLabel: false }
-               : { left: 6, right: 6, top: 14, bottom: zoom ? 54 : 6, containLabel: true },
+               : { left: 6, right: 6, top: 14, bottom: 6, containLabel: true },
     legend: { show: false, data: panel.series.map(s => s.label).concat(ref ? [ref.legend] : []) },
     xAxis: { type: 'category', data: years, axisTick: { show: false }, axisLine: { show: false },
              axisLabel: { show: !mini, ...text(12), hideOverlap: true }, splitLine: { show: false } },
@@ -2934,25 +2953,14 @@ function panelOption(panel, t, { mini = false, width = 800 } = {}) {
   };
   if (zoom) {
     option.dataZoom = [{
-      type: 'slider', xAxisIndex: 0, startValue: years.length - visible, endValue: years.length - 1,
-      minValueSpan: 1, bottom: 10, height: 24, left: 44, right: 44, throttle: 16,
+      type: 'inside', xAxisIndex: 0, startValue: years.length - visible, endValue: years.length - 1,
       // Years off the window stay in the data, so a line runs on to the plot's
       // edge toward them and shows where it comes from and where it goes.
       filterMode: 'none',
-      // The subtitle names the years; labels at the handles would sit on the arrows.
-      showDetail: false,
-      brushSelect: false, borderColor: t.line, borderRadius: 6,
-      backgroundColor: 'transparent', fillerColor: t.soft,
-      dataBackground: { lineStyle: { color: t.lineStrong, opacity: 0.6 }, areaStyle: { color: t.lineStrong, opacity: 0.12 } },
-      selectedDataBackground: { lineStyle: { color: t.lineStrong }, areaStyle: { color: t.lineStrong, opacity: 0.2 } },
-      handleStyle: { color: t.surface, borderColor: t.lineStrong }, moveHandleStyle: { color: t.lineStrong, opacity: 0.5 },
-      emphasis: { handleStyle: { borderColor: t.text }, moveHandleStyle: { color: t.text, opacity: 0.6 } },
-      textStyle: text(11), labelFormatter: (_i, value) => value,
+      // No dragging or wheel: the window moves only in whole years.
+      zoomLock: true, zoomOnMouseWheel: false, moveOnMouseWheel: false, moveOnMouseMove: false,
+      preventDefaultMouseMove: false,
     }];
-    // Drag to pan and ctrl+wheel to zoom with a mouse; touch keeps scrolling the page.
-    if (FINE_POINTER) option.dataZoom.push({ type: 'inside', xAxisIndex: 0, zoomOnMouseWheel: 'ctrl',
-                                             moveOnMouseWheel: 'shift', moveOnMouseMove: true, throttle: 16,
-                                             filterMode: 'none' });
   }
   return { option, index };
 }
@@ -2987,7 +2995,7 @@ const chartId = id => 'chart-' + String(id).replace(/[^\w-]/g, '_');
 function figureHtml(chart, custom = false) {
   const panels = chart.panels.map((panel, i) => {
     const bars = panel.series.filter(s => s.kind === 'bar').length;
-    const height = Math.round((panel.years.length > 4 ? 44 : 0) + Math.min(440, 330 + bars * 12));
+    const height = Math.round(Math.min(440, 330 + bars * 12));
     return `<div class="ec-panel">
         <div class="ec-head">
           <div class="ec-title">${esc(panel.title)}</div>
@@ -2996,10 +3004,14 @@ function figureHtml(chart, custom = false) {
         </div>
         ${panel.series.length ? `<div class="ec-wrap">
             <div class="ec-canvas" style="height:${height}px" data-chart="${esc(chart.id)}" data-panel="${i}"></div>
-            <button class="ec-step prev" hidden onclick="stepYears(this, -1)" title="One year back" aria-label="One year back">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
-            <button class="ec-step next" hidden onclick="stepYears(this, 1)" title="One year forward" aria-label="One year forward">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+            <div class="ec-years" hidden>
+              <button class="ec-step prev" onclick="stepYears(this, -1)" title="One year back" aria-label="One year back">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+              <input class="ec-range" type="range" min="0" step="1" value="0" oninput="slideYears(this)"
+                     aria-label="Years shown" title="Years shown: one step per year">
+              <button class="ec-step next" onclick="stepYears(this, 1)" title="One year forward" aria-label="One year forward">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+            </div>
           </div>`
           : `<p class="ec-empty">${esc(panel.empty)}</p>`}
         ${panel.note ? `<p class="ec-note">${esc(panel.note)}</p>` : ''}
@@ -3032,7 +3044,7 @@ function mountCharts(root, charts, { mini = false } = {}) {
         const entry = EC.entries.find(e => e.el === item.target);
         if (!entry || !item.contentRect.width) continue;
         if (!entry.inst) drawEntry(entry);
-        else entry.inst.resize();
+        else { entry.inst.resize(); if (!entry.mini) syncSteps(entry); }
       }
     });
   }
@@ -3054,14 +3066,11 @@ function drawEntry(entry) {
   entry.inst.setOption(option);
   entry.index = index;
   if (entry.mini) return;
-  // The subtitle and arrows follow the window at once. The axis rescales when
-  // the drag ends: a setOption while the handle is held breaks the drag and
-  // made it stutter. The arrows (no pointer held) rescale straight away.
+  // Every move is a whole year: the subtitle, slider and axis follow at once.
   entry.inst.on('datazoom', () => {
     updateSpan(entry);
     syncSteps(entry);
-    if (POINTER_DOWN) PENDING_RESCALE.add(entry);
-    else rescale(entry);
+    rescale(entry);
   });
   entry.inst.on('legendselectchanged', event => {
     for (const key of entry.head.querySelectorAll('.ec-key')) {
@@ -3072,43 +3081,55 @@ function drawEntry(entry) {
   syncSteps(entry);
 }
 
-let POINTER_DOWN = false;
-const PENDING_RESCALE = new Set();
-document.addEventListener('pointerdown', () => { POINTER_DOWN = true; }, true);
-for (const type of ['pointerup', 'pointercancel']) {
-  document.addEventListener(type, () => {
-    POINTER_DOWN = false;
-    for (const entry of PENDING_RESCALE) rescale(entry);
-    PENDING_RESCALE.clear();
-  }, true);
-}
-
 function rescale(entry) {
   if (!entry.inst) return;
   const [from, to] = zoomRange(entry);
   entry.inst.setOption({ yAxis: yBounds(entry.panel, from, to) });
 }
 
-// The arrows beside the slider: shown when the chart scrolls, off at either end.
+// The years slider under a chart that scrolls: one step per year, its handle
+// as wide as the window, a tick per position; the arrows either side step one
+// year and turn off at either end.
 function syncSteps(entry) {
-  const wrap = entry.el.closest('.ec-wrap');
-  if (!wrap) return;
+  const row = entry.el.closest('.ec-wrap')?.querySelector('.ec-years');
+  if (!row) return;
   const zoom = entry.inst.getOption().dataZoom;
+  const n = entry.panel.years.length;
+  const [from, to] = zoomRange(entry);
+  const span = to - from + 1;
+  row.hidden = !(zoom && zoom.length) || span >= n;
+  if (row.hidden) return;
+  const range = row.querySelector('.ec-range');
+  const positions = n - span;
+  range.max = String(positions);
+  range.value = String(from);
+  const track = range.clientWidth - 2;
+  const thumb = Math.max(28, Math.round(track * span / n));
+  range.style.setProperty('--thumb-w', `${thumb}px`);
+  range.style.setProperty('--tick-gap', `${(track - thumb) / Math.max(positions, 1)}px`);
+  range.style.setProperty('--tick-start', `${thumb / 2}px`);
+  range.setAttribute('aria-valuetext', yearSpan(entry.panel.years.slice(from, to + 1)));
+  row.querySelector('.prev').disabled = from <= 0;
+  row.querySelector('.next').disabled = to >= n - 1;
+}
+
+const entryOf = control => EC.entries.find(e => e.el.closest('.ec-wrap') === control.closest('.ec-wrap'));
+
+function moveWindow(entry, start) {
   const [from, to] = zoomRange(entry);
   const last = entry.panel.years.length - 1;
-  for (const button of wrap.querySelectorAll('.ec-step')) {
-    button.hidden = !(zoom && zoom.length);
-    button.disabled = button.classList.contains('prev') ? from <= 0 : to >= last;
-  }
+  const next = Math.max(0, Math.min(last - (to - from), start));
+  if (next !== from) entry.inst.dispatchAction({ type: 'dataZoom', startValue: next, endValue: next + (to - from) });
+}
+
+function slideYears(range) {
+  const entry = entryOf(range);
+  if (entry && entry.inst) moveWindow(entry, Number(range.value));
 }
 
 function stepYears(button, step) {
-  const entry = EC.entries.find(e => e.el.closest('.ec-wrap') === button.closest('.ec-wrap'));
-  if (!entry || !entry.inst) return;
-  const [from, to] = zoomRange(entry);
-  const last = entry.panel.years.length - 1;
-  const shift = Math.max(-from, Math.min(last - to, step));
-  if (shift) entry.inst.dispatchAction({ type: 'dataZoom', startValue: from + shift, endValue: to + shift });
+  const entry = entryOf(button);
+  if (entry && entry.inst) moveWindow(entry, zoomRange(entry)[0] + step);
 }
 
 // A panel cut to its last ``n`` years (Home's thumbnails).
