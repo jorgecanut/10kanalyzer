@@ -43,6 +43,7 @@
    * critique: the page sat in a 1060px column at any width; one 2200px container now holds every row,
    *   text grows past 1600px of window, charts and the simulation fit one screen
    */
+  /* Hallmark · dropped onchange="loadNews()" · the News company menu now calls newsRunChanged(), which loads that company's news or, in Saved, filters the saved articles */
   /* Hallmark · waive 24b · the spacing inside panels, dialogs and the check list kept as found · this redesign widens Stocky's container and moves the Charts index; it does not re-space each panel */
   /* The app's font, bundled (static/fonts) so the page and the charts match
      on every machine. */
@@ -186,6 +187,8 @@
   .toolbar-inner { max-width:var(--page); margin:0 auto; display:flex; gap:8px; flex-wrap:nowrap;
                    align-items:center; }
   .toolbar #tab-recent { margin-left:auto; }
+  /* Recent and Logs sit as close as the tabs do (4px), not the toolbar's 8px. */
+  .toolbar #tab-logs { margin-left:-4px; }
   .bar { display:flex; gap:8px; align-items:center; flex:0 1 auto; min-width:0; }
   /* On one row the tabs and buttons keep their width; the ticker box gives way. */
   .toolbar .tabs, #filings, #run-btn, #cancel-btn, #tab-recent, #tab-logs { flex:none; }
@@ -386,6 +389,12 @@
                      background:none; color:var(--muted); font-size:calc(var(--fs) * 14); cursor:pointer; }
   .sim-mode button:hover:not(:disabled) { color:var(--text); background:var(--hover); }
   .sim-mode button.active { background:var(--accent-soft); border-color:var(--line-strong); color:var(--text); }
+  /* Screener: preset chips, then one row of filter boxes (blank = no limit). */
+  .screen-filters { margin:0 0 12px; }
+  .screen-filters .chips { margin:0 0 12px; }
+  .screen-form { grid-template-columns:repeat(auto-fill, minmax(118px, 1fr)); gap:10px; }
+  .screen-form .flt-clear { align-self:end; height:38px; }
+  .screen-filters #screen-count { margin:10px 0 0; }
   .sim-note { color:var(--muted); font-size:calc(var(--fs) * 14); margin:12px 0 0; }
   @media (max-width:1000px) {
     .sim-row { grid-template-columns:1fr; }
@@ -770,18 +779,15 @@
   .news-list li { padding:11px 0; border-bottom:1px solid var(--line-soft); }
   .news-list li:last-child { border-bottom:0; }
   .news-list a { color:var(--text); font-weight:600; line-height:1.4; }
-  /* News tab: two halves side by side on a desktop (company, economy), each a
-     column of compact rows: the headline (two lines at most), its meta and a
-     save button. The saved list runs its rows two or three across. */
-  .news-split { display:grid; grid-template-columns:minmax(0, 1fr); gap:0 16px; }
-  @media (min-width:1000px) { .news-split { grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); align-items:start; } }
+  /* News tab: compact rows two or three across on a desktop: the headline
+     (two lines at most), its opening lines when the outlet gives them, its
+     meta and a save (or, in Saved, remove) button. */
   .news-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(min(100%, 520px), 1fr)); gap:0 28px; }
-  .news-rows li, .news-grid li { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:12px; align-items:center;
+  .news-grid li { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:12px; align-items:center;
                   padding:9px 0; border-bottom:1px solid var(--line-soft); }
-  .news-rows li:last-child { border-bottom:0; }
   .news-grid li:last-child { border-bottom:1px solid var(--line-soft); }
-  .news-rows a, .news-grid a { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
-  .news-rows .news-meta, .news-grid .news-meta { margin-top:2px; }
+  .news-grid a { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .news-grid .news-meta { margin-top:2px; }
   .news-act { display:flex; align-items:center; justify-content:center; width:36px; height:36px; padding:0;
               border:1px solid transparent; border-radius:var(--radius); background:none; color:var(--muted); cursor:pointer; }
   .news-act svg { width:20px; height:20px; display:block; }
@@ -790,9 +796,16 @@
   /* Remove: the Cancel button's red cross. */
   .news-act.remove { color:var(--badge-error-fg); border-color:var(--badge-error-fg); }
   .news-act.remove:hover { background:var(--badge-error-bg); }
-  .saved-count { color:var(--muted); font-weight:400; font-variant-numeric:tabular-nums; }
-  .saved-search { width:min(420px, 60vw); }
-  .saved-search input { padding-top:6px; padding-bottom:6px; }
+  .news-sum { margin:3px 0 0; color:var(--muted); font-size:calc(var(--fs) * 15); line-height:1.45;
+              display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .news-grid li { align-items:start; }
+  .news-grid .news-act { margin-top:2px; }
+  .saved-btn { display:flex; align-items:center; gap:6px; height:32px; }
+  .saved-btn svg { width:18px; height:18px; display:block; }
+  .saved-btn[aria-pressed="true"] { color:var(--text); background:var(--accent-soft); border-color:var(--line-strong); }
+  .saved-count { color:var(--muted); font-variant-numeric:tabular-nums; }
+  .saved-search { max-width:520px; margin:0 0 10px; }
+  .saved-search[hidden], .panel-actions select[hidden] { display:none; }
   .news-meta { color:var(--muted); font-size:calc(var(--fs) * 14); margin-top:3px; }
   /* Meta strings: the parts stand apart by space, not by a separator glyph. */
   .parts { display:flex; flex-wrap:wrap; gap:0 20px; }
@@ -1119,13 +1132,16 @@
 
   <!-- News tab: recent articles about the company, newest coverage first by relevance. -->
   <section id="pane-news" class="hidden">
-    <!-- Company news (Google News) and the economy (CNBC, MarketWatch, NPR)
-         side by side, each its own panel; the saved articles under both. -->
-    <div class="news-split">
     <div class="panel">
       <div class="panel-head">
-        <span class="panel-title">Company news</span>
+        <span class="panel-title" id="news-title">Company news</span>
         <span class="panel-actions">
+          <!-- Saved swaps the list for your saved articles; the company menu then filters them. -->
+          <button class="panel-btn saved-btn" id="news-saved-btn" aria-pressed="false" onclick="toggleSavedNews()"
+                  title="Your saved articles">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-bookmark" /></svg>
+            Saved <span class="saved-count" id="news-saved-count"></span>
+          </button>
           <select id="news-limit" title="Articles" aria-label="Articles" onchange="setNewsOption()">
             <option value="20">20 articles</option><option value="30">30 articles</option>
             <option value="40">40 articles</option><option value="50">50 articles</option>
@@ -1134,7 +1150,7 @@
             <option value="1">24 hours</option><option value="7">7 days</option>
             <option value="14">14 days</option><option value="30">30 days</option>
           </select>
-          <select id="news-run" title="Ticker" aria-label="Ticker" onchange="loadNews()"></select>
+          <select id="news-run" title="Company" aria-label="Company" onchange="newsRunChanged()"></select>
           <button class="panel-btn icon-btn" onclick="downloadNews()" title="Download these articles as CSV" aria-label="Download these articles as CSV">
             <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download" /></svg>
           </button>
@@ -1144,52 +1160,14 @@
         </span>
       </div>
       <div class="panel-body">
+        <div class="cs-field saved-search" id="news-saved-search" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.6">
+            <circle cx="10.5" cy="10.5" r="6" /><path d="M15 15l5 5" /></g></svg>
+          <input id="saved-search" type="search" placeholder="Search saved articles…" autocomplete="off"
+                 aria-label="Search saved articles" oninput="renderSavedNews()">
+        </div>
         <p class="sim-meta" id="news-status"></p>
-        <ol id="news-list" class="news-list news-rows"></ol>
-      </div>
-    </div>
-    <div class="panel">
-      <div class="panel-head">
-        <span class="panel-title">Economy and markets</span>
-        <span class="panel-actions">
-          <select id="econ-limit" title="Articles" aria-label="Economy articles" onchange="loadEconomy()">
-            <option value="20">20 articles</option><option value="30">30 articles</option>
-            <option value="40">40 articles</option><option value="50">50 articles</option>
-          </select>
-          <select id="econ-days" title="How far back" aria-label="How far back for economy news" onchange="loadEconomy()">
-            <option value="1">24 hours</option><option value="7">7 days</option>
-            <option value="14">14 days</option><option value="30">30 days</option>
-          </select>
-          <button class="panel-btn icon-btn" onclick="downloadEconomy()" title="Download these articles as CSV" aria-label="Download the economy articles as CSV">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download" /></svg>
-          </button>
-          <button class="panel-btn icon-btn" onclick="loadEconomy(true)" title="Refresh" aria-label="Refresh the economy news">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh" /></svg>
-          </button>
-        </span>
-      </div>
-      <div class="panel-body">
-        <p class="sim-meta" id="econ-status"></p>
-        <ol id="econ-list" class="news-list news-rows"></ol>
-      </div>
-    </div>
-    </div>
-    <!-- Saved articles: kept on the account, searchable, each with a remove cross. -->
-    <div class="panel" id="news-saved">
-      <div class="panel-head">
-        <span class="panel-title">Saved articles <span class="saved-count" id="news-saved-count"></span></span>
-        <span class="panel-actions">
-          <div class="cs-field saved-search">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.6">
-              <circle cx="10.5" cy="10.5" r="6" /><path d="M15 15l5 5" /></g></svg>
-            <input id="saved-search" type="search" placeholder="Search saved articles…" autocomplete="off"
-                   aria-label="Search saved articles" oninput="renderSavedNews()">
-          </div>
-        </span>
-      </div>
-      <div class="panel-body">
-        <p class="sim-meta" id="saved-status" role="status"></p>
-        <ol id="saved-list" class="news-list news-grid"></ol>
+        <ol id="news-list" class="news-list news-grid"></ol>
       </div>
     </div>
   </section>
@@ -1252,6 +1230,12 @@
         </span>
       </div>
       <div class="panel-body">
+        <!-- Presets fill the filters below; any filter can then be changed by hand. -->
+        <div class="screen-filters">
+          <div class="sim-controls chips" id="screen-presets" role="group" aria-label="Presets"></div>
+          <div class="sim-form screen-form" id="screen-form"></div>
+          <p class="sim-meta" id="screen-count" role="status"></p>
+        </div>
         <div id="screen-notes" class="screen-notes"></div>
         <div class="table-wrap">
           <table class="data" id="screen-table">
@@ -1763,10 +1747,9 @@ function applyPrefs(changed = '') {
   }
   if (changed === 'date' || changed === 'number') rerenderAll();
   if (all || changed.startsWith('news')) {
-    for (const id of ['#news-limit', '#econ-limit']) $(id).value = String(PREFS.newsLimit);
-    for (const id of ['#news-days', '#econ-days']) $(id).value = String(PREFS.newsDays);
+    $('#news-limit').value = String(PREFS.newsLimit);
+    $('#news-days').value = String(PREFS.newsDays);
     if (changed && $('#news-run').value) loadNews();
-    if (changed && ECON.loaded) loadEconomy();
   }
   if (changed.startsWith('sim') && !SIM.backtest) {
     // Takes effect now unless a backtest is open, and on every reset.
@@ -3937,10 +3920,9 @@ const fmtAgo = iso => {
 };
 
 async function initNews() {
-  const select = $('#news-run');
   if (!SAVED.loaded) loadSaved();
-  else renderSavedNews();
-  if (!ECON.loaded) loadEconomy();
+  if (SAVED.mode) { renderSavedNews(); return; }
+  const select = $('#news-run');
   try {
     const { items } = await (await fetch('/api/recent')).json();
     if (!items.length) {
@@ -3949,7 +3931,7 @@ async function initNews() {
       $('#news-list').innerHTML = '';
       return;
     }
-    const current = select.value;
+    const current = NEWS.ticker || select.value;
     select.innerHTML = items.map(runOption).join('');
     select.value = pickRun(select, items, current);
   } catch {
@@ -3967,38 +3949,14 @@ function setNewsOption() {
   if ($('#news-run').value) loadNews();
 }
 
-// The economy panel: CNBC, MarketWatch and NPR by turns, with its own
-// count and period (Options → Defaults sets where both panels start).
-const ECON = { articles: [], loaded: false, token: 0 };
-
-async function loadEconomy(fresh = false) {
-  const token = ++ECON.token;
-  ECON.loaded = true;
-  $('#econ-status').textContent = 'Looking for economy and market news…';
-  try {
-    const res = await fetch(`/api/news-economy?limit=${$('#econ-limit').value}&days=${$('#econ-days').value}${fresh ? '&fresh=1' : ''}`);
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'Economy news unavailable.');
-    if (token !== ECON.token) return;
-    ECON.articles = Array.isArray(data.articles) ? data.articles : [];
-    const missing = (data.failed || []).length ? ` ${data.failed.join(' and ')} did not answer.` : '';
-    $('#econ-status').textContent = (ECON.articles.length
-      ? `Latest from ${listWords(data.sources.filter(source => !data.failed.includes(source)))}, last ${data.days} days.`
-      : `No economy articles in the last ${data.days} days.`) + missing;
-    $('#econ-list').innerHTML = ECON.articles.map((a, i) => newsRow(a, saveButton('econ', i, a))).join('');
-  } catch (err) {
-    if (token !== ECON.token) return;
-    ECON.loaded = false;
-    ECON.articles = [];
-    $('#econ-list').innerHTML = '';
-    $('#econ-status').textContent = err.message;
-  }
+// The company menu picks whose news to load, or in Saved whose saved articles to show.
+function newsRunChanged() {
+  if (SAVED.mode) renderSavedNews();
+  else loadNews();
 }
 
-const listWords = words => words.length < 2 ? words.join('')
-  : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
-
 async function loadNews(fresh = false) {
+  if (SAVED.mode) { loadSaved(); return; }
   const ticker = $('#news-run').value;
   const list = $('#news-list');
   list.innerHTML = '';
@@ -4010,23 +3968,25 @@ async function loadNews(fresh = false) {
     const res = await fetch(`/api/news/${encodeURIComponent(ticker)}?${newsQuery()}${fresh ? '&fresh=1' : ''}`);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || data.message || 'News unavailable.');
-    if (ticker !== $('#news-run').value) return;
+    if (ticker !== $('#news-run').value || SAVED.mode) return;
     const articles = Array.isArray(data.articles) ? data.articles : [];
     NEWS.articles = articles;
     $('#news-status').textContent = articles.length
-      ? `Top articles about ${data.company} from the last ${data.days} days (Google News).`
+      ? `Top articles about ${data.company} from the last ${data.days} days (Google News and Yahoo Finance).`
       : `No articles about ${data.company} in the last ${data.days} days.`;
-    list.innerHTML = articles.map((a, i) => newsRow(a, saveButton('news', i, a))).join('');
+    list.innerHTML = articles.map((a, i) => newsRow(a, saveButton(i, a))).join('');
   } catch (err) {
-    if (ticker === $('#news-run').value) $('#news-status').textContent = err.message;
+    if (ticker === $('#news-run').value && !SAVED.mode) $('#news-status').textContent = err.message;
   }
 }
 
-// One article row: the headline, outlet and age, then one action button.
+// One article row: the headline, its opening lines when the outlet gives
+// them, outlet and age, then one action button.
 function newsRow(a, action, showTicker = false) {
   return `<li>
       <div>
         <a href="${esc(a.link)}" target="_blank" rel="noopener noreferrer">${esc(a.title)}</a>
+        ${a.summary ? `<p class="news-sum">${esc(a.summary)}</p>` : ''}
         <div class="news-meta parts">${parts([a.source, showTicker ? a.ticker : '', fmtAgo(a.published)])}</div>
       </div>
       ${action}
@@ -4034,19 +3994,20 @@ function newsRow(a, action, showTicker = false) {
 }
 
 // Saved articles live on the account (/api/saved-news), so they follow you
-// to every device.
-const SAVED = { articles: [], shown: [], links: new Set(), loaded: false };
+// to every device. The Saved button swaps the list for them; the company
+// menu then filters them (All companies by default) and a search box narrows them.
+const SAVED = { articles: [], shown: [], links: new Set(), loaded: false, mode: false };
 
 function setSaved(articles) {
   SAVED.articles = articles;
   SAVED.links = new Set(articles.map(a => a.link));
   SAVED.loaded = true;
-  $('#news-saved-count').textContent = articles.length ? `(${articles.length})` : '';
-  for (const button of $('#pane-news .news-split').querySelectorAll('.news-act')) {
-    const article = NEWS_LISTS[button.dataset.list]()[Number(button.dataset.i)];
+  $('#news-saved-count').textContent = articles.length || '';
+  if (SAVED.mode) { savedCompanies(); renderSavedNews(); return; }
+  for (const button of $('#news-list').querySelectorAll('.news-act')) {
+    const article = NEWS.articles[Number(button.dataset.i)];
     if (article) button.setAttribute('aria-pressed', String(SAVED.links.has(article.link)));
   }
-  renderSavedNews();
 }
 
 async function loadSaved() {
@@ -4064,27 +4025,23 @@ async function savedRequest(method, url, body) {
   setSaved(data.articles || []);
 }
 
-// The two halves' articles, by the name their save buttons carry.
-const NEWS_LISTS = { news: () => NEWS.articles, econ: () => ECON.articles };
-
-function saveButton(list, i, a) {
-  return `<button class="news-act" aria-pressed="${SAVED.links.has(a.link)}" data-list="${list}" data-i="${i}"
+function saveButton(i, a) {
+  return `<button class="news-act" aria-pressed="${SAVED.links.has(a.link)}" data-i="${i}"
       onclick="toggleSave(this)" title="Save this article" aria-label="Save: ${esc(a.title)}">
       <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-bookmark" /></svg></button>`;
 }
 
 async function toggleSave(button) {
-  const list = button.dataset.list;
-  const a = NEWS_LISTS[list]()[Number(button.dataset.i)];
+  const a = NEWS.articles[Number(button.dataset.i)];
   if (!a) return;
   const saved = SAVED.links.has(a.link);
   button.setAttribute('aria-pressed', String(!saved));
   try {
     if (saved) await savedRequest('DELETE', `/api/saved-news?link=${encodeURIComponent(a.link)}`);
-    else await savedRequest('POST', '/api/saved-news', { ...a, ticker: list === 'news' ? NEWS.ticker : '' });
+    else await savedRequest('POST', '/api/saved-news', { ...a, ticker: NEWS.ticker });
   } catch (err) {
     button.setAttribute('aria-pressed', String(saved));
-    $(list === 'news' ? '#news-status' : '#econ-status').textContent = err.message;
+    $('#news-status').textContent = err.message;
   }
 }
 
@@ -4092,22 +4049,52 @@ async function removeSaved(index) {
   const a = SAVED.shown[index];
   if (!a) return;
   try { await savedRequest('DELETE', `/api/saved-news?link=${encodeURIComponent(a.link)}`); }
-  catch (err) { $('#saved-status').textContent = err.message; }
+  catch (err) { $('#news-status').textContent = err.message; }
+}
+
+// The company menu in Saved: All companies, then each ticker that has saved articles.
+function savedCompanies() {
+  const select = $('#news-run');
+  const pick = select.value;
+  const tickers = [...new Set(SAVED.articles.map(a => a.ticker).filter(Boolean))].sort();
+  select.innerHTML = `<option value="">All companies</option>`
+    + tickers.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+  select.value = tickers.includes(pick) ? pick : '';
+}
+
+function toggleSavedNews(open = !SAVED.mode) {
+  SAVED.mode = open;
+  $('#news-saved-btn').setAttribute('aria-pressed', String(open));
+  $('#news-title').textContent = open ? 'Saved articles' : 'Company news';
+  $('#news-saved-search').hidden = !open;
+  for (const id of ['#news-limit', '#news-days']) $(id).hidden = open;
+  $('#news-list').innerHTML = '';
+  if (open) {
+    savedCompanies();
+    renderSavedNews();
+    if (!SAVED.loaded) loadSaved();
+    $('#saved-search').focus();
+  } else {
+    initNews();
+  }
 }
 
 function renderSavedNews() {
+  if (!SAVED.mode) return;
+  const ticker = $('#news-run').value;
   const words = $('#saved-search').value.toLowerCase().split(/\s+/).filter(Boolean);
   SAVED.shown = SAVED.articles.filter(a => {
-    const text = `${a.title} ${a.source} ${a.ticker || ''}`.toLowerCase();
-    return words.every(word => text.includes(word));
+    const text = `${a.title} ${a.summary || ''} ${a.source} ${a.ticker || ''}`.toLowerCase();
+    return (!ticker || a.ticker === ticker) && words.every(word => text.includes(word));
   });
-  $('#saved-status').textContent = !SAVED.articles.length
+  const pool = ticker ? SAVED.articles.filter(a => a.ticker === ticker).length : SAVED.articles.length;
+  $('#news-status').textContent = !SAVED.articles.length
     ? 'No saved articles yet. Press the bookmark beside an article to keep it here.'
-    : words.length ? `${SAVED.shown.length} of ${SAVED.articles.length} saved articles match.`
-      : `${SAVED.articles.length} saved article${SAVED.articles.length === 1 ? '' : 's'}, newest first.`;
-  $('#saved-list').innerHTML = SAVED.shown.map((a, i) => newsRow(a, `<button class="news-act remove"
+    : words.length ? `${SAVED.shown.length} of ${pool} saved articles match.`
+      : `${pool} saved article${pool === 1 ? '' : 's'}${ticker ? ` about ${ticker}` : ''}, newest first.`;
+  $('#news-list').innerHTML = SAVED.shown.map((a, i) => newsRow(a, `<button class="news-act remove"
       onclick="removeSaved(${i})" title="Remove from saved" aria-label="Remove from saved: ${esc(a.title)}">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-cross" /></svg></button>`, true)).join('');
+      <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-cross" /></svg></button>`, !ticker)).join('');
 }
 
 /* Insiders ----------------------------------------------------------------- */
@@ -4388,8 +4375,97 @@ const scoreCell = (v, hi, lo) => {
   return shown;
 };
 
+// Filters: a lower or upper limit per column, in the units the table shows
+// (percent for the yields and returns). A ticker missing a limited value is left out.
+const SCREEN_FILTERS = [
+  { key: 'f_score', label: 'Min F-score', op: 'min', step: 1 },
+  { key: 'z_score', label: 'Min Z-score', op: 'min', step: 0.1 },
+  { key: 'pe', label: 'Max P/E', op: 'max', step: 1 },
+  { key: 'ev_ebit', label: 'Max EV/EBIT', op: 'max', step: 1 },
+  { key: 'earnings_yield', label: 'Min EY %', op: 'min', step: 1, pct: true },
+  { key: 'return_on_capital', label: 'Min ROC %', op: 'min', step: 1, pct: true },
+  { key: 'greenblatt_rank', label: 'Max Magic rank', op: 'max', step: 1 },
+  { key: 'fcf_yield', label: 'Min FCF yield %', op: 'min', step: 1, pct: true },
+  { key: 'pe_percentile', label: 'Max P/E pct', op: 'max', step: 5 },
+];
+// The usual cut-offs: Piotroski's strong F-score, Altman's safe zone,
+// Greenblatt's top of the ranking.
+const SCREEN_PRESETS = [
+  { id: 'all', label: 'All', filters: {} },
+  { id: 'quality', label: 'Quality', filters: { f_score: 7, z_score: 2.99 }, sort: ['f_score', -1],
+    title: 'Strong F-score (7 or more) and an Altman Z-score in the safe zone (2.99 or more)' },
+  { id: 'value', label: 'Value', filters: { pe: 15, ev_ebit: 10 }, sort: ['ev_ebit', 1],
+    title: 'P/E of 15 or less and EV/EBIT of 10 or less' },
+  { id: 'magic', label: 'Magic Formula top 10', filters: { greenblatt_rank: 10 }, sort: ['greenblatt_rank', 1],
+    title: "Greenblatt's ranking: high earnings yield and high return on capital together" },
+  { id: 'cash', label: 'Cash generators', filters: { fcf_yield: 5 }, sort: ['fcf_yield', -1],
+    title: 'Free cash flow yield of 5% or more' },
+  { id: 'cheap', label: 'Cheap for itself', filters: { pe_percentile: 25 }, sort: ['pe_percentile', 1],
+    title: 'P/E in the lowest quarter of its own history' },
+];
+SCREEN.filters = {};
+SCREEN.preset = 'all';
+try {
+  const saved = JSON.parse(localStorage.getItem('stocky-screen') || '{}');
+  if (saved.filters && typeof saved.filters === 'object') SCREEN.filters = saved.filters;
+  if (SCREEN_PRESETS.some(p => p.id === saved.preset) || saved.preset === 'custom') SCREEN.preset = saved.preset;
+} catch {}
+
+function saveScreenFilters() {
+  try { localStorage.setItem('stocky-screen', JSON.stringify({ filters: SCREEN.filters, preset: SCREEN.preset })); } catch {}
+}
+
+function renderScreenFilters() {
+  $('#screen-presets').innerHTML = SCREEN_PRESETS.map(p => `<button class="${SCREEN.preset === p.id ? 'active' : ''}"
+      aria-pressed="${SCREEN.preset === p.id}" ${p.title ? `title="${esc(p.title)}"` : ''}
+      onclick="applyScreenPreset('${p.id}')">${esc(p.label)}</button>`).join('');
+  $('#screen-form').innerHTML = SCREEN_FILTERS.map(f => `<div>
+        <label for="flt-${f.key}">${esc(f.label)}</label>
+        <input id="flt-${f.key}" type="number" step="${f.step}" value="${SCREEN.filters[f.key] ?? ''}"
+               placeholder="any" oninput="setScreenFilter('${f.key}', this.value)">
+      </div>`).join('') + `<button class="panel-btn flt-clear" onclick="applyScreenPreset('all')"
+        ${Object.keys(SCREEN.filters).length ? '' : 'disabled'}>Clear</button>`;
+}
+
+function applyScreenPreset(id) {
+  const preset = SCREEN_PRESETS.find(p => p.id === id) || SCREEN_PRESETS[0];
+  SCREEN.preset = preset.id;
+  SCREEN.filters = { ...preset.filters };
+  if (preset.sort) SCREEN.sort = { key: preset.sort[0], dir: preset.sort[1] };
+  saveScreenFilters();
+  renderScreenFilters();
+  renderScreener();
+}
+
+function setScreenFilter(key, raw) {
+  const value = raw === '' ? null : Number(raw);
+  if (value === null || Number.isNaN(value)) delete SCREEN.filters[key];
+  else SCREEN.filters[key] = value;
+  SCREEN.preset = Object.keys(SCREEN.filters).length ? 'custom' : 'all';
+  saveScreenFilters();
+  for (const button of $('#screen-presets').querySelectorAll('button')) {
+    const on = button.getAttribute('onclick').includes(`'${SCREEN.preset}'`);
+    button.classList.toggle('active', on);
+    button.setAttribute('aria-pressed', String(on));
+  }
+  $('#screen-form .flt-clear').disabled = !Object.keys(SCREEN.filters).length;
+  renderScreener();
+}
+
+function passesScreen(row) {
+  return SCREEN_FILTERS.every(f => {
+    const limit = SCREEN.filters[f.key];
+    if (limit === undefined) return true;
+    const raw = row[f.key];
+    if (raw === null || raw === undefined || raw === '' || Number.isNaN(Number(raw))) return false;
+    const value = Number(raw) * (f.pct ? 100 : 1);
+    return f.op === 'min' ? value >= limit : value <= limit;
+  });
+}
+
 function renderScreener() {
   const body = $('#screen-body');
+  if (!$('#screen-presets').childElementCount) renderScreenFilters();
   document.querySelectorAll('#screen-table th[data-key]').forEach(th => {
     th.textContent = th.dataset.label + (th.dataset.key === SCREEN.sort.key ? (SCREEN.sort.dir > 0 ? ' ▲' : ' ▼') : '');
     if (HELP[th.dataset.key]) th.title = HELP[th.dataset.key];
@@ -4423,8 +4499,17 @@ function renderScreener() {
     if (key === 'modified') return (new Date(av) - new Date(bv)) * dir;
     return (Number(av) - Number(bv)) * dir;
   });
-  SCREEN.sorted = rows;
-  body.innerHTML = rows.map(row => `<tr>
+  const shown = rows.filter(passesScreen);
+  SCREEN.sorted = shown;
+  const limited = Object.keys(SCREEN.filters).length;
+  $('#screen-count').textContent = limited
+    ? `${shown.length} of ${rows.length} tickers match.` : `${rows.length} tickers.`;
+  if (!shown.length) {
+    body.innerHTML = `<tr><td colspan="12" class="muted">No ticker matches these filters.
+      <a href="#" onclick="applyScreenPreset('all');return false">Clear them</a>.</td></tr>`;
+    return;
+  }
+  body.innerHTML = shown.map(row => `<tr>
       <td><a href="#" class="ticker-link" onclick="openHome('${esc(row.ticker)}');return false"
              title="Open ${esc(row.ticker)} in every tab"><strong>${esc(row.ticker)}</strong></a></td>
       <td${tip('fiscal_year')}>${row.has_evaluation === false ? '—' : esc(row.fiscal_year ?? '—')}</td>
@@ -4484,13 +4569,13 @@ function downloadScreener() {
 }
 
 function downloadNews() {
+  if (SAVED.mode) {
+    saveCsv(SAVED.shown, `saved_news_${$('#news-run').value || 'all'}_${today()}.csv`,
+            ['ticker', 'title', 'summary', 'source', 'published', 'link', 'saved']);
+    return;
+  }
   saveCsv(NEWS.articles, `${NEWS.ticker}_news_${$('#news-days').value}d_${today()}.csv`,
-          ['title', 'source', 'published', 'link']);
-}
-
-function downloadEconomy() {
-  saveCsv(ECON.articles, `economy_news_${$('#econ-days').value}d_${today()}.csv`,
-          ['title', 'source', 'published', 'link']);
+          ['title', 'summary', 'source', 'published', 'link']);
 }
 
 // The price chart as drawn (current theme) with the projection under it.
