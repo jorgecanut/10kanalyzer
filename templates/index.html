@@ -256,19 +256,10 @@
   .chart-index:empty { display:none; }
   .chart-index ol { margin:0; padding-left:26px; font-size:calc(var(--fs) * 16); line-height:1.9; }
   .chart-index .windows { color:var(--muted); }
-  /* Chart layout: two joined buttons, exactly one lit. */
-  .view-seg { display:flex; border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; }
-  .view-seg[hidden], .head-sep[hidden] { display:none; }
-  .view-seg button { display:flex; align-items:center; justify-content:center; padding:6px 10px; border:0;
                      background:none; color:var(--muted); cursor:pointer; }
-  .view-seg button + button { border-left:1px solid var(--line); }
-  .view-seg button:hover { color:var(--text); background:var(--hover); }
-  .view-seg button[aria-checked="true"] { background:var(--accent-soft); color:var(--text); }
-  .view-seg svg { width:18px; height:18px; display:block; }
-  .head-sep { width:1px; height:22px; margin:0 4px; background:var(--line); }
   /* One chart per row, as wide as the middle column. */
   .charts-full { display:flex; flex-direction:column; gap:16px; }
-  .charts-full figure, .grid figure { scroll-margin-top:150px; }
+  .charts-full figure { scroll-margin-top:150px; }
   figcaption { display:flex; justify-content:space-between; font-size:calc(var(--fs) * 14); color:var(--muted);
                margin-top:8px; }
   a { color:var(--accent); text-decoration:none; }
@@ -379,22 +370,10 @@
   .term-ok { color:var(--green); }
   .term-warn { color:var(--badge-error-fg); }
   /* Logs tab: the run log in its own box, then the page's requests. */
-  .logs-h { margin:6px 0 4px; font-size:calc(var(--fs) * 20); font-weight:700; color:var(--heading); }
-  .logs-h + .muted { margin:0 0 10px; }
-  .logs-term { max-height:min(62vh, 640px); padding:12px 14px; margin-bottom:22px; background:var(--bg);
+  #logs-meta { margin:0 0 10px; }
+  .logs-term { max-height:min(72vh, 760px); padding:12px 14px; background:var(--bg);
                border:1px solid var(--line); border-radius:var(--radius); font-size:calc(var(--fs) * 15); }
-  .activity { list-style:none; margin:0; padding:0; font-size:calc(var(--fs) * 15); }
-  .activity li { display:flex; align-items:baseline; gap:6px 14px; flex-wrap:wrap; padding:6px 2px;
-                 border-bottom:1px solid var(--line-soft); }
-  .activity li:last-child { border-bottom:0; }
-  .activity time { color:var(--muted); font-variant-numeric:tabular-nums; }
-  .act-text { flex:1; min-width:200px; }
-  .act-state { color:var(--muted); font-size:calc(var(--fs) * 14); white-space:nowrap; font-variant-numeric:tabular-nums; }
-  .act-state.busy { color:var(--badge-running-fg); }
-  .act-state.ok { color:var(--green); }
-  .act-state.bad { color:var(--badge-error-fg); }
   a.badge-link { text-decoration:none; cursor:pointer; }
-  .tabs button[hidden] { display:none; }   /* the Logs tab, when Options hides it */
   .graph-progress a { margin-left:6px; white-space:nowrap; }
   @media (max-width:600px) {
     .term-body { font-size:calc(var(--fs) * 16); }
@@ -596,7 +575,6 @@
   .ec-step svg { width:16px; height:16px; display:block; }
   .ec-empty, .ec-note { margin:8px 0 0; text-align:center; color:var(--muted); font-size:calc(var(--fs) * 15); }
   .ec-empty { padding:60px 0; }
-  .grid .ec-fig { padding:12px 12px 8px; }
   .ec-tip { min-width:180px; }
   .ec-tip-head { margin-bottom:4px; font-weight:700; }
   .ec-tip-row { display:flex; align-items:center; gap:4px; line-height:1.6; }
@@ -638,33 +616,34 @@
 
   /* Calculation check, under the chart index. */
   #calc-checks:empty { display:none; }
-  .checks { margin-top:14px; padding-top:12px; border-top:1px solid var(--line-soft); }
+  .checks { margin-top:10px; padding-top:8px; border-top:1px solid var(--line-soft); font-size:calc(var(--fs) * 14); }
   .checks > summary, .ck-notes > summary { cursor:pointer; list-style-position:outside; }
   .checks > summary { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 12px; }
-  .checks-title { font-size:calc(var(--fs) * 20); font-weight:700; color:var(--heading); }
-  .checks-sum { color:var(--muted); font-size:calc(var(--fs) * 15); }
+  .checks-title { font-size:calc(var(--fs) * 15); font-weight:700; }
+  .checks-sum { color:var(--muted); font-size:calc(var(--fs) * 14); }
   .checks-sum.has-issues { color:var(--badge-queued-fg); }
-  .checks .opt-hint { margin:10px 0 6px; }
-  .ck-head { margin:12px 0 4px; font-size:calc(var(--fs) * 16); }
+  .ck-hint { margin:6px 0 4px; color:var(--muted); font-size:calc(var(--fs) * 13); }
   .ck-list { list-style:none; margin:0; padding:0; }
   .ck-list > li { border-bottom:1px solid var(--line-soft); }
   .ck-list > li:last-child { border-bottom:0; }
-  .ck-list summary { display:flex; align-items:baseline; gap:4px 12px; flex-wrap:wrap; padding:7px 4px; cursor:pointer;
-                     font-size:calc(var(--fs) * 15); border-radius:var(--radius-sm); }
+  .ck-list summary { display:flex; align-items:baseline; gap:2px 10px; flex-wrap:wrap; padding:4px; cursor:pointer;
+                     font-size:calc(var(--fs) * 14); border-radius:var(--radius-sm); }
   .ck-list summary:hover { background:var(--hover); }
   .ck-year { color:var(--muted); font-variant-numeric:tabular-nums; }
   .ck-label { font-weight:600; }
-  .ck-where { flex:1; min-width:140px; color:var(--muted); font-size:calc(var(--fs) * 14); }
-  .ck-badge { padding:1px 8px; border-radius:999px; font-size:calc(var(--fs) * 13); white-space:nowrap; }
+  .ck-where { flex:1; min-width:140px; color:var(--muted); font-size:calc(var(--fs) * 13);
+               overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ck-badge { padding:0 7px; border-radius:999px; font-size:calc(var(--fs) * 12); white-space:nowrap; }
   .ck-badge.mismatch { background:var(--badge-queued-bg); color:var(--badge-queued-fg); }
   .ck-badge.incomplete { background:var(--badge-idle-bg); color:var(--badge-idle-fg); }
-  table.ck-table { margin:2px 0 10px; }
+  table.ck-table { margin:0 0 8px; font-size:calc(var(--fs) * 13); }
+  table.ck-table td { padding:4px 8px; }
   table.ck-table td:first-child { width:1.5em; text-align:center; color:var(--muted); }
   table.ck-table td:nth-child(2) { text-align:left; white-space:normal; }
   table.ck-table tr.ck-sum td { font-weight:700; border-bottom:0; }
   table.ck-table tr.muted td { color:var(--muted); }
-  .ck-notes { margin-top:10px; }
-  .ck-notes > summary { color:var(--muted); font-size:calc(var(--fs) * 15); padding:4px 0; }
+  .ck-notes { margin-top:6px; }
+  .ck-notes > summary { color:var(--muted); font-size:calc(var(--fs) * 14); padding:2px 0; }
 
   /* Download dialog: what goes in the zip. */
   .opt.dl { width:min(660px, 100%); height:auto; max-height:min(720px, calc(100vh - 32px)); }
@@ -826,7 +805,15 @@
         <button id="tab-screener" onclick="showTab('screener')">Screener</button>
         <button id="tab-simulation" onclick="showTab('simulation')">Simulation</button>
         <button id="tab-news" onclick="showTab('news')">News</button>
-        <button id="tab-logs" onclick="showTab('logs')" hidden>Logs</button>
+        <button id="tab-logs" class="tab-icon" onclick="showTab('logs')" title="Logs" aria-label="Logs">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
+              <rect x="3" y="4.5" width="18" height="15" rx="2.5" fill="currentColor" opacity=".2" stroke="none" />
+              <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
+              <path d="M7 9.5l3 2.5l-3 2.5M12.5 15H17" />
+            </g>
+          </svg>
+        </button>
       </nav>
       <button id="tab-recent" class="tab-icon nav-btn" onclick="showTab('recent')"
               title="Recent runs" aria-label="Recent runs">
@@ -919,18 +906,6 @@
       <div class="panel-head">
         <span class="panel-title">Charts</span>
         <span class="panel-actions">
-          <span class="view-seg" id="view-seg" role="radiogroup" aria-label="Chart layout" hidden>
-            <button data-view="full" role="radio" onclick="setChartView('full')" title="One chart per row" aria-label="One chart per row">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
-                <rect x="3.5" y="4" width="17" height="7" rx="1.5" fill="currentColor" fill-opacity=".2" /><rect x="3.5" y="13" width="17" height="7" rx="1.5" /></g></svg>
-            </button>
-            <button data-view="grid" role="radio" onclick="setChartView('grid')" title="Grid of charts" aria-label="Grid of charts">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
-                <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" fill="currentColor" fill-opacity=".2" /><rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
-                <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" /><rect x="13.5" y="13.5" width="7" height="7" rx="1.5" /></g></svg>
-            </button>
-          </span>
-          <span class="head-sep" id="view-sep" hidden></span>
           <span id="graph-state"></span>
           <button class="panel-btn icon-btn" id="graph-download-btn" hidden onclick="downloadGraph()"
                   title="Download charts and data (.zip)" aria-label="Download charts and data">
@@ -1043,7 +1018,7 @@
   </section>
 
   <!-- Recent tab -->
-  <!-- Logs tab: a run's whole log, then what this page asked the server for. -->
+  <!-- Logs tab: a run's whole log, live while it runs. -->
   <section id="pane-logs" class="hidden">
     <section class="panel">
       <div class="panel-head">
@@ -1060,14 +1035,10 @@
         </span>
       </div>
       <div class="panel-body">
-        <h3 class="logs-h">Run</h3>
         <p class="muted" id="logs-meta"></p>
         <div class="term-body logs-term" id="term-body">
           <pre id="term-log" class="term-log" role="log" aria-live="polite"></pre>
         </div>
-        <h3 class="logs-h">This page</h3>
-        <p class="muted">What the page asked the server for since it loaded, newest first, with the time each took.</p>
-        <ol id="activity-log" class="activity"></ol>
       </div>
     </section>
   </section>
@@ -1284,15 +1255,6 @@
           <div class="opt-row" data-search="start open startup landing first default tab page">
             <label for="pref-tab">Tab on open</label>
             <select id="pref-tab" class="opt-select" onchange="setPref('tab', this.value)"></select>
-          </div>
-          <div class="opt-row" data-search="logs log tab status progress debug pipeline">
-            <span class="opt-label" id="pref-logs-label">Logs tab</span>
-            <p class="opt-hint">The full log of each run and what the page is loading. Hidden, it still opens from
-              a running badge or <code>/#logs</code>.</p>
-            <div class="seg" id="pref-logs" role="group" aria-labelledby="pref-logs-label">
-              <button data-value="on" onclick="setPref('logsTab', 'on')">Show</button>
-              <button data-value="off" onclick="setPref('logsTab', 'off')">Hide</button>
-            </div>
           </div>
           <div class="opt-row" data-search="tabs order arrange move sort reorder">
             <span class="opt-label">Tab order</span>
@@ -1512,14 +1474,9 @@ window.addEventListener('unhandledrejection', e =>
 {
   const nativeFetch = window.fetch.bind(window);
   window.fetch = async (url, options = {}) => {
-    const quiet = options.headers && options.headers['X-Quiet'];
-    const entry = quiet || typeof activityStart !== 'function' ? null : activityStart(url, options.method || 'GET');
     try {
-      const res = await nativeFetch(url, options);
-      activityEnd(entry, res.ok, res.ok ? '' : `HTTP ${res.status}`);
-      return res;
+      return await nativeFetch(url, options);
     } catch (err) {
-      activityEnd(entry, false, err.name === 'AbortError' ? 'cancelled' : 'no answer');
       if (err.name !== 'AbortError') reportDiag(`fetch failed: ${options.method || 'GET'} ${url}`, err.message);
       throw err;
     }
@@ -1561,8 +1518,6 @@ const TICKER_RE = /^[A-Z][A-Z0-9.\-]{0,9}$/;
 // The Charts tab shows one pinned ticker. It survives reloads and cancel, and
 // changes only when a single ticker is run or opened, or it is removed.
 const GRAPH = { ticker: '', state: '', results: null };
-let CHART_VIEW = 'full';
-try { CHART_VIEW = localStorage.getItem('stocky-chart-view') || 'full'; } catch {}
 try {
   const saved = localStorage.getItem('stocky-graph') || '';
   if (TICKER_RE.test(saved)) GRAPH.ticker = saved;
@@ -1575,7 +1530,7 @@ const LIVE = {};
 const TAB_NAMES = { home: 'Home', graph: 'Charts', insiders: 'Insiders', screener: 'Screener',
                     simulation: 'Simulation', news: 'News', logs: 'Logs' };
 const PREF_DEFAULTS = {
-  tab: 'home', tabOrder: ['home', 'graph', 'insiders', 'screener', 'simulation', 'news', 'logs'], logsTab: 'off',
+  tab: 'home', tabOrder: ['home', 'graph', 'insiders', 'screener', 'simulation', 'news', 'logs'],
   filings: '20', textSize: '1', date: 'dmy', number: 'en-US',
   insiderMonths: 12, simAmount: 1000, simYears: 4, simMode: 'cash', simRange: '1y',
   newsLimit: 20, newsDays: 14,
@@ -1584,7 +1539,7 @@ const PREF_CHOICES = {
   tab: Object.keys(TAB_NAMES), filings: ['3', '5', '10', '20'], textSize: ['0.88', '1', '1.12', '1.25'],
   date: ['dmy', 'mdy', 'ymd'], number: ['en-US', 'de-DE', 'fr-FR'], insiderMonths: [1, 3, 6, 12, 24, 36],
   simMode: ['cash', 'reinvest'], simRange: ['1mo', '4mo', '6mo', '1y', '3y', '5y', '10y', 'max'],
-  newsLimit: [20, 30, 40, 50], newsDays: [1, 7, 14, 30], logsTab: ['on', 'off'],
+  newsLimit: [20, 30, 40, 50], newsDays: [1, 7, 14, 30],
 };
 const PREFS = { ...PREF_DEFAULTS };
 try {
@@ -1614,10 +1569,9 @@ function applyPrefs(changed = '') {
     document.documentElement.style.setProperty('--fs', PREFS.textSize + 'px');
     if (SIM.data) renderSimulation();
   }
-  if (all || changed === 'tabOrder' || changed === 'logsTab') {
+  if (all || changed === 'tabOrder') {
     const strip = $('.tabs');
     for (const tab of PREFS.tabOrder) strip.appendChild($(`#tab-${tab}`));
-    $('#tab-logs').hidden = PREFS.logsTab !== 'on';
     syncTabFades();
   }
   if (all || changed === 'filings') $('#filings').value = PREFS.filings;
@@ -1642,13 +1596,10 @@ function applyPrefs(changed = '') {
 }
 
 function syncPrefControls() {
-  const shownTabs = PREFS.tabOrder.filter(tab => tab !== 'logs' || PREFS.logsTab === 'on');
-  $('#pref-tab').innerHTML = shownTabs.map(tab =>
+  $('#pref-tab').innerHTML = PREFS.tabOrder.map(tab =>
     `<option value="${tab}">${TAB_NAMES[tab]}</option>`).join('');
   $('#pref-tab').value = PREFS.tab;
-  document.querySelectorAll('#pref-logs button').forEach(button =>
-    button.classList.toggle('active', button.dataset.value === PREFS.logsTab));
-  $('#pref-order').innerHTML = PREFS.tabOrder.map((tab, i) => `<li${tab === 'logs' && PREFS.logsTab !== 'on' ? ' class="muted"' : ''}><span>${TAB_NAMES[tab]}</span>
+  $('#pref-order').innerHTML = PREFS.tabOrder.map((tab, i) => `<li><span>${TAB_NAMES[tab]}</span>
       <button onclick="moveTab(${i}, -1)" ${i ? '' : 'disabled'} title="Move up" aria-label="Move ${TAB_NAMES[tab]} earlier">↑</button>
       <button onclick="moveTab(${i}, 1)" ${i < PREFS.tabOrder.length - 1 ? '' : 'disabled'} title="Move down" aria-label="Move ${TAB_NAMES[tab]} later">↓</button></li>`).join('');
   $('#pref-filings').value = PREFS.filings;
@@ -2149,11 +2100,9 @@ function suggestTickers() {
 }
 
 /* Logs tab ------------------------------------------------------------------ */
-// Optional (Options → General), hidden by default; /#logs and the live status
-// badges open it anyway. Two parts: the whole log of one run, timestamped and
-// polled while it runs, and what this page itself asked the server for.
+// The terminal icon in the tab row (/#logs; the live status badges open it
+// too): the whole log of one run, timestamped and polled while it runs.
 const LOGS = { ticker: '', timer: null, text: '' };
-const ACTIVITY = [];
 const logsTicker = () => LOGS.ticker || ACTIVE_TICKER || GRAPH.ticker;
 
 // The run log, coloured: the time dim, successes green, warnings red. The
@@ -2180,9 +2129,8 @@ function openLogs(ticker = '') {
 
 async function initLogs() {
   if (!LOGS.ticker) LOGS.ticker = ACTIVE_TICKER || GRAPH.ticker;
-  renderActivity();
   try {
-    const res = await fetch('/api/recent', { headers: { 'X-Quiet': '1' } });
+    const res = await fetch('/api/recent');
     const items = res.ok ? (await res.json()).items || [] : [];
     const tickers = [...new Set([LOGS.ticker, ACTIVE_TICKER, GRAPH.ticker, ...items.map(item => item.ticker)].filter(Boolean))];
     $('#logs-run').innerHTML = tickers.length
@@ -2208,7 +2156,7 @@ async function loadLogs() {
     return;
   }
   try {
-    const res = await fetch(`/api/status/${encodeURIComponent(ticker)}?full=1`, { headers: { 'X-Quiet': '1' } });
+    const res = await fetch(`/api/status/${encodeURIComponent(ticker)}?full=1`);
     const job = await res.json();
     if (ticker !== logsTicker()) return;
     const live = job.status === 'queued' || job.status === 'running';
@@ -2216,7 +2164,8 @@ async function loadLogs() {
     $('#logs-state').innerHTML = `<span class="badge ${esc(cls)}">${esc(job.status)}</span>`;
     $('#logs-meta').textContent = live ? `${ticker}: the log updates as the run goes.`
       : job.status === 'idle' ? `${ticker} has not been run yet.` : `${ticker}: the last run's log.`;
-    setTermLog(job.log || (job.status === 'queued' ? 'Waiting for the run before it to finish…' : ''), ticker);
+    setTermLog(job.log || (job.status === 'queued' ? 'Waiting for the run before it to finish…'
+      : 'No log saved for this run.'), ticker);
     if (job.error) setTermLog(`${job.log || ''}\nerror: ${job.error}`, ticker);
     // Poll while it runs and the tab is open.
     if (live && !$('#pane-logs').classList.contains('hidden')) LOGS.timer = setTimeout(loadLogs, 1500);
@@ -2228,60 +2177,6 @@ async function loadLogs() {
 function downloadLog() {
   const ticker = logsTicker();
   if (ticker) location.href = `/download/${encodeURIComponent(ticker)}/run.log`;
-}
-
-// What the page asks the server for, in words, with how long it took.
-// Polling and bookkeeping requests are left out (and any sent with X-Quiet).
-const ACTIVITY_RULES = [
-  [/^\/api\/news\/([^/?]+)\?(?=.*scope=market)/, m => `Looking for market and sector news (${m[1]})`],
-  [/^\/api\/news\/([^/?]+)/, m => `Looking for news about ${m[1]} (Google News)`],
-  [/^\/api\/insiders\/([^/?]+)/, m => `Fetching the insider trades of ${m[1]}`],
-  [/^\/api\/charts\/([^/?]+)/, m => `Loading the chart data of ${m[1]}`],
-  [/^\/api\/facts\/([^/?]+)/, m => `Loading every fact of ${m[1]} for the search`],
-  [/^\/api\/checks\/([^/?]+)/, m => `Loading the calculation check of ${m[1]}`],
-  [/^\/api\/files\/([^/?]+)/, m => `Reading the run files of ${m[1]}`],
-  [/^\/api\/simulation\/([^/?]+)/, m => `Fetching the price history of ${m[1]} (Yahoo Finance)`],
-  [/^\/api\/fundamentals\/([^/?]+)/, m => `Reading the fundamentals of ${m[1]}`],
-  [/^\/api\/evaluation\/([^/?]+)/, m => `Reading the valuation of ${m[1]}`],
-  [/^\/api\/screener$/, (m, method) => method === 'POST' ? 'Queuing the screener runs' : 'Loading the screener'],
-  [/^\/api\/run$/, () => 'Starting a run'],
-  [/^\/api\/cancel$/, () => 'Cancelling the runs'],
-  [/^\/api\/recent$/, () => 'Listing your runs'],
-  [/^\/download\/([^/?]+)\/all\?(.*)/, m => /charts=[^&]/.test(m[2])
-    ? `Packing the download of ${m[1]}: drawing the chart PNGs (the first time takes a few seconds)`
-    : `Packing the download of ${m[1]}`],
-];
-
-function activityStart(url, method) {
-  const path = String(url).replace(location.origin, '');
-  for (const [pattern, describe] of ACTIVITY_RULES) {
-    const match = path.match(pattern);
-    if (!match) continue;
-    const entry = { at: new Date(), text: describe(match.map(part => decodeURIComponent(part || '')), method), ms: null, ok: null };
-    ACTIVITY.unshift(entry);
-    ACTIVITY.length = Math.min(ACTIVITY.length, 200);
-    renderActivity();
-    return entry;
-  }
-  return null;
-}
-
-function activityEnd(entry, ok, note = '') {
-  if (!entry) return;
-  entry.ms = Date.now() - entry.at.getTime();
-  entry.ok = ok;
-  entry.note = note;
-  renderActivity();
-}
-
-function renderActivity() {
-  if ($('#pane-logs').classList.contains('hidden')) return;
-  const time = date => date.toTimeString().slice(0, 8);
-  $('#activity-log').innerHTML = ACTIVITY.length ? ACTIVITY.map(entry => `<li>
-      <time>${time(entry.at)}</time><span class="act-text">${esc(entry.text)}</span>
-      <span class="act-state ${entry.ok === null ? 'busy' : entry.ok ? 'ok' : 'bad'}">${entry.ok === null ? 'working…'
-        : `${entry.ok ? 'done' : esc(entry.note || 'failed')} · ${(entry.ms / 1000).toFixed(1)} s`}</span></li>`).join('')
-    : '<li class="muted">Nothing yet. Open a tab or a ticker and its requests show here.</li>';
 }
 
 /* Charts tab --------------------------------------------------------------- */
@@ -2316,16 +2211,7 @@ function renderGraph() {
     ? (live ? `<a class="badge ${esc(cls)} badge-link" href="#logs" title="Open the log"
          onclick="openLogs('${esc(ticker)}');return false">${esc(state)}</a>`
       : `<span class="badge ${esc(cls)}">${esc(state)}</span>`) : '';
-  syncChartView();
   renderHome();
-}
-
-function syncChartView() {
-  const shown = !!(GRAPH.ticker && GRAPH.results);
-  $('#view-seg').hidden = !shown;
-  $('#view-sep').hidden = !shown;
-  document.querySelectorAll('#view-seg button').forEach(button =>
-    button.setAttribute('aria-checked', String(button.dataset.view === (CHART_VIEW === 'grid' ? 'grid' : 'full'))));
 }
 
 function setGraphProgress(text, isError = false) {
@@ -2796,7 +2682,6 @@ async function renderResults(data, target) {
   const token = ++RENDER_TOKEN;
   GRAPH.results = null;
   $('#chart-index').innerHTML = '';
-  syncChartView();
   $('#calc-checks').innerHTML = '';
   if (!data.charts.length) {
     disposeCharts($(target));
@@ -2822,14 +2707,12 @@ async function renderResults(data, target) {
     return;
   }
   const custom = EC.custom.filter(c => c.ticker === data.ticker);
-  const view = CHART_VIEW === 'grid' ? 'grid' : 'charts-full';
-  $(target).innerHTML = `<div class="${view}">${custom.map(c => figureHtml(c, true)).join('')}${spec.charts.map(c => figureHtml(c)).join('')}</div>`;
+  $(target).innerHTML = `<div class="charts-full">${custom.map(c => figureHtml(c, true)).join('')}${spec.charts.map(c => figureHtml(c)).join('')}</div>`;
   mountCharts($(target), [...custom, ...spec.charts]);
   $('#chart-index').innerHTML = chartIndex();
   $('#chart-search').hidden = false;
   loadChecks(data);
   fillSearchYears(spec);
-  syncChartView();
   renderHome();
 }
 
@@ -2842,12 +2725,6 @@ function chartIndex() {
 function jumpToChart(event, id) {
   event.preventDefault();
   scrollToChart(id);
-}
-
-function setChartView(view) {
-  CHART_VIEW = view;
-  try { localStorage.setItem('stocky-chart-view', view); } catch {}
-  if (GRAPH.results) renderResults(GRAPH.results, '#results-graph');
 }
 
 /* Charts: ECharts ------------------------------------------------------------ */
@@ -3058,7 +2935,12 @@ function panelOption(panel, t, { mini = false, width = 800 } = {}) {
   if (zoom) {
     option.dataZoom = [{
       type: 'slider', xAxisIndex: 0, startValue: years.length - visible, endValue: years.length - 1,
-      minValueSpan: 1, bottom: 10, height: 24, left: 44, right: 44, throttle: 30,
+      minValueSpan: 1, bottom: 10, height: 24, left: 44, right: 44, throttle: 16,
+      // Years off the window stay in the data, so a line runs on to the plot's
+      // edge toward them and shows where it comes from and where it goes.
+      filterMode: 'none',
+      // The subtitle names the years; labels at the handles would sit on the arrows.
+      showDetail: false,
       brushSelect: false, borderColor: t.line, borderRadius: 6,
       backgroundColor: 'transparent', fillerColor: t.soft,
       dataBackground: { lineStyle: { color: t.lineStrong, opacity: 0.6 }, areaStyle: { color: t.lineStrong, opacity: 0.12 } },
@@ -3069,7 +2951,8 @@ function panelOption(panel, t, { mini = false, width = 800 } = {}) {
     }];
     // Drag to pan and ctrl+wheel to zoom with a mouse; touch keeps scrolling the page.
     if (FINE_POINTER) option.dataZoom.push({ type: 'inside', xAxisIndex: 0, zoomOnMouseWheel: 'ctrl',
-                                             moveOnMouseWheel: 'shift', moveOnMouseMove: true, throttle: 30 });
+                                             moveOnMouseWheel: 'shift', moveOnMouseMove: true, throttle: 16,
+                                             filterMode: 'none' });
   }
   return { option, index };
 }
@@ -3171,16 +3054,14 @@ function drawEntry(entry) {
   entry.inst.setOption(option);
   entry.index = index;
   if (entry.mini) return;
-  // The axis follows the years on show, once per frame however fast the slider moves.
+  // The subtitle and arrows follow the window at once. The axis rescales when
+  // the drag ends: a setOption while the handle is held breaks the drag and
+  // made it stutter. The arrows (no pointer held) rescale straight away.
   entry.inst.on('datazoom', () => {
-    if (entry.frame) return;
-    entry.frame = requestAnimationFrame(() => {
-      entry.frame = 0;
-      const [from, to] = zoomRange(entry);
-      entry.inst.setOption({ yAxis: yBounds(entry.panel, from, to) }, { lazyUpdate: true });
-      updateSpan(entry);
-      syncSteps(entry);
-    });
+    updateSpan(entry);
+    syncSteps(entry);
+    if (POINTER_DOWN) PENDING_RESCALE.add(entry);
+    else rescale(entry);
   });
   entry.inst.on('legendselectchanged', event => {
     for (const key of entry.head.querySelectorAll('.ec-key')) {
@@ -3189,6 +3070,23 @@ function drawEntry(entry) {
   });
   updateSpan(entry);
   syncSteps(entry);
+}
+
+let POINTER_DOWN = false;
+const PENDING_RESCALE = new Set();
+document.addEventListener('pointerdown', () => { POINTER_DOWN = true; }, true);
+for (const type of ['pointerup', 'pointercancel']) {
+  document.addEventListener(type, () => {
+    POINTER_DOWN = false;
+    for (const entry of PENDING_RESCALE) rescale(entry);
+    PENDING_RESCALE.clear();
+  }, true);
+}
+
+function rescale(entry) {
+  if (!entry.inst) return;
+  const [from, to] = zoomRange(entry);
+  entry.inst.setOption({ yAxis: yBounds(entry.panel, from, to) });
 }
 
 // The arrows beside the slider: shown when the chart scrolls, off at either end.
@@ -3581,11 +3479,9 @@ function renderChecks() {
     <details class="checks">
       <summary><span class="checks-title">Calculation check</span>
         <span class="checks-sum ${st.mismatch ? 'has-issues' : ''}">${esc(parts.join(' · '))}</span></summary>
-      <p class="opt-hint">Every total in the ${esc(data.filings)} filings' calculation linkbase against the sum of its
-        parts. <b>Off by</b>: every part has a value and the sum still differs, so a line is tagged in an unexpected
-        way or missing. <b>Untagged parts</b>: some parts have no plain value that year (tagged only per segment or
-        tranche), so the sum cannot close. Open a row for its parts.</p>
-      <h4 class="ck-head">Statements</h4>
+      <p class="ck-hint">Each total in the ${esc(data.filings)} filings' calculation linkbase against the sum of
+        its parts. <b>Off by</b>: the parts all have values and still differ. <b>Untagged parts</b>: some are
+        only tagged per segment, so the sum cannot close.</p>
       ${list(issues('statement'))}
       <details class="ck-notes"><summary>Notes: ${note.ok} of ${note.totals} totals add up</summary>
         ${list(issues('note'))}</details>
