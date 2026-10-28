@@ -12,9 +12,14 @@ extract the XBRL financial data, and write it as CSV. The command line writes
 into `financial_graphs/`; the web app keeps each user's results apart under
 `data/users/<id>/`.
 The run form accepts 3, 5, 10 or 20 filings; the API accepts any value 1–20.
-Charts are rendered as PNGs next to the CSVs; `--no-charts` skips them. They
-use the app's own font (Ubuntu Mono, bundled in `static/fonts` under the Ubuntu
-Font Licence) and colours, with no frame and only faint horizontal gridlines.
+Charts are written as data, `charts.json` (one spec per chart: years, series,
+colours, formats, axes); `--no-charts` skips them. The web app draws the specs
+with ECharts (bundled in `static/vendor`), with a years slider under each chart
+covering the whole history; PNGs of the same specs are drawn by matplotlib only
+when they are downloaded, in windows of 5 or 10 years or one wide image, light
+or dark. Both use the app's own font (Ubuntu Mono, bundled in `static/fonts`
+under the Ubuntu Font Licence) and colours, with no frame and only faint
+horizontal gridlines.
 
 ## Setup
 
@@ -57,8 +62,9 @@ financial_graphs/
 │   ├── statements.csv       # every dimension-free primary-statement line
 │   ├── facts.csv            # every fact for each period, dimensions included
 │   ├── notes.csv            # key schedules: debt, segments, EPS, taxes, shares
-│   ├── 01_…png … 08_…png    # charts (light)
-│   └── dark/                # the same charts drawn for dark mode
+│   ├── charts.json          # the charts as specs (drawn by the page)
+│   ├── data_quality.csv     # per chart value: reported, derived or missing
+│   └── .png_cache/          # web app only: PNGs drawn by a download, until the next run
 ├── AAPL/   # same CSVs
 └── MSFT/   # same CSVs
 ```
@@ -81,8 +87,11 @@ and valuation is skipped with a warning. `insider.json` (from `insider.py`)
 lists every open-market Form 4 buy and sell (codes `P` and `S`) in the last 6
 months — no transaction cap. Both steps are fail-soft, and the trades have
 their own **Insiders** tab.
-`charts.py` renders them as `08_valuation.png` — P/E history against its median,
+`charts.py` charts them as `08_valuation`: P/E history against its median,
 annotated with the percentile, plus F-score and Z-score bars.
+
+A run made before `charts.json` existed (PNGs only) is upgraded the first time
+it is opened: the spec is built from its CSVs and the old PNGs are removed.
 
 ```bash
 python edgar_dashboard.py --ticker NFLX
@@ -133,7 +142,9 @@ Routes:
 | `GET` | `/api/jobs` | Active jobs (with `charts` flag) + last screener batch |
 | `GET` | `/api/recent` | Tickers with results, newest first |
 | `DELETE` | `/api/recent/<ticker>` | Deletes that ticker's results folder |
-| `GET` | `/api/files/<ticker>` | Chart list for a ticker |
+| `GET` | `/api/files/<ticker>` | Chart ids and data files of a ticker's run |
+| `GET` | `/api/charts/<ticker>` | `charts.json`: every chart's spec, drawn by the page |
+| `GET` | `/api/facts/<ticker>` | Every statement line and plain fact of the filings' own periods (concept, label, unit, value per year), for the Charts search |
 | `GET` | `/api/evaluation/<ticker>` | `evaluation.csv` rows for one ticker |
 | `GET` | `/api/insiders/<ticker>` | `insider.json` trades for one ticker |
 | `GET` | `/api/news/<ticker>` | Recent articles (title, source, date, link) from Google News; `?limit=20\|30\|40\|50` (default 20), `?days=1\|7\|14\|30` (default 14), `?scope=company\|market` (default company; market adds `topic`), `?fresh=1` skips the 30-min cache |
@@ -142,8 +153,8 @@ Routes:
 | `GET` | `/api/screener` | Cached screener results, Greenblatt ranks |
 | `POST` | `/api/screener` | `{"tickers":[...],"filings":10}` (max 25) → data only, no charts |
 | `GET` | `/files/<ticker>/<name>` | View a chart inline |
-| `GET` | `/download/<ticker>` | Whole folder as a `.zip` |
-| `GET` | `/download/<ticker>/all` | Home's download: every file (dark charts too) plus `insiders.csv`, `news.csv`, `screener.csv` and a `_debug/` folder (see § Versions and bug reports); `?months=`, `?news_limit=`, `?news_days=` follow the tabs' options |
+| `GET` | `/download/<ticker>` | The charts (PNG, 5-year windows) and data files as a `.zip` |
+| `GET` | `/download/<ticker>/all` | The download dialog's zip: `?charts=` and `?files=` (comma-separated; absent = all), `?years=5\|10\|0` (years per chart image; 0 = one image), `?theme=light\|dark`, `?extras=` any of `insiders,news,screener,debug` (absent = all). Charts go in `charts/` as `<id>_<from>_<to>.png`; `?months=`, `?news_limit=`, `?news_days=` follow the tabs' options |
 | `GET` | `/download/<ticker>/<name>` | One file |
 | `GET` | `/healthz` | Health probe: version, commit, code hashes |
 | `POST` | `/api/diag` | Browser errors, for the diagnostics log (sent by the page itself) |
@@ -164,14 +175,18 @@ only place outside the Screener with stats), its spot in the screener's Magic
 Formula ranking with the two tickers above and below (names only, click one to
 switch to it), the top five market headlines (see the News tab below), the
 five latest insider trades (with a
-link to the Insiders tab), and one small thumbnail per chart type
-(the most recent year window) that opens in the Charts tab. Running a single
+link to the Insiders tab), and one small thumbnail per chart
+(its last five years) that opens in the Charts tab. Running a single
 ticker switches to Home; the run's progress and log are in the Charts tab.
 
 **Downloads.** Every tab has a download icon and downloads what it shows, with
-the options chosen there: **Home** a zip with everything for the ticker
-(`/download/<ticker>/all`) plus a `_debug/` folder for bug reports, **Charts** the run's folder as a zip (each chart
-also has its own download icon), **Insiders** a CSV of the trades in the
+the options chosen there. **Home** and **Charts** open a dialog with a checkbox
+per chart, per data file and per extra (insider trades, news, the screener row,
+a `_debug/` folder for bug reports), plus the years per image (5, 10 or all)
+and the theme of the PNGs. Home starts with everything ticked, Charts with
+what was ticked last time, and a chart's own download icon with just that
+chart. The PNGs are drawn on the first download of a run (a few seconds) and
+reused after that. **Insiders** a CSV of the trades in the
 chosen period and side (buys, sells or both), **Screener** a CSV with every field of every ticker in the
 current sort order, **News** a CSV of the listed articles (headline, outlet,
 date, link; no article text), **Simulation** a PNG of the price chart with the
@@ -185,7 +200,16 @@ then. The pipeline log is closed by default, even during a run: the line under
 the header shows its latest line while the run is queued or running, and the
 error if it fails. The **log** button opens it above the chart index, set apart
 by its own background and a rule. The chart index sits inside the Charts
-panel, one line per chart (year windows side by side); the layout switch
+panel, one line per chart. Each chart shows as many recent years as fit its
+width; the slider under it (or dragging the chart, ctrl+wheel to zoom) scrolls
+through every year, the axis rescales to the years on show and the subtitle
+names them. Hovering a year lists every value; legend keys hide and show a
+series. The **search** above the index looks for a fact (goodwill, buybacks,
+income taxes paid…) in the charted series and in every statement line and fact
+of the filings; pick a year beside it, or type it ("goodwill 2019"). A charted
+fact scrolls to its chart, slides that year into view and opens its values;
+any other shows its values per year, with **Draw as a chart** to chart it until
+the page is reloaded. The layout switch
 (one chart per row, as wide as the page column, or a grid) is the joined pair of buttons left of the other actions. **Several tickers** switch to screener mode:
 data only, no charts (`--no-charts`), and the pinned graph is left as is.
 Running a single ticker that is queued as a screener job upgrades it to a graph

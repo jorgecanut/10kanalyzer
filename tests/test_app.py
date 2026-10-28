@@ -20,7 +20,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import app  # noqa: E402
 
-# Stands in for edgar_dashboard.py: writes a chart unless --no-charts, and
+# A one-chart charts.json: seven years of one bar series.
+FAKE_SPEC = {"version": 1, "ticker": "AAA", "years": list(range(2019, 2026)), "charts": [{
+    "id": "01_fake", "name": "Fake", "panels": [{
+        "title": "AAA · Fake", "subtitle": "Fiscal years {span} · USD", "years": list(range(2019, 2026)),
+        "series": [{"label": "Revenue", "kind": "bar", "format": "mm", "axis": 0, "derived": False,
+                    "color": "#4c72b0", "concepts": ["Revenues"], "values": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]}],
+        "axes": [{"format": "money"}], "margin": 0.14, "note": None, "reference": None,
+        "empty": "No data for this window", "group_width": 0.8}]}]}
+
+# Stands in for edgar_dashboard.py: writes charts.json unless --no-charts, and
 # echoes its arguments and the SEC identity it was given into run.log.
 FAKE_DASHBOARD = textwrap.dedent("""
     import os, sys, time
@@ -28,10 +37,10 @@ FAKE_DASHBOARD = textwrap.dedent("""
     time.sleep(0.3)
     out, ticker = args[args.index("--output-dir") + 1], args[args.index("--ticker") + 1]
     if "--no-charts" not in args:
-        open(os.path.join(out, ticker, "01_fake.png"), "wb").write(b"png")
+        open(os.path.join(out, ticker, "charts.json"), "w").write(%r)
     print("ARGS", " ".join(args))
     print("IDENTITY", os.environ.get("EDGAR_IDENTITY"))
-""")
+""") % json.dumps(FAKE_SPEC)
 
 PASSWORD = "correct horse"
 
@@ -277,8 +286,6 @@ class DownloadAllTests(FakeNewsCase):
         self.client.post("/api/run", json={"ticker": "AAA", "filings": 3})
         self.wait_idle("AAA")
         folder = app._ticker_dir("AAA", self.uid())
-        (folder / "dark").mkdir(exist_ok=True)
-        (folder / "dark" / "01_fake.png").write_bytes(b"png")
         (folder / "evaluation.csv").write_text("fiscal_year,pe,f_score\n2025,12.5,7\n")
         (folder / "insider.json").write_text(json.dumps({"generated": "2026-10-01", "transactions": [
             {"date": "2026-09-01", "name": "Jane Doe", "type": "buy", "shares": 10, "value": 100.0},
@@ -294,15 +301,51 @@ class DownloadAllTests(FakeNewsCase):
     def test_zip_holds_every_file_plus_insiders_news_and_screener(self):
         self.make_results()
         bundle, names = self.zip_names("/download/AAA/all?months=12&news_limit=30&news_days=7")
-        for name in ("01_fake.png", "dark/01_fake.png", "insider.json", "evaluation.csv",
-                     "insiders.csv", "news.csv", "screener.csv"):
+        for name in ("charts/01_fake_2019_2023.png", "charts/01_fake_2024_2025.png", "charts.json",
+                     "insider.json", "evaluation.csv", "insiders.csv", "news.csv", "screener.csv"):
             self.assertIn(f"AAA/{name}", names)
+        self.assertTrue(bundle.read("AAA/charts/01_fake_2019_2023.png").startswith(b"\x89PNG"))
         insiders = bundle.read("AAA/insiders.csv").decode()
         self.assertIn("Jane Doe", insiders)
         self.assertNotIn("Old Trade", insiders)      # outside the chosen 12 months
         self.assertEqual(bundle.read("AAA/news.csv").decode().count("example.com"), 30)
         self.assertEqual(self.fake.calls, [('"Acme"', 7, 30)])
         self.assertIn("12.5", bundle.read("AAA/screener.csv").decode())
+
+    def test_zip_holds_only_what_was_ticked(self):
+        self.make_results()
+        _, names = self.zip_names(
+            "/download/AAA/all?charts=01_fake&years=0&theme=dark&files=evaluation.csv&extras=insiders")
+        self.assertEqual(names, {"AAA/charts/01_fake_2019_2025.png", "AAA/evaluation.csv", "AAA/insiders.csv"})
+        self.assertEqual(self.fake.calls, [])            # news was not ticked: never fetched
+        _, names = self.zip_names("/download/AAA/all?charts=&files=run.log&extras=")
+        self.assertEqual(names, {"AAA/run.log"})
+        _, names = self.zip_names("/download/AAA/all?charts=01_fake&years=10&files=&extras=")
+        self.assertEqual(names, {"AAA/charts/01_fake_2019_2025.png"})
+
+    def test_zip_refuses_bad_choices_and_empty_selections(self):
+        self.make_results()
+        self.assertEqual(self.client.get("/download/AAA/all?years=7").status_code, 400)
+        self.assertEqual(self.client.get("/download/AAA/all?theme=blue").status_code, 400)
+        self.assertEqual(self.client.get("/download/AAA/all?charts=&files=&extras=").status_code, 400)
+
+    def test_chart_images_are_drawn_once_per_run(self):
+        self.make_results()
+        self.zip_names("/download/AAA/all?charts=01_fake&files=&extras=")
+        folder = app._ticker_dir("AAA", self.uid())
+        cached = folder / ".png_cache" / "light-5" / "01_fake_2019_2023.png"
+        self.assertTrue(cached.is_file())
+        stamp = cached.stat().st_mtime_ns
+        self.zip_names("/download/AAA/all?charts=01_fake&files=&extras=")
+        self.assertEqual(cached.stat().st_mtime_ns, stamp)
+        self.assertNotIn(".png_cache", self.client.get("/api/files/AAA").get_json()["files"])
+
+    def test_recent_download_has_charts_and_files_but_no_extras(self):
+        self.make_results()
+        _, names = self.zip_names("/download/AAA")
+        self.assertIn("AAA/charts/01_fake_2019_2023.png", names)
+        self.assertIn("AAA/evaluation.csv", names)
+        self.assertFalse(any(name.startswith("_debug/") or name.endswith("news.csv") for name in names))
 
     def test_zip_skips_news_when_google_is_unreachable(self):
         self.make_results()
@@ -333,6 +376,61 @@ class DownloadAllTests(FakeNewsCase):
         self.assertIn("/api/files/NOPE", diag[1]["message"])
         self.assertIn("ARGS", bundle.read("_debug/runs/AAA.log").decode())
         self.assertNotIn(self.uid(), bundle.read("_debug/jobs.json").decode())
+
+
+class ChartSpecTests(AppTestCase):
+    def test_spec_is_served_and_listed(self):
+        self.client.post("/api/run", json={"ticker": "AAA", "filings": 3})
+        self.wait_idle("AAA")
+        self.assertEqual(self.client.get("/api/charts/AAA").get_json()["charts"][0]["id"], "01_fake")
+        summary = self.client.get("/api/files/AAA").get_json()
+        self.assertEqual(summary["charts"], ["01_fake"])
+        self.assertIn("charts.json", summary["files"])
+        self.assertNotIn("run.json", summary["files"])
+        self.assertEqual(self.client.get("/api/charts/ZZZ").status_code, 404)
+
+    def test_run_from_before_charts_json_is_upgraded_from_its_csvs(self):
+        folder = app._ticker_dir("OLD", self.uid())
+        folder.mkdir(parents=True)
+        (folder / "01_income_statement_2024_2025.png").write_bytes(b"png")
+        (folder / "financial_data.csv").write_text(
+            "fiscal_year,Revenues,NetIncomeLoss\n2024,1000.0,100.0\n2025,1200.0,150.0\n")
+        spec = self.client.get("/api/charts/OLD").get_json()
+        income = next(chart for chart in spec["charts"] if chart["id"] == "01_income_statement")
+        revenue = next(s for s in income["panels"][0]["series"] if s["label"] == "Revenue")
+        self.assertEqual(revenue["values"], [1000.0, 1200.0])
+        self.assertFalse((folder / "01_income_statement_2024_2025.png").exists())   # stale image gone
+
+    def test_screener_run_has_no_charts(self):
+        folder = app._ticker_dir("SCR", self.uid())
+        folder.mkdir(parents=True)
+        (folder / "financial_data.csv").write_text("fiscal_year,Revenues\n2025,1.0\n")
+        self.assertEqual(self.client.get("/api/charts/SCR").status_code, 404)
+        self.assertFalse((folder / "charts.json").exists())
+
+    def test_fact_index_has_statement_lines_and_other_facts_of_the_own_period(self):
+        folder = app._ticker_dir("FCT", self.uid())
+        folder.mkdir(parents=True)
+        (folder / "statements.csv").write_text(
+            "statement,concept,standard_concept,label,value,fiscal_year\n"
+            "balance,us-gaap_Goodwill,Goodwill,Goodwill,5000000.0,2024\n"
+            "balance,us-gaap_Goodwill,Goodwill,Goodwill,6000000.0,2025\n")
+        (folder / "facts.csv").write_text(
+            "period_of_report,concept,label,value,unit,period_end,period_instant,is_dimensioned,"
+            "statement_type,fiscal_year\n"
+            "2025-12-31,us-gaap:Goodwill,Goodwill,6000000,USD,,2025-12-31,False,BalanceSheet,2025\n"
+            "2025-12-31,us-gaap:GoodwillImpairmentLoss,Goodwill impairment,300000,USD,2025-12-31,,False,"
+            "Disclosures,2025\n"
+            "2025-12-31,us-gaap:GoodwillImpairmentLoss,Goodwill impairment,999,USD,2024-12-31,,False,"
+            "Disclosures,2025\n"
+            "2025-12-31,us-gaap:GoodwillImpairmentLoss,Goodwill impairment,111,USD,2025-12-31,,True,"
+            "Disclosures,2025\n")
+        facts = self.client.get("/api/facts/FCT").get_json()["facts"]
+        self.assertEqual([f["concept"] for f in facts], ["Goodwill", "GoodwillImpairmentLoss"])
+        self.assertEqual(facts[0]["values"], {"2024": 5000000.0, "2025": 6000000.0})
+        self.assertEqual(facts[1]["values"], {"2025": 300000.0})      # not the comparative, not the segment
+        self.assertEqual(facts[1]["unit"], "usd")
+        self.assertEqual(self.client.get("/api/facts/NONE").status_code, 404)
 
 
 class DiagnosticsTests(AppTestCase):

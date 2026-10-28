@@ -695,9 +695,10 @@ def main() -> None:
         print(f"\n[+] Done. CSV data written to '{os.path.abspath(OUTPUT_DIR)}/'.")
         return
 
-    print("[*] Rendering charts")
+    # charts.json only: the page draws it, and PNGs are drawn when downloaded.
+    print("[*] Building charts")
     rendered = charts.render_all(TICKER, OUTPUT_DIR, df, statements, facts)
-    print(f"    [+] {len(rendered)} charts written")
+    print(f"    [+] {len(rendered)} charts written to charts.json")
 
     print(f"\n[+] Done. {len(rendered)} charts and CSV data written to '{os.path.abspath(OUTPUT_DIR)}/'.")
 
