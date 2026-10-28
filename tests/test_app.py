@@ -281,6 +281,73 @@ class NewsTests(FakeNewsCase):
         self.assertEqual(self.fake.calls, [])
 
 
+class SavedNewsTests(AppTestCase):
+    ARTICLE = {"link": "https://example.com/1", "title": "Story  one", "source": "Wire",
+               "published": "2026-10-01T00:00:00+00:00", "ticker": "aaa"}
+
+    def test_save_list_and_remove(self):
+        self.assertEqual(self.client.get("/api/saved-news").get_json()["articles"], [])
+        saved = self.client.post("/api/saved-news", json=self.ARTICLE).get_json()["articles"]
+        self.assertEqual([(a["title"], a["ticker"]) for a in saved], [("Story one", "AAA")])
+        # Saving the same link again keeps one copy.
+        self.assertEqual(len(self.client.post("/api/saved-news", json=self.ARTICLE).get_json()["articles"]), 1)
+        left = self.client.delete("/api/saved-news?link=https://example.com/1").get_json()["articles"]
+        self.assertEqual(left, [])
+
+    def test_rejects_articles_without_https_link_or_title(self):
+        self.assertEqual(self.client.post("/api/saved-news", json={**self.ARTICLE, "link": "javascript:x"}).status_code, 400)
+        self.assertEqual(self.client.post("/api/saved-news", json={**self.ARTICLE, "title": " "}).status_code, 400)
+
+    def test_saved_articles_are_per_user(self):
+        self.client.post("/api/saved-news", json=self.ARTICLE)
+        bob = self.signup("Bob", "bob@example.com")
+        self.assertEqual(bob.get("/api/saved-news").get_json()["articles"], [])
+
+
+
+class EconomyNewsTests(AppTestCase):
+    def setUp(self):
+        super().setUp()
+        self._rss = app._rss
+        now = app.datetime.now(app.timezone.utc)
+        self.feeds = {
+            "CNBC": [("Fed holds rates", now - app.timedelta(hours=1)), ("Old story", now - app.timedelta(days=40))],
+            "MarketWatch": [("Jobs report beats", now - app.timedelta(hours=3)), ("Fed holds rates", now)],
+            "NPR": [("Inflation cools", now - app.timedelta(hours=2))],
+        }
+        self.failing = set()
+
+        def fake(url, source):
+            if source in self.failing:
+                raise app.URLError("offline")
+            return [{"title": t, "source": source, "link": f"https://{source.lower()}.example/{i}",
+                     "published": when.isoformat()} for i, (t, when) in enumerate(self.feeds[source])]
+        app._rss = fake
+        app._NEWS_CACHE.clear()
+
+    def tearDown(self):
+        app._rss = self._rss
+        app._NEWS_CACHE.clear()
+        super().tearDown()
+
+    def test_takes_turns_by_outlet_within_the_period_without_repeats(self):
+        data = self.client.get("/api/news-economy?days=7").get_json()
+        # MarketWatch's newest is CNBC's headline again, so its next story stands in.
+        self.assertEqual([(a["title"], a["source"]) for a in data["articles"]],
+                         [("Fed holds rates", "CNBC"), ("Jobs report beats", "MarketWatch"), ("Inflation cools", "NPR")])
+        self.assertEqual(data["failed"], [])
+
+    def test_one_outlet_down_still_answers_and_names_it(self):
+        self.failing = {"NPR"}
+        data = self.client.get("/api/news-economy").get_json()
+        self.assertEqual(data["failed"], ["NPR"])
+        self.assertNotIn("NPR", {a["source"] for a in data["articles"]})
+
+    def test_every_outlet_down_is_a_502(self):
+        self.failing = set(self.feeds)
+        self.assertEqual(self.client.get("/api/news-economy").status_code, 502)
+
+
 class DownloadAllTests(FakeNewsCase):
     def make_results(self):
         self.client.post("/api/run", json={"ticker": "AAA", "filings": 3})

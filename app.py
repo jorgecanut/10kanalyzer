@@ -34,6 +34,7 @@ import traceback
 import uuid
 import zipfile
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import lru_cache
 from importlib import metadata
@@ -153,6 +154,13 @@ def _db():
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
         if "color" not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN color TEXT")
+        # Articles a user saved from the News tab, one row per link.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS saved_news ("
+            " user_id TEXT NOT NULL, link TEXT NOT NULL, title TEXT NOT NULL, source TEXT,"
+            " published TEXT, ticker TEXT, saved TEXT NOT NULL,"
+            " PRIMARY KEY (user_id, link))"
+        )
         yield conn
         conn.commit()
     finally:
@@ -934,6 +942,7 @@ def delete_account():
     _avatar_path(uid).unlink(missing_ok=True)
     with _db() as conn:
         conn.execute("DELETE FROM users WHERE id = ?", (uid,))
+        conn.execute("DELETE FROM saved_news WHERE user_id = ?", (uid,))
     session.clear()
     return jsonify(deleted=True)
 
@@ -1563,6 +1572,82 @@ def _news_payload(ticker: str, days: int, limit: int, fresh: bool = False,
 
 NEWS_ERRORS = (HTTPError, URLError, TimeoutError, ET.ParseError)
 
+# The News tab's second half: economy and market stories from outlets' own
+# feeds, not Google News, newest first across the three.
+ECONOMY_FEEDS = {
+    "CNBC": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258",
+    "MarketWatch": "https://feeds.content.dowjones.io/public/rss/mw_topstories",
+    "NPR": "https://feeds.npr.org/1017/rss.xml",
+}
+
+
+def _rss(url: str, source: str) -> list[dict]:
+    """One outlet's RSS feed as articles (title, source, link, published)."""
+    with urlopen(Request(url, headers={"User-Agent": YAHOO_UA}), timeout=10) as response:
+        root = ET.fromstring(response.read())
+    articles = []
+    for item in root.iter("item"):
+        title = " ".join((item.findtext("title") or "").split())
+        link = (item.findtext("link") or "").strip()
+        if not title or not link.startswith("https://"):
+            continue
+        try:
+            when = parsedate_to_datetime(item.findtext("pubDate") or "")
+            # "-0000" parses without a zone: it means UTC.
+            published = (when if when.tzinfo else when.replace(tzinfo=timezone.utc)).isoformat()
+        except (TypeError, ValueError):
+            published = None
+        articles.append({"title": title, "source": source, "link": link, "published": published})
+    return articles
+
+
+def _economy_news(days: int, limit: int) -> tuple[list[dict], list[str]]:
+    """The economy feeds within ``days``, taking turns by outlet (each newest first) so
+    the busiest one does not fill the list; also the outlets that failed."""
+    with ThreadPoolExecutor(max_workers=len(ECONOMY_FEEDS)) as pool:
+        jobs = {source: pool.submit(_rss, url, source) for source, url in ECONOMY_FEEDS.items()}
+    feeds, failed = [], []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    for source, job in jobs.items():
+        try:
+            items = job.result()
+        except NEWS_ERRORS:
+            failed.append(source)
+            continue
+        recent = [a for a in items if not a["published"] or datetime.fromisoformat(a["published"]) >= cutoff]
+        feeds.append(sorted(recent, key=lambda a: a["published"] or "", reverse=True))
+    articles, seen = [], set()
+    while len(articles) < limit and any(feeds):
+        for feed in feeds:
+            while feed:
+                article = feed.pop(0)
+                if article["title"].lower() not in seen:
+                    seen.add(article["title"].lower())
+                    articles.append(article)
+                    break
+    return articles[:limit], failed
+
+
+@app.get("/api/news-economy")
+def economy_news():
+    """Economy and market stories from CNBC, MarketWatch and NPR, by turns; cached like company news."""
+    days = _choice("days", NEWS_DAY_CHOICES, NEWS_DAYS)
+    limit = _choice("limit", NEWS_LIMIT_CHOICES, NEWS_LIMIT)
+    key = ("economy", days, limit)
+    with _YAHOO_LOCK:
+        cached = _NEWS_CACHE.get(key)
+    if cached and time.time() - cached[0] < NEWS_TTL and not request.args.get("fresh"):
+        return jsonify(cached[1])
+    articles, failed = _economy_news(days, limit)
+    if failed and len(failed) == len(ECONOMY_FEEDS):
+        abort(502, "Could not reach the economy news feeds.")
+    payload = {"days": days, "limit": limit, "sources": list(ECONOMY_FEEDS), "failed": failed,
+               "fetched": _now(), "articles": articles}
+    if not failed:
+        with _YAHOO_LOCK:
+            _NEWS_CACHE[key] = (time.time(), payload)
+    return jsonify(payload)
+
 
 @app.get("/api/news/<ticker>")
 def news(ticker: str):
@@ -1578,6 +1663,57 @@ def news(ticker: str):
                                      scope=scope))
     except NEWS_ERRORS as exc:
         abort(502, f"Could not reach Google News: {exc}")
+
+
+SAVED_NEWS_MAX = 500     # per user
+SAVED_FIELDS = ("link", "title", "source", "published", "ticker", "saved")
+
+
+def _saved_news(uid: str) -> list[dict]:
+    with _db() as conn:
+        rows = conn.execute(f"SELECT {', '.join(SAVED_FIELDS)} FROM saved_news WHERE user_id = ?"
+                            " ORDER BY saved DESC", (uid,)).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.get("/api/saved-news")
+def saved_news():
+    """The articles this user saved from the News tab, newest save first."""
+    return jsonify(articles=_saved_news(g.user["id"]))
+
+
+@app.post("/api/saved-news")
+def save_news():
+    """Save one article (link, title, source, published, ticker); saving it again is a no-op."""
+    payload = request.get_json(silent=True) or {}
+    article = {key: " ".join(str(payload.get(key) or "").split())[:1000] for key in SAVED_FIELDS[:-1]}
+    if not article["link"].startswith("https://"):
+        abort(400, "The article needs an https link.")
+    if not article["title"]:
+        abort(400, "The article needs a title.")
+    uid = g.user["id"]
+    with _db() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM saved_news WHERE user_id = ?", (uid,)).fetchone()[0]
+        exists = conn.execute("SELECT 1 FROM saved_news WHERE user_id = ? AND link = ?",
+                              (uid, article["link"])).fetchone()
+        if not exists and count >= SAVED_NEWS_MAX:
+            abort(409, f"You can keep up to {SAVED_NEWS_MAX} saved articles; remove some first.")
+        conn.execute(
+            "INSERT OR IGNORE INTO saved_news (user_id, link, title, source, published, ticker, saved)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (uid, article["link"], article["title"], article["source"],
+             article["published"] or None, article["ticker"].upper() or None, _now()),
+        )
+    return jsonify(articles=_saved_news(uid))
+
+
+@app.delete("/api/saved-news")
+def unsave_news():
+    """Remove one saved article, named by its link (``?link=``)."""
+    link = request.args.get("link") or ""
+    with _db() as conn:
+        conn.execute("DELETE FROM saved_news WHERE user_id = ? AND link = ?", (g.user["id"], link))
+    return jsonify(articles=_saved_news(g.user["id"]))
 
 
 @app.get("/api/insiders/<ticker>")
