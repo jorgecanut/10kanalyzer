@@ -106,6 +106,11 @@ class AuthTests(AppTestCase):
         self.assertEqual(anon.get("/login").status_code, 200)
         self.assertEqual(anon.get("/healthz").status_code, 200)
 
+    def test_healthz_names_the_filing_cache_version(self):
+        info = app.app.test_client().get("/healthz").get_json()["filing_cache"]
+        self.assertEqual(info["annual"]["current"], app.filing_cache.version("annual"))
+        self.assertEqual(info["form4"]["versions"], [])
+
     def test_login_logout(self):
         client = app.app.test_client()
         bad = client.post("/api/login", json={"email": "ada@example.com", "password": "nope-nope"})
@@ -596,6 +601,20 @@ class QueueTests(AppTestCase):
         self.assertIn(f"--output-dir {app._user_dir(self.uid())}", log)
         self.assertNotIn("--no-charts", log)
         self.assertIn("IDENTITY Ada Lovelace ada@example.com", log)
+
+    def test_run_defaults_to_every_filing_with_the_shared_cache(self):
+        self.client.post("/api/run", json={"ticker": "AAA"})
+        self.wait_idle("AAA")
+        log = self.log("AAA")
+        self.assertIn("--ticker AAA --filings max", log)
+        self.assertIn(f"--cache-dir {app.DATA_DIR / app.FILING_CACHE}", log)
+        again = self.client.post("/api/run", json={"ticker": "AAA", "filings": "max"}).get_json()
+        self.assertEqual(again["status"], "cached")
+
+    def test_run_validates_filings(self):
+        for filings in (0, 21, "all", None):
+            res = self.client.post("/api/run", json={"ticker": "AAA", "filings": filings})
+            self.assertEqual(res.status_code, 400, filings)
 
     def test_screener_skips_charts_and_uses_filings(self):
         self.client.post("/api/screener", json={"tickers": ["AAA", "BBB"], "filings": 5})

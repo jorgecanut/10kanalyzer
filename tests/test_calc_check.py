@@ -122,15 +122,6 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(pretax["status"], "mismatch")
         self.assertIn("count twice", pretax["hint"])
 
-    def test_summary_counts_by_kind(self):
-        rows = [{"kind": "statement", "status": "ok", "period_of_report": PERIOD},
-                {"kind": "statement", "status": "mismatch", "period_of_report": PERIOD},
-                {"kind": "note", "status": "incomplete", "period_of_report": "2024-12-31"}]
-        counts = calc_check.summary(rows)
-        self.assertEqual(counts["filings"], 2)
-        self.assertEqual(counts["statement"], {"totals": 2, "ok": 1, "mismatch": 1, "incomplete": 0})
-        self.assertEqual(counts["note"]["incomplete"], 1)
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -966,7 +966,8 @@
           <option value="3">3</option>
           <option value="5">5</option>
           <option value="10">10</option>
-          <option value="20" selected>20</option>
+          <option value="20">20</option>
+          <option value="max" selected>Max</option>
         </select>
         <button id="run-btn" class="primary" onclick="handlePrimary()">Run</button>
         <button id="cancel-btn" class="btn-cancel" onclick="cancelAll()" hidden
@@ -1467,6 +1468,7 @@
             <select id="pref-filings" class="opt-select" onchange="setPref('filings', this.value)">
               <option value="3">3</option><option value="5">5</option>
               <option value="10">10</option><option value="20">20</option>
+              <option value="max">Max (every filing)</option>
             </select>
           </div>
           <div class="opt-row" data-search="insiders insider trades period since months years form 4">
@@ -1696,12 +1698,12 @@ const TAB_NAMES = { home: 'Home', graph: 'Charts', insiders: 'Insiders', screene
                     simulation: 'Simulation', news: 'News', logs: 'Logs' };
 const PREF_DEFAULTS = {
   tab: 'home', tabOrder: ['home', 'graph', 'insiders', 'screener', 'simulation', 'news', 'logs'],
-  filings: '20', textSize: '1', date: 'dmy', number: 'en-US',
+  filings: 'max', textSize: '1', date: 'dmy', number: 'en-US',
   insiderMonths: 12, simAmount: 1000, simYears: 4, simMode: 'cash', simRange: '1y',
   newsLimit: 20, newsDays: 14,
 };
 const PREF_CHOICES = {
-  tab: Object.keys(TAB_NAMES), filings: ['3', '5', '10', '20'], textSize: ['0.88', '1', '1.12', '1.25'],
+  tab: Object.keys(TAB_NAMES), filings: ['3', '5', '10', '20', 'max'], textSize: ['0.88', '1', '1.12', '1.25'],
   date: ['dmy', 'mdy', 'ymd'], number: ['en-US', 'de-DE', 'fr-FR'], insiderMonths: [1, 3, 6, 12, 24, 36],
   simMode: ['cash', 'reinvest'], simRange: ['1mo', '4mo', '6mo', '1y', '3y', '5y', '10y', 'max'],
   newsLimit: [20, 30, 40, 50], newsDays: [1, 7, 14, 30],
@@ -2753,6 +2755,12 @@ function gotoActive() {
   openLogs(ticker);
 }
 
+// The run form's filings: a number, or 'max' for every annual filing.
+function runFilings() {
+  const value = $('#filings').value;
+  return value === 'max' ? value : Number(value);
+}
+
 async function runTicker(rawTicker, { fresh = false } = {}) {
   const ticker = String(rawTicker || $('#ticker').value).trim().toUpperCase();
   if (!ticker) return;
@@ -2762,7 +2770,7 @@ async function runTicker(rawTicker, { fresh = false } = {}) {
   // The Logs tab follows the new run.
   LOGS.ticker = ticker;
   LOGS.text = '';
-  const filings = Number($('#filings').value);
+  const filings = runFilings();
   $('#run-btn').disabled = true;
   setGraph(ticker);
   GRAPH.state = 'queued';
@@ -4279,7 +4287,7 @@ function submitScreen(tickers) {
   fetch('/api/screener', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tickers, filings: Number($('#filings').value) }),
+    body: JSON.stringify({ tickers, filings: runFilings() }),
   })
     .then(async res => {
       const data = await res.json();

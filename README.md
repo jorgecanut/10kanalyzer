@@ -11,7 +11,9 @@ Connect to SEC EDGAR, download the last ten 10-K filings for a company,
 extract the XBRL financial data, and write it as CSV. The command line writes
 into `financial_graphs/`; the web app keeps each user's results apart under
 `data/users/<id>/`.
-The run form accepts 3, 5, 10 or 20 filings; the API accepts any value 1–20.
+The run form accepts 3, 5, 10, 20 or **Max** filings (Max, the default, reads
+every annual filing; XBRL starts in 2009–2011, so older ones are skipped); the
+API accepts any value 1–20 or `"max"`.
 Charts are written as data, `charts.json` (one spec per chart: years, series,
 colours, formats, axes); `--no-charts` skips them. The web app draws the specs
 with ECharts (bundled in `static/vendor`), with a years slider under each chart
@@ -44,9 +46,64 @@ export EDGAR_IDENTITY="Jane Doe jane@example.com"
 
 ```bash
 python edgar_dashboard.py --ticker AAPL --filings 10
+python edgar_dashboard.py --ticker AAPL                 # --filings max: every annual filing
 python edgar_dashboard.py --ticker AAPL --no-charts   # data only (screener mode)
 python edgar_dashboard.py --ticker AAPL --output-dir /tmp/out   # writes /tmp/out/AAPL/
+python edgar_dashboard.py --ticker AAPL --no-cache      # parse every filing again
 ```
+
+**Filing cache.** A filing never changes once filed, so what a run extracts
+from each one (the ratio row, statement lines, facts and calculation checks of
+a 10-K / 20-F / 40-F, and the trades of each Form 4) is kept by accession
+number. The next run of that company downloads and parses only filings it has
+not seen: a re-run of NFLX with every filing took 170 s the first time and
+under 5 s after, with byte-identical output. Prices (Yahoo) are always fetched
+again. Entries are extracted values, never the XBRL, about 0.5 MB per company
+gzipped:
+
+The pipeline has two stages, and only the first is cached:
+
+| Stage | Code | What it does | Cached? |
+| --- | --- | --- | --- |
+| 1, per filing | `extract.py`, `xbrl_extract.py`, `calc_check.py` (Form 4s: `insider.py`) | reads the XBRL: which tagged number is Revenue, CapEx…; statement lines; facts; linkbase checks; the ADS ratio | yes, by accession |
+| 2, per ticker | `edgar_dashboard.py`, `valuation.py`, `charts.py` | millions, margins, FCF, ratios, notes, P/E and scores, charts | no, redone every run (seconds) |
+
+```
+<cache>/annual/<version>/version.json             when the version was made, by which code (file hashes)
+<cache>/annual/<version>/<CIK>/<accession>.json.gz   one annual report (also "no XBRL", so old 10-Ks are not asked again)
+<cache>/form4/<version>/<CIK>/form4.json.gz          every Form 4 of the company read so far
+```
+
+**Versions.** The version is a hash of the stage-1 files of that kind
+(`filing_cache.KINDS`) and the edgartools release. Editing a stage-2 file
+(margins, charts, valuation, logs) never changes it. Editing a stage-1 file
+gives a new, empty version folder: each company's filings are parsed again on
+its next run (SEC requests), and the run log says so and why
+(`Filing cache: version … (new: extract.py changed since … of 2026-10-29 …)`,
+then `14 from the cache, 3 new filings parsed, 0 parsed again`). Old versions
+stay on disk, so reverting a bad change finds its entries again at once.
+`/healthz` shows the current version and the versions on disk.
+
+```bash
+python filing_cache.py status                 # versions, companies, entries, size, what changed, what is stale
+python filing_cache.py prune --keep 3         # dry run: what would go
+python filing_cache.py prune --keep 3 --yes   # keep the current and the 2 newest other versions
+python filing_cache.py delete <version> --yes # never the current one
+# Docker: docker compose exec dashboard python filing_cache.py status
+```
+
+**Rule: no change may force regenerating everything.** Code that only uses
+extracted data must stay out of the stage-1 files, and stage-1 files may import
+only each other: otherwise an edit there would either re-parse the whole
+market (~15 h of SEC requests at full scale) or change cached values without
+changing the version. `tests/test_filing_cache.py` checks both. New stores
+follow the same pattern: one file per item, versioned folders that keep old
+versions, atomic writes, and anything derived rebuildable without SEC.
+
+The cache lives in `--cache-dir`, else `$STOCKY_FILING_CACHE`, else
+`<output-dir>/.filing_cache`; the web app uses `data/filing_cache/`, shared by
+every account since filings are public. Deleting it is always safe: it only
+costs the time to parse the filings again.
 
 ## Output
 
@@ -137,7 +194,7 @@ Routes:
 | `DELETE` | `/api/account/avatar` | Removes the profile picture |
 | `DELETE` | `/api/account` | `{"confirm":"DELETE","password"}` → deletes the account and all its data |
 | `DELETE` | `/api/data` | `{"confirm":"DELETE"}` → deletes all of the user's results; the account stays |
-| `POST` | `/api/run` | `{"ticker":"NFLX","filings":10,"fresh":false}` → queues a run, or `status: "cached"` |
+| `POST` | `/api/run` | `{"ticker":"NFLX","filings":10,"fresh":false}` (`filings` 1–20 or `"max"`, the default) → queues a run, or `status: "cached"` |
 | `POST` | `/api/cancel` | Cancels the user's queued/running jobs; keeps all files |
 | `GET` | `/api/status/<ticker>` | queued / running / done / error + log tail |
 | `GET` | `/api/jobs` | Active jobs (with `charts` flag) + last screener batch |
@@ -153,12 +210,12 @@ Routes:
 | `GET` | `/api/simulation/<ticker>` | Yahoo price history + dividends (`?range=1y`) |
 | `GET` | `/api/fundamentals/<ticker>` | Flat metric set behind the screener |
 | `GET` | `/api/screener` | Cached screener results, Greenblatt ranks |
-| `POST` | `/api/screener` | `{"tickers":[...],"filings":10}` (max 25) → data only, no charts |
+| `POST` | `/api/screener` | `{"tickers":[...],"filings":10}` (max 25 tickers; `filings` 1–20 or `"max"`, default 10) → data only, no charts |
 | `GET` | `/files/<ticker>/<name>` | View a chart inline |
 | `GET` | `/download/<ticker>` | The charts (PNG, 5-year windows) and data files as a `.zip` |
 | `GET` | `/download/<ticker>/all` | The download dialog's zip: `?charts=` and `?files=` (comma-separated; absent = all), `?years=5\|10\|0` (years per chart image; 0 = one image), `?theme=light\|dark`, `?extras=` any of `insiders,news,screener,debug` (absent = all). Charts go in `charts/` as `<id>_<from>_<to>.png`; `?months=`, `?news_limit=`, `?news_days=` follow the tabs' options |
 | `GET` | `/download/<ticker>/<name>` | One file |
-| `GET` | `/healthz` | Health probe: version, commit, code hashes |
+| `GET` | `/healthz` | Health probe: version, commit, code hashes, filing cache versions |
 | `POST` | `/api/diag` | Browser errors, for the diagnostics log (sent by the page itself) |
 
 The tabs sit on the left of the ticker bar's row, the bar on the right (on
@@ -236,7 +293,9 @@ only shows while a chart run or a screener batch is queued or running. A reloade
 screener batch's progress (`/api/jobs`).
 
 **Same-day cache.** Asking for graphs a ticker already got today, with the same
-number of filings, shows that generation instead of re-running the pipeline. A
+number of filings, shows that generation instead of re-running the pipeline
+(a fresh run still reuses the filing cache, so it only re-reads new filings and
+prices). A
 bar drops from the top saying so, with a **Generate fresh** button and a
 visible 3-second countdown, then closes itself. Each successful run records
 what it produced in `run.json` next to its files; a screener run (no charts)
@@ -265,7 +324,7 @@ all tabs. Clicking your name in the header opens it on the **Account** tab.
   Larger: every font scales through the `--fs` CSS variable); date format
   (31/12/2026, 12/31/2026 or 2026-12-31); number format (1,234.5 / 1.234,5 /
   1 234,5).
-- **Defaults**: number of 10-K filings per run (also used after cancel);
+- **Defaults**: number of 10-K filings per run, Max unless changed (also used after cancel);
   News articles and period (20 from 14 days unless changed);
   Insiders period (the tab's own picker changes it for that
   visit only); Simulation investment, horizon, dividends (cash or reinvest)

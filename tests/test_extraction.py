@@ -11,7 +11,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import edgar_dashboard  # noqa: E402
+import extract  # noqa: E402
 
 
 def line(concept, label, value, parent="us-gaap_CostsAndExpenses", standard=None):
@@ -41,11 +41,11 @@ ORACLE = [
 
 class CostOfRevenueTests(unittest.TestCase):
     def test_costs_named_after_revenue_streams_add_up(self):
-        lines = edgar_dashboard._cost_lines(ORACLE)
+        lines = extract._cost_lines(ORACLE)
         self.assertEqual(sorted(lines), ["orcl_CloudAndSoftwareExpenses", "orcl_HardwareExpenses",
                                          "orcl_ServicesExpense"])
         row = {"CostOfRevenue": np.nan, "GrossProfit": np.nan}
-        edgar_dashboard._cost_of_revenue(row, ORACLE)
+        extract._cost_of_revenue(row, ORACLE)
         self.assertEqual(row["CostOfRevenue"], 17597 + 868 + 4556)
 
     def test_a_single_line_taken_for_the_total_is_replaced(self):
@@ -56,7 +56,7 @@ class CostOfRevenueTests(unittest.TestCase):
                 line("us-gaap_CostOfRevenue", "Cost of Revenue", 880, standard="CostOfGoodsAndServicesSold"),
                 line("us-gaap_CostOfServices", "Cost of Revenue", 423, standard="CostOfGoodsAndServicesSold")]
         row = {"CostOfRevenue": 880.0, "GrossProfit": 25940.0}
-        edgar_dashboard._cost_of_revenue(row, rows)
+        extract._cost_of_revenue(row, rows)
         self.assertEqual(row["CostOfRevenue"], 1063 + 880 + 423)
         self.assertTrue(np.isnan(row["GrossProfit"]))           # derived later as revenue - cost
 
@@ -69,20 +69,20 @@ class CostOfRevenueTests(unittest.TestCase):
                 line("aapl_CostOfServices", "Services", 40960, total, "CostOfGoodsAndServicesSold"),
                 line("us-gaap_GrossProfit", "Gross margin", 195201, "us-gaap_OperatingIncomeLoss")]
         row = {"CostOfRevenue": 220960.0, "GrossProfit": 195201.0}
-        edgar_dashboard._cost_of_revenue(row, rows)
+        extract._cost_of_revenue(row, rows)
         self.assertEqual(row, {"CostOfRevenue": 220960.0, "GrossProfit": 195201.0})
 
     def test_a_bank_interest_expense_is_not_a_cost_of_revenue(self):
         rows = [line("us-gaap_InterestIncome", "Interest income", 193933, "us-gaap_Revenues", "Revenue"),
                 line("us-gaap_InterestExpense", "Interest expense", 101350, "us-gaap_InterestIncomeExpenseNet")]
-        self.assertEqual(edgar_dashboard._cost_lines(rows), {})
+        self.assertEqual(extract._cost_lines(rows), {})
 
     def test_a_bank_salary_filed_as_cost_of_goods_is_not_one(self):
         # JPM: edgartools files "Compensation expense" as CostOfGoodsAndServicesSold.
         rows = [line("us-gaap_Revenues", "Total net revenue", 182447, "us-gaap_NetIncomeLoss", "Revenue"),
                 line("us-gaap_LaborAndRelatedExpense", "Compensation expense", 54487,
                      "us-gaap_NoninterestExpense", "CostOfGoodsAndServicesSold")]
-        self.assertEqual(edgar_dashboard._cost_lines(rows), {})
+        self.assertEqual(extract._cost_lines(rows), {})
 
 
 if __name__ == "__main__":

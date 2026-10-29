@@ -28,6 +28,10 @@ a part or the total tagged with the wrong sign, a part that does not belong,
 a part listed next to its own parts); ``incomplete`` when parts have no plain value this
 year (usually tagged only per segment or tranche, so the sum cannot close).
 ``kind`` tells the primary statements from the notes.
+
+The rows are kept in the filing cache and this file's hash is part of its
+version (``filing_cache.KINDS``): code that only reads the rows (the counts in
+the run log) lives in ``edgar_dashboard.py``.
 """
 
 from __future__ import annotations
@@ -257,18 +261,3 @@ def check_filing(xbrl, facts: pd.DataFrame, period_of_report: str, currency: str
                 "detail": json.dumps(listing, ensure_ascii=False),
             })
     return rows
-
-
-def summary(rows: list[dict] | pd.DataFrame) -> dict:
-    """Counts for the run log and the page."""
-    frame = pd.DataFrame(rows)
-    out = {"filings": frame["period_of_report"].nunique() if not frame.empty else 0}
-    for kind in ("statement", "note"):
-        part = frame[frame["kind"] == kind] if not frame.empty else frame
-        out[kind] = {
-            "totals": len(part),
-            "ok": int((part["status"] == STATUS_OK).sum()) if len(part) else 0,
-            "mismatch": int((part["status"] == STATUS_MISMATCH).sum()) if len(part) else 0,
-            "incomplete": int((part["status"] == STATUS_INCOMPLETE).sum()) if len(part) else 0,
-        }
-    return out

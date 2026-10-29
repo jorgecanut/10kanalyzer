@@ -14,7 +14,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import charts  # noqa: E402
-import edgar_dashboard  # noqa: E402
+import extract  # noqa: E402
 import valuation  # noqa: E402
 
 PERIOD = "2025-12-31"
@@ -35,31 +35,31 @@ class CurrencyTests(unittest.TestCase):
                               fact("ifrs-full:Revenue", 0.03, currency="USD"),
                               fact("ifrs-full:BasicEarningsLossPerShare", 2.0, currency="USD", unit="usdPerShare"),
                               fact("ifrs-full:BasicEarningsLossPerShare", 2.0, currency="USD", unit="usdPerShare")])
-        self.assertEqual(edgar_dashboard.reporting_currency(facts), "TWD")
+        self.assertEqual(extract.reporting_currency(facts), "TWD")
 
     def test_a_usd_convenience_copy_is_not_taken_for_the_metric(self):
         # TSMC tags this year's revenue in TWD and again, translated, in USD.
         facts = pd.DataFrame([fact("ifrs-full:Revenue", 120e9, currency="USD", decimals=-5),
                               fact("ifrs-full:Revenue", 3.8e12)])
-        value = edgar_dashboard.extract_metric(facts, ["Revenue"], PERIOD, "duration", currency="TWD")
+        value = extract.extract_metric(facts, ["Revenue"], PERIOD, "duration", currency="TWD")
         self.assertEqual(value, 3.8e12)
 
     def test_sga_is_the_sum_of_its_ifrs_halves(self):
         facts = pd.DataFrame([fact("ifrs-full:DistributionCosts", 10e9), fact("ifrs-full:AdministrativeExpense", 5e9)])
-        groups = edgar_dashboard.COMPONENT_METRICS["SellingGeneralAndAdministrativeExpense"]
-        value = edgar_dashboard._component_metric(facts, groups, PERIOD, "duration", {}, "TWD")
+        groups = extract.COMPONENT_METRICS["SellingGeneralAndAdministrativeExpense"]
+        value = extract._component_metric(facts, groups, PERIOD, "duration", {}, "TWD")
         self.assertEqual(value, 15e9)
 
     def test_ifrs_long_term_debt_without_a_total_is_bonds_plus_loans(self):
         facts = pd.DataFrame([fact("ifrs-full:NoncurrentPortionOfNoncurrentBondsIssued", 856e9, instant=PERIOD),
                               fact("ifrs-full:LongtermBorrowings", 40e9, instant=PERIOD)])
-        groups = edgar_dashboard.COMPONENT_METRICS["LongTermDebt"]
-        self.assertEqual(edgar_dashboard._component_metric(facts, groups, PERIOD, "instant", {}, "TWD"), 896e9)
+        groups = extract.COMPONENT_METRICS["LongTermDebt"]
+        self.assertEqual(extract._component_metric(facts, groups, PERIOD, "instant", {}, "TWD"), 896e9)
 
 
 class AdsRatioTests(unittest.TestCase):
     def ratio(self, rows, currency="EUR"):
-        return edgar_dashboard.ads_ratio(pd.DataFrame(rows), currency)
+        return extract.ads_ratio(pd.DataFrame(rows), currency)
 
     def test_cover_page_text(self):
         rows = [fact("dei:Security12bTitle", None, currency=None, member="sap:AmericanDepositarySharesMember",
@@ -101,10 +101,10 @@ class AdsRatioTests(unittest.TestCase):
         toyota = [line("tm_PurchaseOfPropertyPlantAndEquipmentExcludingEquipmentLeasedToOthers", -2.1e12),
                   line("tm_PurchaseOfEquipmentLeasedToOthersClassifiedAsInvestingActivities", -2.8e12),
                   line("tm_ProceedsFromSalesOfPropertyPlantAndEquipmentExcludingEquipmentLeasedToOthers", 3e10)]
-        self.assertEqual(edgar_dashboard._capex_line(toyota), 2.1e12)
+        self.assertEqual(extract._capex_line(toyota), 2.1e12)
         nextera = [line("nee_CapitalExpendituresOfFPL", -8.7e9, "us-gaap_NetCashProvidedByUsedInInvestingActivities"),
                    line("nee_OtherCapitalExpenditures", -2e6, "us-gaap_NetCashProvidedByUsedInInvestingActivities")]
-        self.assertTrue(np.isnan(edgar_dashboard._capex_line(nextera)))   # one per subsidiary: ambiguous
+        self.assertTrue(np.isnan(extract._capex_line(nextera)))   # one per subsidiary: ambiguous
 
     def test_ordinary_listing(self):
         rows = [fact("dei:Security12bTitle", None, currency=None, text="Common Stock")]
