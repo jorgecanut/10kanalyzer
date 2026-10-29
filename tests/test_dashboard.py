@@ -46,7 +46,7 @@ class BackgroundInsidersTest(unittest.TestCase):
     def test_runs_while_the_caller_continues_and_reports_the_count(self):
         release = threading.Event()
 
-        def slow_write(ticker, output_dir):
+        def slow_write(ticker, output_dir, cache_dir=None):
             release.wait(5)
             path = Path(output_dir) / "insider.json"
             path.write_text(json.dumps({"transactions": [{}, {}, {}]}), encoding="utf-8")
@@ -64,7 +64,7 @@ class BackgroundInsidersTest(unittest.TestCase):
         self.assertIn("Wrote insider transactions (3 trades)", out.getvalue())
 
     def test_a_failure_is_reported_not_raised(self):
-        def broken(ticker, output_dir):
+        def broken(ticker, output_dir, cache_dir=None):
             raise RuntimeError("boom")
 
         with unittest.mock.patch.object(insider, "write_insiders", broken):
@@ -72,6 +72,18 @@ class BackgroundInsidersTest(unittest.TestCase):
             with redirect_stdout(out):
                 edgar_dashboard._report_insiders(edgar_dashboard._start_insiders("TEST", "."))
         self.assertIn("[!] insider data skipped: RuntimeError: boom", out.getvalue())
+
+
+
+class CheckSummaryTest(unittest.TestCase):
+    def test_summary_counts_by_kind(self):
+        rows = [{"kind": "statement", "status": "ok", "period_of_report": "2025-12-31"},
+                {"kind": "statement", "status": "mismatch", "period_of_report": "2025-12-31"},
+                {"kind": "note", "status": "incomplete", "period_of_report": "2024-12-31"}]
+        counts = edgar_dashboard.check_summary(rows)
+        self.assertEqual(counts["filings"], 2)
+        self.assertEqual(counts["statement"], {"totals": 2, "ok": 1, "mismatch": 1, "incomplete": 0})
+        self.assertEqual(counts["note"]["incomplete"], 1)
 
 
 if __name__ == "__main__":

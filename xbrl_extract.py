@@ -7,17 +7,17 @@ filing's presentation linkbase and maps every tagged line onto a
 reports are then driven by that data, so a new company needs no per-filer tag
 work.
 
-Three extractors, each returning long-form rows (one row per line/fact):
+Two extractors, each returning long-form rows (one row per line/fact):
 
 - ``extract_statements`` — the five primary statements, dimension-free.
 - ``extract_facts`` — every fact for the filing's period, dimensions included.
-- ``extract_note_schedules`` — the raw facts sliced into key schedules
-  (debt, segments, EPS, taxes, share counts) for report/chart use.
+
+What they return is kept in the filing cache, and this file's hash is part of
+its version (``filing_cache.KINDS``): code that only uses the rows (the note
+schedules, for instance) lives in ``edgar_dashboard.py``.
 """
 
 from __future__ import annotations
-
-import re
 
 import numpy as np
 import pandas as pd
@@ -29,16 +29,6 @@ STATEMENTS: dict[str, tuple[str, str]] = {
     "cashflow": ("cash_flow_statement", "Cash Flow Statement"),
     "equity": ("statement_of_equity", "Statement of Equity"),
     "comprehensive": ("comprehensive_income", "Comprehensive Income"),
-}
-
-# Note schedules we surface as their own tables/charts. Matched against the
-# concept name and the dimension, so they adapt to whatever a filer tags.
-NOTE_SCHEDULES: dict[str, str] = {
-    "debt": r"Debt|Borrow|CommercialPaper|NotesPayable|LineOfCredit|Lease",
-    "segments": r"Segment|StatementBusinessSegmentsAxis|StatementGeographicalAxis",
-    "eps": r"EarningsPerShare",
-    "taxes": r"IncomeTax|EffectiveIncomeTaxRate|DeferredTax|UnrecognizedTaxBenefits",
-    "shares": r"CommonStockShares|WeightedAverageNumberOfShares|StockRepurchase|TreasuryStock",
 }
 
 _FACT_COLUMNS = [
@@ -221,18 +211,6 @@ def extract_facts(xbrl, period_of_report: str) -> list[dict]:
             "statement_type": _clean(row.get("statement_type")),
         })
     return out
-
-
-def extract_note_schedules(facts: list[dict]) -> list[dict]:
-    """Tag the fact rows with the key schedule they belong to."""
-    rows: list[dict] = []
-    for fact in facts:
-        haystack = f"{fact['concept']} {fact.get('dimension') or ''} {fact.get('member') or ''}"
-        for schedule, pattern in NOTE_SCHEDULES.items():
-            if re.search(pattern, haystack, re.IGNORECASE):
-                rows.append({**fact, "schedule": schedule})
-                break
-    return rows
 
 
 def frames(statement_rows, fact_rows, note_rows) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:

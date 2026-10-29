@@ -64,6 +64,7 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import charts as chartlib
+import filing_cache
 
 BASE_DIR = Path(__file__).resolve().parent
 DASHBOARD = BASE_DIR / "edgar_dashboard.py"
@@ -71,6 +72,9 @@ DASHBOARD = BASE_DIR / "edgar_dashboard.py"
 # Everything the app stores: the account database, the session key and each
 # user's results. Read through functions so tests can point it elsewhere.
 DATA_DIR = Path(os.environ.get("STOCKY_DATA_DIR", BASE_DIR / "data"))
+# What each SEC filing yielded, shared by every user (filings are public), so
+# a run parses only the filings no earlier run has read. Inside DATA_DIR.
+FILING_CACHE = "filing_cache"
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MIN_PASSWORD = 8
@@ -430,7 +434,7 @@ def _current_quote(ticker: str) -> dict:
     return current
 
 
-def _worker(key: str, filings: int, job_id: str) -> None:
+def _worker(key: str, filings: int | str, job_id: str) -> None:
     """Run the dashboard in a subprocess, one at a time.
 
     The job id guards against stale worker threads: a cancelled or superseded
@@ -489,7 +493,7 @@ def _worker(key: str, filings: int, job_id: str) -> None:
         try:
             env = {**os.environ, "EDGAR_IDENTITY": _identity(user), "PYTHONUNBUFFERED": "1"}
             command = [sys.executable, str(DASHBOARD), "--ticker", ticker, "--filings", str(filings),
-                       "--output-dir", str(_user_dir(uid))]
+                       "--output-dir", str(_user_dir(uid)), "--cache-dir", str(DATA_DIR / FILING_CACHE)]
             if not with_charts:
                 command.append("--no-charts")
             with log_path.open("w") as log:
@@ -570,7 +574,7 @@ def _new_job(uid: str, ticker: str, job_id: str, charts: bool) -> dict:
             "queued": _now(), "charts": charts}
 
 
-def _write_run_meta(directory: Path, filings: int, charts: bool) -> None:
+def _write_run_meta(directory: Path, filings: int | str, charts: bool) -> None:
     """Record what the last successful run produced, for the same-day cache."""
     try:
         (directory / "run.json").write_text(json.dumps(
@@ -579,7 +583,7 @@ def _write_run_meta(directory: Path, filings: int, charts: bool) -> None:
         pass
 
 
-def _cached_today(ticker: str, filings: int) -> str | None:
+def _cached_today(ticker: str, filings: int | str) -> str | None:
     """Finish time of today's graph run with the same filings, if there is one."""
     try:
         meta = json.loads((_ticker_dir(ticker) / "run.json").read_text())
@@ -762,6 +766,11 @@ def build_info() -> dict:
         except OSError:
             info[key] = None
     info["data"] = graph_diagnostics(DATA_DIR, list_tickers=False)
+    # Which cache version this build reads, and which versions are on disk.
+    info["filing_cache"] = {
+        kind: {"current": filing_cache.version(kind),
+               "versions": [item["version"] for item in filing_cache.versions(DATA_DIR / FILING_CACHE, kind)]}
+        for kind in filing_cache.KINDS}
     return info
 
 
@@ -949,16 +958,25 @@ def delete_account():
     return jsonify(deleted=True)
 
 
+def _filings(payload: dict, default: int | str) -> int | str:
+    """A request's ``filings``: 1-20, or ``"max"`` for every annual filing."""
+    value = payload.get("filings", default)
+    if isinstance(value, str) and value.strip().lower() == "max":
+        return "max"
+    try:
+        filings = int(value)
+    except (TypeError, ValueError):
+        abort(400, "filings must be a number or \"max\"")
+    if not 1 <= filings <= 20:
+        abort(400, "filings must be between 1 and 20, or \"max\"")
+    return filings
+
+
 @app.post("/api/run")
 def run():
     payload = request.get_json(silent=True) or {}
     ticker = _normalise_ticker(payload.get("ticker", ""))
-    try:
-        filings = int(payload.get("filings", 20))
-    except (TypeError, ValueError):
-        abort(400, "filings must be a number")
-    if not 1 <= filings <= 20:
-        abort(400, "filings must be between 1 and 20")
+    filings = _filings(payload, "max")
     uid = g.user["id"]
     key = _job_key(uid, ticker)
 
@@ -1884,12 +1902,7 @@ def screener_run():
         abort(400, "Provide at least one ticker.")
     if len(tickers) > 25:
         abort(400, "Too many tickers (max 25).")
-    try:
-        filings = int(payload.get("filings", 10))
-    except (TypeError, ValueError):
-        abort(400, "filings must be a number")
-    if not 1 <= filings <= 20:
-        abort(400, "filings must be between 1 and 20")
+    filings = _filings(payload, 10)
     uid = g.user["id"]
     with JOBS_LOCK:
         SCREEN_BATCH[uid] = tickers

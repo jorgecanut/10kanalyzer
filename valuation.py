@@ -35,6 +35,8 @@ from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 import numpy as np
 import pandas as pd
 
+from extract import snap_ratio
+
 # --------------------------------------------------------------------------- #
 # Configuration
 # --------------------------------------------------------------------------- #
@@ -55,9 +57,7 @@ OUTPUT_COLUMNS = [
     # ``price_currency``, per traded share (an ADS for foreign filers).
     "currency", "price_currency",
 ]
-# Ordinary shares per ADS seen in practice; an inferred ratio snaps to one.
-NICE_RATIOS = (0.01, 0.02, 0.025, 0.04, 0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 3, 4, 5, 6, 8, 10,
-               12, 15, 20, 25, 30, 40, 50, 100)
+# NICE_RATIOS and snap_ratio live in extract.py: the filing cache keeps the ratio they give.
 # The usual ratios only, for the rough Yahoo estimate (Toyota's 11.5 is 10, not 12).
 COMMON_RATIOS = (0.1, 0.2, 0.25, 0.5, 1, 2, 3, 4, 5, 10, 20, 25, 50, 100)
 
@@ -561,18 +561,6 @@ def _reporting_currency(data: pd.DataFrame) -> str:
         if len(values):
             return values.iloc[-1].upper()
     return "USD"
-
-
-def snap_ratio(value: float | None, tolerance: float = 0.03, ratios: tuple = NICE_RATIOS) -> float | None:
-    """The ADS ratio ``value`` is close to (within ``tolerance``), else None.
-
-    Tight by default: the filing's own figures give the ratio almost exactly.
-    The Yahoo estimate (trailing EPS against the last annual EPS) passes more.
-    """
-    if value is None or not np.isfinite(value) or value <= 0:
-        return None
-    best = min(ratios, key=lambda nice: abs(np.log(value / nice)))
-    return float(best) if abs(value / best - 1) <= tolerance else None
 
 
 def fetch_fx_history(base: str, quote_currency: str, years: int = PRICE_RANGE_YEARS) -> list[dict]:

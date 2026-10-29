@@ -18,6 +18,9 @@ Design notes:
       about that issuer's shares, and those are not its insiders' trades.
     * Failure policy: no exception ever reaches the caller. A failure returns
       ``[]`` (collect) or ``None`` (write) after one printed warning.
+    * Each Form 4's trades are kept in the filing cache (``filing_cache``,
+      one ``form4`` entry per company) when a cache directory is given, so a
+      later run parses only the Form 4s filed since.
     * ``write_insiders`` always writes a file, even when collection fails or
       returns nothing. The JSON then has an empty ``transactions`` list, so the
       UI can tell "no insider data" apart from "pipeline never ran" (absent
@@ -35,6 +38,8 @@ import re
 import sys
 from datetime import date, datetime, timezone
 from typing import Any
+
+import filing_cache
 
 # The SEC requires a descriptive User-Agent identifying who is making requests.
 # Same pattern (and default) as edgar_dashboard.py.
@@ -61,6 +66,12 @@ OUTPUT_FILENAME = "insider.json"
 PRICE_RANGE_RE = re.compile(
     r"\$\s*([\d,]+(?:\.\d+)?)\s*(?:to|through|and|-|–|—)\s*\$?\s*([\d,]+(?:\.\d+)?)", re.IGNORECASE)
 FOOTNOTE_ID_RE = re.compile(r"F\d+")
+# A cached Form 4 is reused only while the code that read it is unchanged.
+CACHE_KIND = "form4"
+CACHE_VERSION = filing_cache.version(CACHE_KIND)
+CACHE_NAME = "form4"
+# Save the cache this often while reading, so a cancelled run keeps its work.
+CACHE_SAVE_EVERY = 100
 
 
 def _warn(message: str) -> None:
@@ -220,15 +231,15 @@ def _rows_from_ownership(ownership: Any) -> list[dict]:
     return rows
 
 
-def collect_insiders(ticker: str, months: int = DEFAULT_MONTHS) -> list[dict]:
+def collect_insiders(ticker: str, months: int = DEFAULT_MONTHS, cache_dir: str | None = None) -> list[dict]:
     """Return recent open-market insider trades, newest first.
 
     Never raises: returns ``[]`` on any failure (bad ticker, network, parse).
     """
-    return _collect(ticker, months)[0]
+    return _collect(ticker, months, cache_dir)[0]
 
 
-def _collect(ticker: str, months: int) -> tuple[list[dict], str | None]:
+def _collect(ticker: str, months: int, cache_dir: str | None = None) -> tuple[list[dict], str | None]:
     """Trades plus the oldest date they cover (``None`` on failure)."""
     try:
         if _EDGAR_ERROR is not None or Company is None:
@@ -252,6 +263,13 @@ def _collect(ticker: str, months: int) -> tuple[list[dict], str | None]:
             _warn(f"no Form 4 filings for {ticker}")
             return [], cutoff.isoformat()
 
+        # accession -> that Form 4's trades ([] for another issuer's or none).
+        cache: dict[str, list[dict]] = {}
+        if company_cik is not None and cache_dir:
+            print(f"[*] Insider trades: filing cache {filing_cache.explain(cache_dir, CACHE_KIND)}", flush=True)
+        if company_cik is not None:
+            cache = filing_cache.load(cache_dir, CACHE_KIND, CACHE_VERSION, company_cik, CACHE_NAME) or {}
+        new = 0
         transactions: list[dict] = []
         parsed = 0
         since = cutoff.isoformat()
@@ -272,17 +290,31 @@ def _collect(ticker: str, months: int) -> tuple[list[dict], str | None]:
                 if filing_date is not None:
                     last_filed = filing_date
                 if parsed % 25 == 0:
-                    print(f"[*] Insider trades: read {parsed} Form 4 filings, back to {last_filed}", flush=True)
-                ownership = filing.obj()
-                if ownership is None or not _same_issuer(ownership, company_cik):
-                    continue
-                for row in _rows_from_ownership(ownership):
+                    cached = f", {parsed - new} from the cache" if parsed > new else ""
+                    print(f"[*] Insider trades: read {parsed} Form 4 filings{cached}, back to {last_filed}",
+                          flush=True)
+                accession = getattr(filing, "accession_no", None)
+                rows = cache.get(accession) if accession else None
+                if rows is None:
+                    ownership = filing.obj()
+                    same = ownership is not None and _same_issuer(ownership, company_cik)
+                    rows = _rows_from_ownership(ownership) if same else []
+                    if accession:
+                        cache[accession] = rows
+                        new += 1
+                        if new % CACHE_SAVE_EVERY == 0:
+                            filing_cache.store(cache_dir, CACHE_KIND, CACHE_VERSION, company_cik, CACHE_NAME, cache)
+                for row in rows:
                     if row["date"] >= cutoff.isoformat():
                         transactions.append(row)
             except Exception as exc:
                 _warn(f"skipped filing {getattr(filing, 'accession_no', '?')}: {exc}")
                 continue
 
+        if new and company_cik is not None:
+            filing_cache.store(cache_dir, CACHE_KIND, CACHE_VERSION, company_cik, CACHE_NAME, cache)
+        if parsed and cache_dir:
+            print(f"[*] Insider trades: {parsed} Form 4 filings, {parsed - new} from the cache", flush=True)
         transactions.sort(key=lambda item: item["date"], reverse=True)
         return transactions, since
     except Exception as exc:
@@ -290,7 +322,8 @@ def _collect(ticker: str, months: int) -> tuple[list[dict], str | None]:
         return [], None
 
 
-def write_insiders(ticker: str, output_dir: str, months: int = DEFAULT_MONTHS) -> str | None:
+def write_insiders(ticker: str, output_dir: str, months: int = DEFAULT_MONTHS,
+                   cache_dir: str | None = None) -> str | None:
     """Write ``<output_dir>/insider.json`` and return its path.
 
     Always writes a file (empty ``transactions`` when nothing was found or the
@@ -299,7 +332,7 @@ def write_insiders(ticker: str, output_dir: str, months: int = DEFAULT_MONTHS) -
     """
     ticker = str(ticker or "").strip().upper()
     try:
-        transactions, since = _collect(ticker, months)
+        transactions, since = _collect(ticker, months, cache_dir)
         payload = {
             "ticker": ticker,
             "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
