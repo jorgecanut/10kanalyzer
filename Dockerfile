@@ -14,7 +14,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
 
 # Application code (glob: every root module, so new ones cannot be missed).
-COPY VERSION *.py ./
+COPY VERSION readers.json *.py ./
 COPY templates ./templates
 COPY static ./static
 

@@ -5,7 +5,7 @@ it current as new filings arrive, and screen the whole market with a few
 strategies. Companion to [DATA_DICTIONARY.md](DATA_DICTIONARY.md), which lists
 every field.
 
-Status: **agreed plan, not built** (2026-10-29) except section 2.
+Status: **in progress** (2026-10-29): section 2 committed; 5.1, 5.2, 5.3 and the pilot runner (part of 5.10) built in 1.14.0.
 
 ---
 
@@ -31,7 +31,7 @@ as it is filed. Screen the market with the strategies in section 4.
 
 ---
 
-## 2. Already done (1.12.0 and 1.13.0, uncommitted)
+## 2. Already done (1.12.0 and 1.13.0, committed in 5dec72e)
 
 | Change | Where |
 | --- | --- |
@@ -43,7 +43,17 @@ as it is filed. Screen the market with the strategies in section 4.
 | Run log says why filings are parsed (new / stale); `/healthz` shows cache versions | |
 | Guard tests: stage-2 modules never hashed, stage-1 files import only each other | `tests/test_filing_cache.py` |
 
-**First action: commit this**, so the refactor below starts from a clean point.
+### Built in 1.14.0
+
+| Item | Where | Notes |
+| --- | --- | --- |
+| 5.1 dump format, schema 1 | `dump.py`, `filing_view.py` | every fact of every period, trees, labels, statements; text > 500 characters dropped (cover page kept); 10-Qs and 10-KTs too |
+| 5.2 schema folder + reader stamp | `filing_cache.py`, `readers.json` | `classify`, `invalidate --reader/--form/--before/--cik`, `prune`; guard test |
+| 5.3 metric selection in stage 2 | `extract.py`, `xbrl_extract.py`, `calc_check.py` run on the dump | outputs identical to 1.13 for the 13 test tickers |
+| 5.10 (pilot part) runner | `scan.py`, Market tab | batches in ticker order, issues, rerun from the dump, resume, logs; one worker, 5 requests/s, no SIC/fund filters yet |
+| 5.12 pin edgartools | `requirements.txt` | 5.62.0 |
+
+Not yet: 10-KT and 10-Q analysis (5.4), prices, `market.db`, new metrics, screens.
 
 ---
 

@@ -6,8 +6,8 @@ Downloads the last N annual filings (every one by default; 10-K, or 20-F /
 EDGAR, writes the data as CSV into ``financial_graphs/<TICKER>/`` in the
 filer's reporting currency, checks every total against its calculation
 linkbase (``calc_check.csv``) and writes the chart specs (``charts.json``).
-Filings an earlier run already read come from the filing cache
-(``filing_cache.py``) instead of SEC.
+Every filing is dumped once (``dump.py``, kept by ``filing_cache.py``);
+later runs read the dump instead of SEC.
 
 Usage:
     python edgar_dashboard.py
@@ -23,6 +23,7 @@ import re
 import sys
 import threading
 import time
+import traceback
 
 import numpy as np
 import pandas as pd
@@ -31,8 +32,10 @@ from edgar import Company, set_identity
 
 import calc_check
 import charts
+import dump
 import extract
 import filing_cache
+import filing_view
 
 # --------------------------------------------------------------------------- #
 # Configuration
@@ -47,10 +50,6 @@ TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 NUM_FILINGS = "max"         # every annual filing; or a number
 BASE_OUTPUT_DIR = "financial_graphs"
 
-# A cached filing is reused only while the code that extracted it is
-# unchanged: extract.py, xbrl_extract.py, calc_check.py (filing_cache.KINDS).
-CACHE_KIND = "annual"
-CACHE_VERSION = filing_cache.version(CACHE_KIND)
 # Shared by every run (the filings are public); --cache-dir or this variable
 # moves it, and the default sits inside the output directory.
 CACHE_ENV = "STOCKY_FILING_CACHE"
@@ -101,78 +100,71 @@ def _report_date(filing) -> str:
     return str(filing.period_of_report or "")
 
 
-def build_dataset(ticker: str, n_filings: int | None,
-                  cache_dir: str | None = None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Fetch the last ``n_filings`` annual filings (``None``: all) and assemble the datasets.
+ANNUAL_FORMS = ("10-K", "20-F", "40-F")
 
-    Each filing's extraction is kept in ``cache_dir`` (see ``filing_cache``),
-    so a later run parses only the filings it has not seen; ``None`` disables it.
 
-    Supports 10-K (US domestic), 20-F and 40-F (foreign private issuers) so
-    tickers such as Celestica (CLS) get their full available history.
-
-    Returns ``(ratios, statements, facts, checks)``:
-    - ``ratios`` — the wide per-year summary used by the ratio charts, with the
-      reporting ``currency`` and, for ADS listings, ``ads_ratio``.
-    - ``statements`` — long-form, every dimension-free primary-statement line.
-    - ``facts`` — long-form, every fact for the period, dimensions included.
-    - ``checks`` — the calculation-linkbase check, one row per total.
-    """
-    print(f"[*] Looking up {ticker} on SEC EDGAR")
-    company = Company(ticker)
-    print(f"[+] Company: {company.name} (CIK {company.cik})")
-    if cache_dir:
-        print(f"[*] Filing cache: {filing_cache.explain(cache_dir, CACHE_KIND)}")
-    print("[*] Listing annual filings (10-K, 20-F, 40-F)")
-
-    # Pull annual filings for US (10-K) and foreign (20-F / 40-F) filers, then
-    # merge, deduplicate by accession and keep the most recent ``n_filings``.
-    annual_forms = ["10-K", "20-F", "40-F"]
-    all_filings: list = []
-    seen_accessions: set[str] = set()
-    for form in annual_forms:
+def list_annual(company, forms=ANNUAL_FORMS, log=print) -> list:
+    """Every annual filing of ``company`` in ``forms``, newest period first (amendments skipped)."""
+    found: list = []
+    seen: set[str] = set()
+    for form in forms:
         try:
-            batch = company.get_filings(form=form, amendments=False)
-            for filing in batch:
+            for filing in company.get_filings(form=form, amendments=False):
                 if filing.form != form:
                     continue
                 accession = getattr(filing, "accession_no", None)
-                if not accession or accession in seen_accessions:
+                if not accession or accession in seen:
                     continue
-                seen_accessions.add(accession)
-                all_filings.append(filing)
+                seen.add(accession)
+                found.append(filing)
         except Exception as exc:  # noqa: BLE001 - a missing form should not abort the others
-            print(f"    [!] {form}: filing list failed ({exc.__class__.__name__}: {exc}); continuing")
-            continue
-
-    period_filings: list[tuple[str, object]] = []
-    for filing in all_filings:
+            log(f"    [!] {form}: filing list failed ({exc.__class__.__name__}: {exc}); continuing")
+    dated: list[tuple[str, object]] = []
+    for filing in found:
         try:
-            period = _report_date(filing)
+            dated.append((_report_date(filing), filing))
         except Exception as exc:  # noqa: BLE001 - skip filings with unreadable periods
-            print(f"    [!] unreadable period ({exc.__class__.__name__}: {exc}); skipping filing")
-            continue
-        period_filings.append((period, filing))
-    period_filings.sort(key=lambda item: item[0], reverse=True)
-    filings = [filing for _, filing in period_filings[:n_filings]]  # [:None] keeps them all
-    forms = ", ".join(f"{sum(f.form == form for f in all_filings)} {form}" for form in annual_forms
-                      if any(f.form == form for f in all_filings))
-    reading = "reading all of them" if n_filings is None else f"reading the newest {len(filings)}"
-    print(f"[+] Found {len(all_filings)} annual filings ({forms or 'none'}); {reading}")
+            log(f"    [!] unreadable period ({exc.__class__.__name__}: {exc}); skipping filing")
+    dated.sort(key=lambda item: item[0], reverse=True)
+    return [filing for _, filing in dated]
 
+
+def obtain(filing, cik, cache_dir: str | None) -> tuple[dict, str]:
+    """The dump of ``filing`` and where it came from: ``"dump"`` (no SEC request) or ``"read"``.
+
+    A filing missing from the dump is downloaded, read by ``dump.py`` and
+    stored; ``cache_dir`` None reads it without keeping it.
+    """
+    accession = filing.accession_no
+    entry = filing_cache.load_dump(cache_dir, cik, accession) if cache_dir else None
+    if entry is not None:
+        return entry, "dump"
+    entry = dump.dump_filing(filing)
+    if cache_dir:
+        filing_cache.store_dump(cache_dir, cik, accession, entry)
+    return entry, "read"
+
+
+def assemble(filings: list, n_filings: int | None, entry_of, ticker: str = "", log=print,
+             failures: list | None = None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Stage 2 over annual filings (newest first): the four datasets of ``build_dataset``.
+
+    ``entry_of(filing)`` returns ``(dump, source)``; the filings only need
+    ``accession_no``, ``form`` and ``report_date``, so a scan can rerun this
+    from the dump alone. A filing that fails is logged, skipped and, when
+    ``failures`` is a list, recorded there (accession, period, error).
+    """
     records: list[dict] = []
     statement_records: list[dict] = []
     fact_records: list[dict] = []
     check_records: list[dict] = []
     seen_periods: set[str] = set()
-    # From the cache / parsed because new to the cache / parsed because only
-    # an older code version had it.
-    hits = new = stale = 0
+    counts = {"dump": 0, "read": 0}
 
     for position, filing in enumerate(filings, 1):
         if n_filings is not None and len(records) >= n_filings:
             break
-        accession = None
+        accession = getattr(filing, "accession_no", None)
 
         # Everything is guarded per filing: edgartools can raise on individual
         # malformed filings (e.g. missing filing dates) and one bad filing
@@ -191,38 +183,36 @@ def build_dataset(ticker: str, n_filings: int | None,
             if period_key in seen_periods:
                 continue
 
-            accession = filing.accession_no
             started = time.monotonic()
-            # A filing never changes: what an earlier run extracted from it is
-            # reused, so only filings new to the cache are downloaded.
-            extracted = filing_cache.load(cache_dir, CACHE_KIND, CACHE_VERSION, company.cik, accession)
-            cached = extracted is not None
-            if cached:
-                hits += 1
-                print(f"[*] Filing {position}/{len(filings)}: {filing.form} for the year ended {period_key}, "
-                      f"from the cache ({accession})")
-            else:
-                older = filing_cache.cached_elsewhere(cache_dir, CACHE_KIND, CACHE_VERSION, company.cik, accession)
-                why = ", cached only by an older code version" if older else ""
-                print(f"[*] Filing {position}/{len(filings)}: {filing.form} for the year ended {period_key}, "
-                      f"downloading and parsing its XBRL ({accession}{why})")
-                extracted = extract.extract_filing(filing, period_key)
-                filing_cache.store(cache_dir, CACHE_KIND, CACHE_VERSION, company.cik, accession, extracted)
-                if older:
-                    stale += 1
-                else:
-                    new += 1
-            if not extracted.get("xbrl"):
-                print(f"    [!] {period_key} ({accession}): no XBRL; skipping")
+            # A filing never changes: its dump is read once and every later
+            # run works from it, so only filings new to the dump are downloaded.
+            if entry_of is None:
+                raise RuntimeError("no dump source")
+            log(f"[*] Filing {position}/{len(filings)}: {filing.form} for the year ended {period_key} "
+                f"({accession})")
+            entry, source = entry_of(filing)
+            counts[source] = counts.get(source, 0) + 1
+            if source == "read":
+                log(f"    [*] downloaded and dumped in {time.monotonic() - started:.1f} s "
+                    f"(reader {entry.get('reader_id') or filing_cache.reader_id()})")
+            if entry.get("errors"):
+                log(f"    [!] parts of the dump failed: {entry['errors']}")
+            if not entry.get("xbrl"):
+                log(f"    [!] {period_key} ({accession}): no XBRL; skipping")
                 continue
+            extracted = extract.extract_filing(filing_view.FilingView(entry), period_key)
             row = extracted["row"]
             statement_rows = extracted["statements"]
             filing_facts = extracted["facts"]
             filing_checks = extracted["checks"]
             fiscal_year = row["fiscal_year"]
         except Exception as exc:  # noqa: BLE001 - skip unparseable filings
-            ident = accession or getattr(filing, "accession_no", "?")
-            print(f"    [!] {ident}: unreadable ({exc.__class__.__name__}: {exc}); skipping")
+            log(f"    [!] {accession or '?'}: unreadable ({exc.__class__.__name__}: {exc}); skipping")
+            if failures is not None:
+                failures.append({"accession": accession, "form": getattr(filing, "form", None),
+                                 "period": getattr(filing, "report_date", None),
+                                 "error": f"{exc.__class__.__name__}: {exc}",
+                                 "traceback": traceback.format_exc()})
             continue
 
         records.append(row)
@@ -232,14 +222,13 @@ def build_dataset(ticker: str, n_filings: int | None,
         seen_periods.add(period_key)
         money = "" if row["currency"] == "USD" else f", {row['currency']}"
         adds_up = sum(check["status"] == calc_check.STATUS_OK for check in filing_checks)
-        took = "from the cache" if cached else f"in {time.monotonic() - started:.0f} s"
-        print(f"    [+] FY{fiscal_year} (period end {period_key}): extracted {accession} ({filing.form}{money}) "
-              f"{took}; {len(statement_rows)} statement lines, "
-              f"{adds_up}/{len(filing_checks)} linkbase totals add up")
+        mismatched = sum(check["status"] == calc_check.STATUS_MISMATCH for check in filing_checks)
+        log(f"    [+] FY{fiscal_year} (period end {period_key}): {filing.form}{money} "
+            f"in {time.monotonic() - started:.1f} s; {len(statement_rows)} statement lines, "
+            f"{adds_up}/{len(filing_checks)} linkbase totals add up"
+            + (f", {mismatched} do not" if mismatched else ""))
 
-    if cache_dir:
-        print(f"[+] Filing cache {CACHE_VERSION}: {hits} from the cache, {new} new filings parsed, "
-              f"{stale} parsed again (cached only by an older code version)")
+    log(f"[+] Filings: {counts.get('dump', 0)} from the dump, {counts.get('read', 0)} downloaded and dumped")
 
     if not records:
         raise RuntimeError(
@@ -277,6 +266,38 @@ def build_dataset(ticker: str, n_filings: int | None,
         checks.insert(0, "fiscal_year", checks["period_of_report"].map(year_by_period))
 
     return df, statements, facts, checks
+
+
+def build_dataset(ticker: str, n_filings: int | None,
+                  cache_dir: str | None = None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Fetch the last ``n_filings`` annual filings (``None``: all) and assemble the datasets.
+
+    Each filing is dumped once into ``cache_dir`` (see ``filing_cache``), so a
+    later run downloads only the filings it has not seen; ``None`` disables it.
+
+    Supports 10-K (US domestic), 20-F and 40-F (foreign private issuers) so
+    tickers such as Celestica (CLS) get their full available history.
+
+    Returns ``(ratios, statements, facts, checks)``:
+    - ``ratios`` — the wide per-year summary used by the ratio charts, with the
+      reporting ``currency`` and, for ADS listings, ``ads_ratio``.
+    - ``statements`` — long-form, every dimension-free primary-statement line.
+    - ``facts`` — long-form, every fact for the period, dimensions included.
+    - ``checks`` — the calculation-linkbase check, one row per total.
+    """
+    print(f"[*] Looking up {ticker} on SEC EDGAR")
+    company = Company(ticker)
+    print(f"[+] Company: {company.name} (CIK {company.cik})")
+    if cache_dir:
+        print(f"[*] Filing dump: {filing_cache.explain_reader()}")
+    print("[*] Listing annual filings (10-K, 20-F, 40-F)")
+    all_filings = list_annual(company)
+    filings = all_filings[:n_filings]  # [:None] keeps them all
+    forms = ", ".join(f"{sum(f.form == form for f in all_filings)} {form}" for form in ANNUAL_FORMS
+                      if any(f.form == form for f in all_filings))
+    reading = "reading all of them" if n_filings is None else f"reading the newest {len(filings)}"
+    print(f"[+] Found {len(all_filings)} annual filings ({forms or 'none'}); {reading}")
+    return assemble(filings, n_filings, lambda filing: obtain(filing, company.cik, cache_dir), ticker)
 
 
 # --------------------------------------------------------------------------- #

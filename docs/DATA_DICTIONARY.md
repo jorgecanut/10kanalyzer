@@ -5,7 +5,7 @@ and which strategy uses it. The rule for this list: **everything needed, and
 only what is needed** in the curated layer; the raw dump stays complete so a
 new need never means downloading again.
 
-Status: **draft for review** (2026-10-29). Nothing below is built yet unless
+Status: **reviewed, thresholds to tune in the pilot** (2026-10-29). Nothing below is built yet unless
 marked *exists*. Tags marked *verify* are candidates to confirm in the pilot.
 
 ---
@@ -70,7 +70,7 @@ report (0–3; more only if the 10-K is overdue, which is flagged).
 | `name` | registrant name | `dei:EntityRegistrantName` | A | new |
 | `sic` | 4-digit industry code | SEC submissions | T, sectors, financial flag | new |
 | `sic_description` | industry name | SEC submissions | A | new |
-| `sector` | SIC division (2-digit group) for peer comparisons | derived from `sic` | T | new |
+| `sector` | peer group: SIC 3-digit when it has ≥ 10 companies in the universe, else SIC 2-digit | derived from `sic` | T | new |
 | `financial` | bank / broker / insurer / REIT | `sic` in 6000–6411 or 6798 | excludes from screens | new |
 | `shell` | shell company | `dei:EntityShellCompany`, SIC 6770 | excludes from universe | new |
 | `exchange` | listing exchange | `dei:SecurityExchangeName`, Yahoo meta | universe filter | new |
@@ -177,13 +177,14 @@ report (0–3; more only if the 10-K is overdue, which is flagged).
 | `total_debt` | debt current + noncurrent + leases | T, R | new |
 | `net_debt` | total debt − cash − short-term investments | T, R | new |
 | `net_debt_to_ebitda` | net debt / EBITDA (replaces debt/equity) | T, R | new |
-| `interest_coverage` | operating income / interest expense | T, R | new |
-| `refinancing_cover` | (cash + TTM FCF) / debt due in 12 months | T (not collapsing) | new |
+| `interest_coverage` | operating income / interest expense | R | new |
+| `interest_coverage_ebitda` | EBITDA / interest expense (operating income is what has fallen in a turnaround) | T (not collapsing) | new |
+| `refinancing_cover` | (cash + TTM FCF) / debt due in 12 months; nothing due (0) counts as a pass, a missing maturity table as unknown (not a fail) | T (not collapsing) | new |
 | `current_ratio` | current assets / current liabilities | P, R | exists |
 | `roe` | net income / average equity | C, A | exists (chart only) |
 | `roa` | net income / average total assets | P, A | exists (chart only) |
-| `roic` | operating income × (1 − tax rate) / (total debt + equity − cash) | C | exists (chart only), to formalise |
-| `return_on_capital` | Greenblatt: operating income / (net working capital + PP&E) | M | exists (proxy), to use PP&E |
+| `roic` | operating income × (1 − tax rate) / (total debt + equity − cash); goodwill **included** (it sits in equity), so growth bought through acquisitions is not flattered | C | exists (chart only), to formalise |
+| `return_on_capital` | Greenblatt: operating income / (net working capital + PP&E); goodwill **excluded**, as in the original formula | M | exists (proxy), to use PP&E |
 | `asset_turnover` | revenue / total assets | P | exists (inside F-score) |
 | `cash_conversion` | operating cash flow / net income | C, R | new |
 | `accruals_ratio` | (net income − operating cash flow) / total assets | R | exists |
@@ -243,7 +244,7 @@ report (0–3; more only if the 10-K is overdue, which is flagged).
 | `dividend_yield` | TTM dividends / price | S | new |
 | `shareholder_yield` | (dividends + buybacks − issuance + net debt paydown) / market cap | S | new |
 | `pe_median_hist`, `pe_percentile` | P/E against its own history | T | exists |
-| `ev_normalized_ebit` | EV / (10y median operating margin × TTM revenue) | **T (key metric)** | new |
+| `ev_normalized_ebit` | EV / (10y median operating margin × TTM revenue); empty when the median margin is ≤ 0 (the ratio would be meaningless or flip sign) | **T (key metric)** | new |
 | `drawdown_5y` | latest close / highest monthly high of 5 years − 1 | T (the fall) | new |
 | `momentum_12_1` | return from 12 months ago to 1 month ago | T (turning), A | new |
 | `above_10m_average` | close > 10-month average close | T (turning) | new |
@@ -263,7 +264,7 @@ report (0–3; more only if the 10-K is overdue, which is flagged).
 | `z_score_nonmanufacturing` | Altman Z'' for non-manufacturers (no revenue/assets term) | R | new |
 | `beneish_m` | Beneish M-score (8 ratios: receivables, gross margin, asset quality, growth, depreciation, SG&A, leverage, accruals) | R | new |
 | `data_quality` | share of key fields `reported` vs `derived` / `missing`, plus check mismatches | trust in every screen | new |
-| `peer_count` | companies in the same SIC group | sector context | new |
+| `peer_count` | companies in the same `sector` (SIC 3-digit, or 2-digit when 3-digit has < 10) | sector context | new |
 | `peer_median_*` | sector medians of operating margin, revenue growth, EV/EBIT, drawdown | T (sector or company problem) | new |
 | `peer_percentile_*` | the company's rank within its sector for the same fields | T, A | new |
 
@@ -275,16 +276,17 @@ Thresholds are **first drafts**, to be tuned after the pilot.
 
 | Strategy | Passes when | Output |
 | --- | --- | --- |
-| **T** Turnaround | **fell**: drawdown_5y ≤ −40% or revenue_vs_peak < 0.85 or op_margin_vs_median < 0, **and not collapsing**: TTM OCF > 0, Z > 1.8 (or Z'' > 1.1), interest coverage > 3, refinancing_cover > 1, share_change < 5%, **and turning**: f_score_change > 0 or margin_trend_quarters up or revenue_decline_slowing; ranked by `ev_normalized_ebit` | pass / fail per condition, rank |
-| **P** Piotroski on cheap | P/B in the cheapest 20% of the universe and F-score ≥ 7 | rank by F-score, then P/B |
-| **C** Compounders | roic_median_10y > 15%, roic_min_10y > 8%, years_fcf_positive ≥ 9, cash_conversion > 0.8, revenue_cagr_10y > 0 | rank by ROIC, then FCF yield |
+| **T** Turnaround | **fell**: drawdown_5y ≤ −40% or revenue_vs_peak < 0.85 or op_margin_vs_median ≤ −5 points or TTM operating margin < half the 10y median (median > 0), **and not collapsing**: TTM OCF > 0, Z > 1.8 (or Z'' > 1.1), interest_coverage_ebitda > 3, refinancing_cover > 1 (or nothing due; unknown is shown, not failed), share_change < 5%, **and turning**: f_score_change > 0 or margin_trend_quarters up or revenue_decline_slowing; ranked by `ev_normalized_ebit` (companies with an empty value are listed unranked) | pass / fail per condition, rank |
+| **P** Piotroski on cheap | equity > 0, then P/B in the cheapest 20% of the universe, and F-score ≥ 7 | rank by F-score, then P/B |
+| **C** Compounders | years_of_history ≥ 10, roic_median_10y > 15%, roic_min_10y > 8%, years_fcf_positive ≥ 9, cash_conversion > 0.8, revenue_cagr_10y > 0 | rank by ROIC, then FCF yield |
 | **M** Magic Formula | rank by return_on_capital + rank by earnings_yield (existing logic) | combined rank |
 | **S** Shareholder yield | shareholder_yield in the top 10%, FCF covers it | rank |
-| **R** Risk flags | Z < 1.8, Beneish M > −1.78, accruals in the worst 10%, share_change > 5%, dividend cut, overdue 10-K, error-correction flag, auditor change | flags (excluded or shown) |
+| **R** Risk flags | Z < 1.8, Beneish M > −2.22 (flag) / > −1.78 (exclude), accruals in the worst 10%, share_change > 5%, dividend cut, overdue 10-K, error-correction flag, auditor change | flags (excluded or shown) |
 
 Universe for every screen: not `financial`, not `shell`, `instrument_type` =
-EQUITY, `dollar_volume_12m` above a floor (e.g. 1 M USD/month), data_quality
-above a floor.
+EQUITY, `dollar_volume_12m` ≥ 20 M USD per month (about 1 M USD a day; lower
+it only for exploring), `data_quality` ≥ 70% of key fields `reported` or
+`statement` (loose start, to tighten after the pilot).
 
 ---
 
@@ -317,8 +319,19 @@ above a floor.
 
 ## 10. Open points to review
 
-1. Thresholds in section 7.
-2. Liquidity floor and data-quality floor for the universe.
-3. Peer groups: SIC 2-digit (broad) or 3-digit (narrow, fewer peers)?
-4. ROIC definition (section 4.4): include goodwill in invested capital or not?
-5. Which *verify* tags hold up in the pilot, and which need fallbacks.
+Decided in review (2026-10-29):
+
+- Section 7 thresholds revised: a real margin gap for "fell", EBITDA interest
+  coverage for "not collapsing", `ev_normalized_ebit` empty when the median
+  margin is ≤ 0, refinancing cover with nothing due counts as a pass,
+  negative equity dropped before the P/B cut, 10 years of history required
+  for compounders, Beneish M flagged at −2.22 and excluded at −1.78.
+- Universe floors: 20 M USD per month of dollar volume; data quality ≥ 70%.
+- Peer groups: SIC 3-digit with ≥ 10 companies, else 2-digit.
+- ROIC: goodwill included for compounders (`roic`), excluded for the Magic
+  Formula (`return_on_capital`).
+
+Still open:
+
+1. Tune every threshold and both floors on the pilot results.
+2. Which *verify* tags hold up in the pilot, and which need fallbacks.

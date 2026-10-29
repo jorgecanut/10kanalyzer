@@ -29,9 +29,8 @@ a part listed next to its own parts); ``incomplete`` when parts have no plain va
 year (usually tagged only per segment or tranche, so the sum cannot close).
 ``kind`` tells the primary statements from the notes.
 
-The rows are kept in the filing cache and this file's hash is part of its
-version (``filing_cache.KINDS``): code that only reads the rows (the counts in
-the run log) lives in ``edgar_dashboard.py``.
+It runs on the filing's dump (``filing_view.FilingView``: the calculation
+trees ``dump.py`` stored), so changing it needs no SEC request.
 """
 
 from __future__ import annotations
