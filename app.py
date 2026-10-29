@@ -25,6 +25,7 @@ import platform
 import re
 import secrets
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -65,6 +66,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 import charts as chartlib
 import filing_cache
+import scan as scanlib
 
 BASE_DIR = Path(__file__).resolve().parent
 DASHBOARD = BASE_DIR / "edgar_dashboard.py"
@@ -492,6 +494,9 @@ def _worker(key: str, filings: int | str, job_id: str) -> None:
         status, code = "error", -1
         try:
             env = {**os.environ, "EDGAR_IDENTITY": _identity(user), "PYTHONUNBUFFERED": "1"}
+            if _scan_running():
+                # Together with the scan's 5 per second, below SEC's limit of 10.
+                env["EDGAR_RATE_LIMIT_PER_SEC"] = "4"
             command = [sys.executable, str(DASHBOARD), "--ticker", ticker, "--filings", str(filings),
                        "--output-dir", str(_user_dir(uid)), "--cache-dir", str(DATA_DIR / FILING_CACHE)]
             if not with_charts:
@@ -771,6 +776,9 @@ def build_info() -> dict:
         kind: {"current": filing_cache.version(kind),
                "versions": [item["version"] for item in filing_cache.versions(DATA_DIR / FILING_CACHE, kind)]}
         for kind in filing_cache.KINDS}
+    info["filing_cache"][filing_cache.DUMP_KIND] = {
+        "schema": filing_cache.schema(), "reader": filing_cache.reader_id(),
+        "classified": filing_cache.classification() is not None}
     return info
 
 
@@ -1931,6 +1939,193 @@ def screener_run():
         items.append({"ticker": ticker, "status": "queued"})
 
     return jsonify(queued=queued, cached=cached, items=items), (202 if queued else 200)
+
+
+# --------------------------------------------------------------------------- #
+# Market scan (global: every user sees the same batches; see scan.py)
+# --------------------------------------------------------------------------- #
+
+SCAN_SCRIPT = BASE_DIR / "scan.py"
+SCAN_ACTIONS = ("next", "rerun", "resume")
+SCAN_LOCK = threading.Lock()
+SCAN_PROC: dict[str, subprocess.Popen | None] = {"proc": None}
+SCAN_LOG_LINES = 400
+
+
+def _market_dir() -> Path:
+    return DATA_DIR / "market"
+
+
+@contextmanager
+def _scan_db():
+    db = scanlib.connect(_market_dir())
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def _scan_active() -> dict | None:
+    """The running scan, from its database row (it outlives an app restart only as 'interrupted')."""
+    try:
+        with _scan_db() as db:
+            scanlib.mark_stale_runs(db)
+            row = db.execute("SELECT * FROM runs WHERE status = 'running' ORDER BY id DESC LIMIT 1").fetchone()
+            return dict(row) if row else None
+    except (OSError, sqlite3.Error):
+        return None
+
+
+def _scan_running() -> bool:
+    proc = SCAN_PROC["proc"]
+    return (proc is not None and proc.poll() is None) or _scan_active() is not None
+
+
+def _scan_reap(proc: subprocess.Popen, launcher) -> None:
+    """Wait for the scan so it never lingers as a zombie; record a crash before it logged."""
+    code = proc.wait()
+    try:
+        launcher.write(f"[{_now()}] scan.py exited with code {code}\n")
+        launcher.close()
+    except OSError:
+        pass
+    if code not in (0, -15):
+        _diag(None, "scan", "error", f"scan.py exited with code {code}")
+
+
+@app.get("/api/scan")
+def scan_overview():
+    try:
+        with _scan_db() as db:
+            info = scanlib.overview(db)
+    except (OSError, sqlite3.Error) as exc:
+        abort(500, f"scan database unreadable: {type(exc).__name__}: {exc}")
+    return jsonify(**info, max_count=scanlib.MAX_COUNT)
+
+
+@app.post("/api/scan/run")
+def scan_run():
+    payload = request.get_json(silent=True) or {}
+    action = str(payload.get("action") or "next")
+    if action not in SCAN_ACTIONS:
+        abort(400, f"action must be one of {', '.join(SCAN_ACTIONS)}")
+    args: list[str] = [action]
+    if action == "next":
+        try:
+            count = int(payload.get("count", 100))
+        except (TypeError, ValueError):
+            abort(400, "count must be a number")
+        if not 1 <= count <= scanlib.MAX_COUNT:
+            abort(400, f"count must be between 1 and {scanlib.MAX_COUNT}")
+        args += ["--count", str(count)]
+    else:
+        try:
+            batch = int(payload.get("batch"))
+        except (TypeError, ValueError):
+            abort(400, "batch must be a number")
+        args += ["--batch", str(batch)]
+        if action == "rerun" and payload.get("retry_failed"):
+            args.append("--retry-failed")
+        if action == "rerun" and payload.get("cik"):
+            try:
+                args += ["--cik", str(int(payload["cik"]))]
+            except (TypeError, ValueError):
+                abort(400, "cik must be a number")
+    with SCAN_LOCK:
+        if _scan_running():
+            return jsonify(error="A scan is already running; stop it or wait for it."), 409
+        root = _market_dir()
+        try:
+            (root / "logs").mkdir(parents=True, exist_ok=True)
+            launcher = (root / "logs" / "launcher.log").open("a")
+        except OSError as exc:
+            abort(500, f"cannot write {root}: {type(exc).__name__}: {exc}")
+        launcher.write(f"[{_now()}] {g.user['email']}: scan.py {' '.join(args)}\n")
+        launcher.flush()
+        env = {**os.environ, "EDGAR_IDENTITY": _identity(g.user), "PYTHONUNBUFFERED": "1",
+               "STOCKY_SCAN_QUIET": "1", "EDGAR_RATE_LIMIT_PER_SEC": scanlib.RATE_LIMIT}
+        command = [sys.executable, str(SCAN_SCRIPT), "--root", str(root),
+                   "--cache-dir", str(DATA_DIR / FILING_CACHE), *args]
+        try:
+            proc = subprocess.Popen(command, cwd=str(BASE_DIR), stdout=launcher, stderr=subprocess.STDOUT, env=env)
+        except OSError as exc:
+            launcher.close()
+            abort(500, f"cannot start scan.py: {type(exc).__name__}: {exc}")
+        SCAN_PROC["proc"] = proc
+    threading.Thread(target=_scan_reap, args=(proc, launcher), daemon=True).start()
+    _diag(g.user["id"], "scan", "info", f"scan {' '.join(args)} started", pid=proc.pid)
+    return jsonify(status="started", action=action, pid=proc.pid), 202
+
+
+@app.post("/api/scan/cancel")
+def scan_cancel():
+    """Stop the running scan; the companies it finished are kept and resume does the rest."""
+    stopped = False
+    proc = SCAN_PROC["proc"]
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        stopped = True
+    active = _scan_active()
+    if active and not stopped and active.get("pid"):
+        try:
+            os.kill(int(active["pid"]), signal.SIGTERM)
+            stopped = True
+        except (OSError, ValueError):
+            pass
+    return jsonify(stopped=stopped)
+
+
+@app.get("/api/scan/batch/<int:batch>")
+def scan_batch(batch: int):
+    kind = request.args.get("kind") or None
+    with _scan_db() as db:
+        if not db.execute("SELECT 1 FROM batches WHERE id = ?", (batch,)).fetchone():
+            abort(404, "no such batch")
+        return jsonify(scanlib.batch_detail(db, batch, kind=kind))
+
+
+@app.get("/api/scan/batch/<int:batch>/issues.csv")
+def scan_issues_csv(batch: int):
+    with _scan_db() as db:
+        text = scanlib.issues_csv(db, batch)
+    return send_file(io.BytesIO(text.encode("utf-8")), mimetype="text/csv", as_attachment=True,
+                     download_name=f"scan-batch-{batch}-issues.csv")
+
+
+@app.get("/api/scan/company/<int:cik>")
+def scan_company(cik: int):
+    """One company: its result, its issues and every filing with its dump state."""
+    with _scan_db() as db:
+        company = db.execute("SELECT * FROM companies WHERE cik = ?", (cik,)).fetchone()
+        member = db.execute("SELECT * FROM universe WHERE cik = ?", (cik,)).fetchone()
+        if member is None:
+            abort(404, "no such company")
+        issues = [dict(row) for row in db.execute("SELECT * FROM issues WHERE cik = ? ORDER BY fiscal_year DESC",
+                                                  (cik,))]
+        filings = [dict(row) for row in db.execute("SELECT * FROM filings WHERE cik = ? ORDER BY report_date DESC",
+                                                   (cik,))]
+    return jsonify(universe=dict(member), company=dict(company) if company else None, issues=issues,
+                   filings=filings)
+
+
+@app.get("/api/scan/run/<int:run>/log")
+def scan_log(run: int):
+    with _scan_db() as db:
+        row = db.execute("SELECT * FROM runs WHERE id = ?", (run,)).fetchone()
+    if row is None or not row["log"]:
+        abort(404, "no such run")
+    path = (_market_dir() / row["log"]).resolve()
+    if _market_dir().resolve() not in path.parents:
+        abort(404)
+    if request.args.get("download"):
+        if not path.is_file():
+            abort(404)
+        return send_file(path, mimetype="text/plain", as_attachment=True, download_name=path.name)
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        lines = []
+    return jsonify(run=dict(row), lines=lines[-SCAN_LOG_LINES:], total=len(lines))
 
 
 @app.get("/files/<ticker>/<path:name>")

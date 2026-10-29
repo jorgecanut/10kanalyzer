@@ -1,0 +1,13 @@
+{
+  "readers": [
+    {
+      "id": "0a13c8e032cf",
+      "dump.py": "6baff29be9f1",
+      "edgartools": "5.62.0",
+      "schema": 1,
+      "class": "format",
+      "date": "2026-10-29",
+      "note": "schema 1: the first dump format (every fact of every period, linkbase trees, labels, statements)"
+    }
+  ]
+}

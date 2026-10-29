@@ -1,13 +1,11 @@
-"""Stage 1 of the pipeline: what one annual filing says, read from its XBRL.
+"""Stage 2: the numbers chosen from one annual filing's dump.
 
-``extract_filing`` turns one 10-K / 20-F / 40-F into plain data: the ratio
-row (which tagged number is Revenue, Net income, CapEx...), the statement
-lines, the facts and the calculation checks. That result is what the filing
-cache keeps, so this module, ``xbrl_extract.py`` and ``calc_check.py`` hold
-only code that shapes it: their hash is the cache version (see
-``filing_cache.py``). Anything computed from the extracted data (millions,
-margins, valuation, charts) belongs to a later stage, so changing it never
-invalidates the cache.
+``extract_filing`` turns one 10-K / 20-F / 40-F into the ratio row (which
+tagged number is Revenue, Net income, CapEx...), the statement lines, the
+facts of the filing's own period and the calculation checks. It runs on
+``filing_view.FilingView``, the filing as ``dump.py`` stored it, so a fix
+here (a missing tag, a better fallback) reaches every filing already dumped
+on the next run, with no SEC request.
 """
 
 from __future__ import annotations
@@ -536,7 +534,7 @@ def _capex_line(statement_rows: list[dict]) -> float:
 
 
 def extract_filing(filing, period_key: str) -> dict:
-    """Everything a run takes from one annual filing, as plain data for the cache.
+    """Everything a run takes from one annual filing (a ``FilingView`` or a live filing).
 
     ``{"xbrl": False}`` when the filing has no XBRL (10-Ks before 2009-2011);
     otherwise the ratio ``row`` and the filing's ``statements``, ``facts`` and

@@ -49,61 +49,106 @@ python edgar_dashboard.py --ticker AAPL --filings 10
 python edgar_dashboard.py --ticker AAPL                 # --filings max: every annual filing
 python edgar_dashboard.py --ticker AAPL --no-charts   # data only (screener mode)
 python edgar_dashboard.py --ticker AAPL --output-dir /tmp/out   # writes /tmp/out/AAPL/
-python edgar_dashboard.py --ticker AAPL --no-cache      # parse every filing again
+python edgar_dashboard.py --ticker AAPL --no-cache      # read every filing from SEC, keep nothing
 ```
 
-**Filing cache.** A filing never changes once filed, so what a run extracts
-from each one (the ratio row, statement lines, facts and calculation checks of
-a 10-K / 20-F / 40-F, and the trades of each Form 4) is kept by accession
-number. The next run of that company downloads and parses only filings it has
-not seen: a re-run of NFLX with every filing took 170 s the first time and
-under 5 s after, with byte-identical output. Prices (Yahoo) are always fetched
-again. Entries are extracted values, never the XBRL, about 0.5 MB per company
-gzipped:
+**Filing dump.** A filing never changes once filed, so it is read once:
+`dump.py` copies everything it says (every fact of every period with all its
+dimensions, the presentation and calculation trees, the labels, edgartools'
+rendered statements, the cover-page data; text over 500 characters is left
+out) into one gzipped file per accession, about 100–500 KB. Every later run,
+and every fix to how numbers are chosen, works from the dump with no SEC
+request. A re-run of NFLX reads 17 dumps in a few seconds. Prices (Yahoo) are
+always fetched again.
 
-The pipeline has two stages, and only the first is cached:
+The pipeline has two stages, and only the first talks to SEC:
 
-| Stage | Code | What it does | Cached? |
+| Stage | Code | What it does | Needs SEC? |
 | --- | --- | --- | --- |
-| 1, per filing | `extract.py`, `xbrl_extract.py`, `calc_check.py` (Form 4s: `insider.py`) | reads the XBRL: which tagged number is Revenue, CapEx…; statement lines; facts; linkbase checks; the ADS ratio | yes, by accession |
-| 2, per ticker | `edgar_dashboard.py`, `valuation.py`, `charts.py` | millions, margins, FCF, ratios, notes, P/E and scores, charts | no, redone every run (seconds) |
+| 1, per filing | `dump.py` (Form 4s: `insider.py`) | copies what the filing says, choosing nothing | once per filing |
+| 2, per ticker | `extract.py`, `xbrl_extract.py`, `calc_check.py` (on `filing_view.FilingView`), `edgar_dashboard.py`, `valuation.py`, `charts.py` | which tag is Revenue, CapEx…; statement lines; the calculation check; millions, margins, ratios, scores, charts | never |
 
 ```
-<cache>/annual/<version>/version.json             when the version was made, by which code (file hashes)
-<cache>/annual/<version>/<CIK>/<accession>.json.gz   one annual report (also "no XBRL", so old 10-Ks are not asked again)
-<cache>/form4/<version>/<CIK>/form4.json.gz          every Form 4 of the company read so far
+<cache>/filings/schema-<N>/<CIK>/<accession>.json.gz   one 10-K, 10-KT, 20-F, 40-F or 10-Q (also "no XBRL")
+<cache>/form4/<version>/<CIK>/form4.json.gz            every Form 4 of the company read so far
 ```
 
-**Versions.** The version is a hash of the stage-1 files of that kind
-(`filing_cache.KINDS`) and the edgartools release. Editing a stage-2 file
-(margins, charts, valuation, logs) never changes it. Editing a stage-1 file
-gives a new, empty version folder: each company's filings are parsed again on
-its next run (SEC requests), and the run log says so and why
-(`Filing cache: version … (new: extract.py changed since … of 2026-10-29 …)`,
-then `14 from the cache, 3 new filings parsed, 0 parsed again`). Old versions
-stay on disk, so reverting a bad change finds its entries again at once.
-`/healthz` shows the current version and the versions on disk.
+**Versions.** The folder is named by the **schema** (`dump.SCHEMA`), which
+changes only when what is stored changes, by hand; that alone makes every
+filing be read again. Each entry is stamped with its **reader**: the hash of
+`dump.py` plus the edgartools release. A new reader (an edit to `dump.py`, an
+edgartools upgrade) keeps every existing entry valid. `readers.json` records
+each reader and how its change was classified, and a test fails until the
+current one is:
+
+- `format`: the first reader of a schema;
+- `compatible`: same data (a comment, a refactor, an edgartools upgrade that
+  reads filings the same way);
+- `bug`: entries of an older reader were wrong; remove only those with
+  `invalidate --reader <id>` (or `--form`, `--before`, `--cik`), and their
+  companies read them again on the next run.
 
 ```bash
-python filing_cache.py status                 # versions, companies, entries, size, what changed, what is stale
-python filing_cache.py prune --keep 3         # dry run: what would go
-python filing_cache.py prune --keep 3 --yes   # keep the current and the 2 newest other versions
-python filing_cache.py delete <version> --yes # never the current one
+python filing_cache.py status                            # schemas, forms, readers and their counts, sizes
+python filing_cache.py classify compatible "why"         # record the current reader in readers.json
+python filing_cache.py invalidate --reader 0a13c8e032cf  # dry run: what that reader wrote
+python filing_cache.py invalidate --form 10-Q --before 2015-01-01 --yes
+python filing_cache.py prune --yes                       # old schemas, old Form 4 versions, old layouts (annual/)
 # Docker: docker compose exec dashboard python filing_cache.py status
 ```
 
-**Rule: no change may force regenerating everything.** Code that only uses
-extracted data must stay out of the stage-1 files, and stage-1 files may import
-only each other: otherwise an edit there would either re-parse the whole
-market (~15 h of SEC requests at full scale) or change cached values without
-changing the version. `tests/test_filing_cache.py` checks both. New stores
-follow the same pattern: one file per item, versioned folders that keep old
-versions, atomic writes, and anything derived rebuildable without SEC.
+**Rule: no change may force regenerating everything.** Stage-1 code stays in
+`dump.py`, which chooses nothing and imports no other local module; anything
+that chooses or computes is stage 2 and runs on the dump.
+`tests/test_filing_cache.py` checks it: stage-2 edits never change the stamp,
+the reader imports nothing local, stage 2 on a dump equals stage 2 on the live
+filing, and only a schema bump reads filings again. New stores follow the same
+pattern: one file per item, atomic writes, and anything derived rebuildable
+without SEC.
 
-The cache lives in `--cache-dir`, else `$STOCKY_FILING_CACHE`, else
+The dump lives in `--cache-dir`, else `$STOCKY_FILING_CACHE`, else
 `<output-dir>/.filing_cache`; the web app uses `data/filing_cache/`, shared by
-every account since filings are public. Deleting it is always safe: it only
-costs the time to parse the filings again.
+every account since filings are public. Deleting it is safe but costs the
+downloads again.
+
+## Market scan
+
+`scan.py` (and the **Market** tab) scans the whole market a batch at a time.
+The universe is SEC's `company_tickers_exchange.json`, one row per company, in
+alphabetical order of ticker; it is saved the first time, so the order never
+moves. Each batch takes the next N companies no batch has taken, and for each:
+
+1. lists its annual reports (10-K, 10-KT, 20-F, 40-F; amendments skipped) and
+   the 10-Qs filed after the latest one (more than 3 flags the 10-K overdue);
+2. dumps every filing not in the dump yet: the only SEC requests, at most 5
+   per second (single-ticker runs in the app drop to 4 meanwhile);
+3. runs stage 2 from the dump and records every problem as an **issue**: a
+   total that does not add up to its parts (`check_mismatch`, with the
+   filing's value, the sum and the hint), a key metric with no tag for a year
+   (`missing_metric`), a filing that could not be downloaded or read, a
+   company that failed. 10-KTs and 10-Qs are dumped but not analysed yet.
+
+**Rerun** repeats step 3 for a batch from the dump alone, with no SEC request:
+fix the code, rerun the same batch, compare the issues. **Retry downloads**
+also downloads the filings that failed; **Resume** finishes a stopped batch.
+One failing company never stops a batch, and a stopped or killed run keeps
+every company it finished.
+
+```bash
+python scan.py next --count 100           # the next 100 companies as a new batch
+python scan.py rerun --batch 1            # stage 2 again from the dump; --cik 320193 for one company
+python scan.py rerun --batch 1 --retry-failed
+python scan.py resume --batch 1
+python scan.py status                     # universe, batches, issue counts, recent runs
+python scan.py issues --batch 1 > issues.csv
+```
+
+Everything lives in `data/market/`: `scan.db` (SQLite: universe, batches,
+runs, companies, filings, issues), `logs/run-NNNN.log` (every step of a run
+with its time, and the traceback of every failure) and
+`companies/<CIK>/` (`financial_data.csv`, `calc_check.csv`, `issues.csv`).
+The scan turns off edgartools' own download cache, which would otherwise keep
+every raw filing forever: the dump is all it keeps.
 
 ## Output
 
@@ -215,7 +260,14 @@ Routes:
 | `GET` | `/download/<ticker>` | The charts (PNG, 5-year windows) and data files as a `.zip` |
 | `GET` | `/download/<ticker>/all` | The download dialog's zip: `?charts=` and `?files=` (comma-separated; absent = all), `?years=5\|10\|0` (years per chart image; 0 = one image), `?theme=light\|dark`, `?extras=` any of `insiders,news,screener,debug` (absent = all). Charts go in `charts/` as `<id>_<from>_<to>.png`; `?months=`, `?news_limit=`, `?news_days=` follow the tabs' options |
 | `GET` | `/download/<ticker>/<name>` | One file |
-| `GET` | `/healthz` | Health probe: version, commit, code hashes, filing cache versions |
+| `GET` | `/api/scan` | The market scan: universe size, batches with result and issue counts, recent runs, the active run |
+| `POST` | `/api/scan/run` | `{"action":"next","count":100}`, `{"action":"rerun","batch":1,"retry_failed":false,"cik":null}` or `{"action":"resume","batch":1}`; one scan at a time (409 otherwise) |
+| `POST` | `/api/scan/cancel` | Stop the running scan (the companies done are kept) |
+| `GET` | `/api/scan/batch/<n>` | A batch's companies and issues (`?kind=check_mismatch` …) |
+| `GET` | `/api/scan/batch/<n>/issues.csv` | Every issue of a batch |
+| `GET` | `/api/scan/company/<cik>` | One company's result, issues and filings |
+| `GET` | `/api/scan/run/<n>/log` | The last 400 lines of a run's log (`?download=1`: the whole file) |
+| `GET` | `/healthz` | Health probe: version, commit, code hashes, dump schema and reader, Form 4 cache versions |
 | `POST` | `/api/diag` | Browser errors, for the diagnostics log (sent by the page itself) |
 
 The tabs sit on the left of the ticker bar's row, the bar on the right (on
@@ -528,7 +580,7 @@ sudo chown -R 10001:10001 data edgar_cache edgar_data
 
 ### Deploy checklist (read this before adding a module)
 
-**The `Dockerfile` copies every root Python module with `COPY *.py ./`. Do not
+**The `Dockerfile` copies every root Python module with `COPY VERSION readers.json *.py ./` (`readers.json`: the dump readers, see "Versions"). Do not
 replace that with an explicit file list.** A hard-coded list is how a new module
 (`valuation.py`, `insider.py`) gets left out of the image: the container then
 runs a current `app.py` with a stale pipeline, the pipeline prints

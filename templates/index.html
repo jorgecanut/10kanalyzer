@@ -466,6 +466,29 @@
   .screen-notes:empty { display:none; }
   .row-btn { padding:3px 8px; font-size:calc(var(--fs) * 14); }
 
+  /* Market tab: start a batch, the batches, then one batch's issues, companies or log. */
+  .mk-form { grid-template-columns:minmax(150px, 220px) auto auto; justify-content:start; }
+  .mk-form button { height:40px; }
+  .mk-active { margin:16px 0 0; }
+  .mk-bar { height:6px; margin:8px 0 0; border-radius:999px; background:var(--surface-2); overflow:hidden; }
+  .mk-bar span { display:block; height:100%; background:var(--accent); }
+  .mk-section { margin-top:20px; padding-top:20px; border-top:1px solid var(--line); }
+  .mk-section h3 { margin:0 0 12px; }
+  .mk-tools { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:0 0 12px; }
+  .mk-tools .sim-controls { margin:0; }
+  .mk-tools select { padding:8px 12px; font-size:calc(var(--fs) * 14); }
+  .mk-row-actions { display:flex; gap:8px; justify-content:flex-end; }
+  table.data td.mk-text { white-space:normal; text-align:left; min-width:320px; overflow-wrap:anywhere; }
+  .mk-why, .mk-where { display:block; margin-top:4px; font-size:calc(var(--fs) * 14); }
+  .mk-where { color:var(--muted); }
+  .mk-filings { margin-top:20px; }
+  table.data td.mk-left, table.data th.mk-left { text-align:left; }
+  .mk-error { color:var(--badge-error-fg); }
+  .mk-info { color:var(--muted); }
+  .mk-link { padding:0; border:0; background:none; color:var(--text); font:inherit; cursor:pointer;
+             text-decoration:underline; text-underline-offset:3px; }
+  .mk-link:hover { color:var(--accent); }
+
   /* Options: a small centred dialog; vertical tabs left, sections right. */
   .opt-backdrop { position:fixed; inset:0; z-index:60; display:flex; align-items:center; justify-content:center;
                   padding:16px; background:var(--scrim); }
@@ -940,6 +963,7 @@
         <button id="tab-screener" onclick="showTab('screener')">Screener</button>
         <button id="tab-simulation" onclick="showTab('simulation')">Simulation</button>
         <button id="tab-news" onclick="showTab('news')">News</button>
+        <button id="tab-market" onclick="showTab('market')">Market</button>
       </nav>
       <button id="tab-recent" class="tab-icon nav-btn" onclick="showTab('recent')"
               title="Recent runs" aria-label="Recent runs">
@@ -1260,6 +1284,90 @@
               <tr><td colspan="12" class="muted">No screened tickers yet.</td></tr>
             </tbody>
           </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Market tab: the global scan (scan.py), the same for every account. -->
+  <section id="pane-market" class="hidden">
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">Market scan</span>
+        <span class="panel-actions">
+          <span class="muted" id="mk-progress"></span>
+          <button class="panel-btn icon-btn" onclick="loadMarket()" title="Refresh" aria-label="Refresh">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh" /></svg>
+          </button>
+        </span>
+      </div>
+      <div class="panel-body">
+        <p class="sim-meta" id="mk-meta" role="status">Loading…</p>
+        <div class="sim-form mk-form">
+          <div>
+            <label for="mk-count">Companies in the next batch</label>
+            <input id="mk-count" type="number" min="1" max="10000" step="1" value="100"
+                   oninput="renderMarketStart()" onkeydown="if(event.key==='Enter')marketStart()">
+          </div>
+          <button class="primary" id="mk-run" onclick="marketStart()">Scan the next 100</button>
+          <button class="panel-btn" id="mk-stop" onclick="marketStop()" hidden>Stop</button>
+        </div>
+        <p class="sim-note">Companies come in alphabetical order of ticker, and a new batch never repeats one
+          already scanned. Each filing is downloaded once and kept. <b>Rerun</b> repeats the analysis from the
+          kept filings without downloading anything, so a fix can be checked on the same batch.</p>
+        <div id="mk-active" class="mk-active" hidden>
+          <p class="sim-meta" id="mk-active-text"></p>
+          <div class="mk-bar" role="progressbar" aria-label="Batch progress" id="mk-bar"><span></span></div>
+        </div>
+
+        <div class="mk-section">
+          <h3>Batches</h3>
+          <div class="table-wrap">
+            <table class="data" id="mk-batches">
+              <thead>
+                <tr>
+                  <th>Batch</th>
+                  <th class="mk-left">Tickers</th>
+                  <th title="Companies done of the batch">Done</th>
+                  <th title="Every filing read and analysed">OK</th>
+                  <th title="Analysed, but some filings could not be downloaded or read">Partial</th>
+                  <th title="The company could not be analysed">Failed</th>
+                  <th title="No 10-K, 20-F or 40-F (funds, new listings) or none with XBRL">No data</th>
+                  <th title="Filings kept in the dump, of all listed">Filings</th>
+                  <th title="Totals that do not add up to their parts">Mismatches</th>
+                  <th title="Key metrics with no tag found for a year">Missing</th>
+                  <th title="Downloads or reads that failed">Errors</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="mk-batch-body"><tr><td colspan="12" class="muted">No batch yet.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="mk-section" id="mk-detail" hidden>
+          <h3 id="mk-detail-title"></h3>
+          <div class="mk-tools">
+            <div class="sim-controls chips" id="mk-views" role="group" aria-label="Show"></div>
+            <select id="mk-kind" aria-label="Issue kind" onchange="MARKET.kind=this.value;loadMarketBatch(MARKET.batch)"></select>
+            <select id="mk-run-log" aria-label="Run" onchange="MARKET.run=Number(this.value);loadMarketLog()"></select>
+            <button class="panel-btn" id="mk-csv" onclick="downloadMarketIssues()">Issues as CSV</button>
+            <button class="panel-btn" id="mk-log-dl" onclick="downloadMarketLog()">Download log</button>
+          </div>
+          <p class="sim-meta" id="mk-detail-meta"></p>
+          <div class="table-wrap" id="mk-table-wrap">
+            <table class="data" id="mk-table"><thead id="mk-head"></thead><tbody id="mk-body"></tbody></table>
+          </div>
+          <div class="table-wrap mk-filings" id="mk-filings" hidden>
+            <table class="data">
+              <thead><tr><th>Form</th><th>Period</th><th>Filed</th><th class="mk-left">State</th><th>Size</th>
+                <th title="Download and read time">Time</th><th class="mk-left">Accession</th><th class="mk-left">Error or reader</th></tr></thead>
+              <tbody id="mk-body2"></tbody>
+            </table>
+          </div>
+          <div class="term-body logs-term" id="mk-log-box" hidden>
+            <pre id="mk-log" class="term-log" role="log"></pre>
+          </div>
         </div>
       </div>
     </div>
@@ -1695,9 +1803,9 @@ const LIVE = {};
 
 // Per-browser settings from Options. One JSON blob; bad values fall back.
 const TAB_NAMES = { home: 'Home', graph: 'Charts', insiders: 'Insiders', screener: 'Screener',
-                    simulation: 'Simulation', news: 'News', logs: 'Logs' };
+                    simulation: 'Simulation', news: 'News', market: 'Market', logs: 'Logs' };
 const PREF_DEFAULTS = {
-  tab: 'home', tabOrder: ['home', 'graph', 'insiders', 'screener', 'simulation', 'news', 'logs'],
+  tab: 'home', tabOrder: ['home', 'graph', 'insiders', 'screener', 'simulation', 'news', 'market', 'logs'],
   filings: 'max', textSize: '1', date: 'dmy', number: 'en-US',
   insiderMonths: 12, simAmount: 1000, simYears: 4, simMode: 'cash', simRange: '1y',
   newsLimit: 20, newsDays: 14,
@@ -1715,6 +1823,8 @@ try {
     if (!(key in PREF_DEFAULTS)) continue;
     // Orders saved before the Logs tab existed get it at the end.
     if (key === 'tabOrder' && Array.isArray(value) && !value.includes('logs')) value.push('logs');
+    // ... and Market before Logs.
+    if (key === 'tabOrder' && Array.isArray(value) && !value.includes('market')) value.splice(value.indexOf('logs'), 0, 'market');
     if (PREF_CHOICES[key] && !PREF_CHOICES[key].includes(value)) continue;
     if (key === 'tabOrder' && !(Array.isArray(value) && value.length === PREF_DEFAULTS.tabOrder.length
         && PREF_DEFAULTS.tabOrder.every(tab => value.includes(tab)))) continue;
@@ -2681,7 +2791,7 @@ function syncTabFades() {
 // The URL names the open tab and the pinned ticker (#charts/AAPL), so Back,
 // Forward, reload and bookmarks land where you were. The pane ids stay internal.
 const TAB_SLUGS = { home: 'home', graph: 'charts', insiders: 'insiders', recent: 'recent',
-                    screener: 'screener', simulation: 'simulation', news: 'news', logs: 'logs' };
+                    screener: 'screener', simulation: 'simulation', news: 'news', market: 'market', logs: 'logs' };
 
 function parseHash() {
   const [slug = '', raw = ''] = decodeURIComponent(location.hash.slice(1)).split('/');
@@ -2709,7 +2819,7 @@ window.addEventListener('popstate', () => {
 });
 
 function showTab(name, { history: mode = 'push' } = {}) {
-  for (const tab of ['home', 'graph', 'insiders', 'recent', 'screener', 'simulation', 'news', 'logs']) {
+  for (const tab of ['home', 'graph', 'insiders', 'recent', 'screener', 'simulation', 'news', 'market', 'logs']) {
     const active = tab === name;
     $(`#pane-${tab}`).classList.toggle('hidden', !active);
     $(`#tab-${tab}`).classList.toggle('active', active);
@@ -2727,6 +2837,8 @@ function showTab(name, { history: mode = 'push' } = {}) {
   if (name === 'screener') loadScreener();
   if (name === 'simulation') initSimulation();
   if (name === 'news') initNews();
+  if (name === 'market') loadMarket();
+  else clearTimeout(MARKET.timer);
   if (name === 'logs') initLogs();
   else clearTimeout(LOGS.timer);
   syncHash(mode, name);
@@ -4693,6 +4805,343 @@ const fmtDate = value => {
   if (PREFS.date === 'ymd') return `${year}-${month}-${day}`;
   return `${day}/${month}/${year}`;
 };
+
+/* Market ------------------------------------------------------------------ */
+
+// The global scan (scan.py): batches of companies in alphabetical order, each
+// filing dumped once. One batch at a time is open below the list: its issues,
+// its companies, one company's filings, or a run's log.
+const MARKET = { data: null, batch: null, view: 'issues', kind: '', detail: null, run: null, cik: null,
+                 company: null, timer: null, follow: false };
+const MK_KINDS = {
+  check_mismatch: 'Total does not add up', missing_metric: 'Metric missing', download_failed: 'Download failed',
+  analysis_failed: 'Filing unreadable', dump_part_failed: 'Part of a filing unread', company_failed: 'Company failed',
+  overdue_10k: '10-K overdue',
+};
+const MK_RESULTS = { ok: 'OK', partial: 'Partial', failed: 'Failed', no_filings: 'No annual reports', no_xbrl: 'No XBRL' };
+const MK_VIEWS = { issues: 'Issues', companies: 'Companies', log: 'Log' };
+
+const mkNumber = v => (v === null || v === undefined || v === '' ? '—'
+  : Math.abs(Number(v)) >= 1000 ? fmtInt(Math.round(Number(v))) : fmtNum(Number(v), 3));
+const mkCount = v => (v ? fmtInt(v) : '<span class="mk-info">0</span>');
+
+async function mkJSON(url, options) {
+  const res = await fetch(url, options);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+async function loadMarket() {
+  clearTimeout(MARKET.timer);
+  try {
+    MARKET.data = await mkJSON('/api/scan');
+  } catch (err) {
+    $('#mk-meta').textContent = `Could not load the scan: ${err.message}`;
+    return;
+  }
+  const active = MARKET.data.active;
+  // A batch just started: open its log.
+  if (active && MARKET.follow) {
+    MARKET.follow = false;
+    MARKET.batch = active.batch;
+    MARKET.view = 'log';
+    MARKET.run = active.id;
+  }
+  renderMarket();
+  if (MARKET.batch) await loadMarketBatch(MARKET.batch, { keep: true });
+  if ((active || MARKET.follow) && !$('#pane-market').classList.contains('hidden')) {
+    MARKET.timer = setTimeout(loadMarket, 4000);
+  }
+}
+
+function renderMarketStart() {
+  const count = Math.floor(Number($('#mk-count').value));
+  const valid = count >= 1 && count <= (MARKET.data?.max_count || 10000);
+  const busy = Boolean(MARKET.data?.active);
+  $('#mk-run').textContent = valid ? `Scan the next ${fmtInt(count)}` : 'Scan the next batch';
+  $('#mk-run').disabled = !valid || busy || MARKET.data?.next === null && MARKET.data?.universe > 0;
+}
+
+function renderMarket() {
+  const data = MARKET.data;
+  const active = data.active;
+  const scanned = data.batches.reduce((sum, b) => sum + b.companies, 0);
+  const meta = [
+    data.universe ? `${fmtInt(data.universe)} companies in SEC's list` : 'SEC’s company list is downloaded with the first batch',
+    `${fmtInt(scanned)} scanned in ${fmtInt(data.batches.length)} ${data.batches.length === 1 ? 'batch' : 'batches'}`,
+    data.next ? `next: ${data.next}` : '',
+  ].filter(Boolean).join(' · ');
+  const reader = data.reader.classified ? ''
+    : ` · dump reader ${data.reader.id} is not in readers.json yet`;
+  $('#mk-meta').textContent = meta + reader;
+  $('#mk-stop').hidden = !active;
+  $('#mk-active').hidden = !active;
+  if (active) {
+    const what = { next: 'Scanning', resume: 'Resuming', rerun: 'Rerunning from the dump' }[active.kind] || active.kind;
+    const done = active.done || 0;
+    $('#mk-active-text').textContent = `${what}: batch ${active.batch}, ${fmtInt(done)} of ${fmtInt(active.total)} companies`
+      + (active.current ? `, now ${active.current}` : '')
+      + (active.kind !== 'rerun' ? ` · ${fmtInt(active.downloaded)} filings downloaded, ${fmtInt(active.from_dump)} already kept` : '')
+      + (active.download_failed ? `, ${fmtInt(active.download_failed)} failed` : '');
+    const pct = active.total ? Math.round(100 * done / active.total) : 0;
+    $('#mk-bar span').style.width = `${pct}%`;
+    $('#mk-bar').setAttribute('aria-valuenow', String(pct));
+    $('#mk-progress').textContent = `run ${active.id}: ${pct}%`;
+  } else {
+    $('#mk-progress').textContent = '';
+  }
+  renderMarketStart();
+
+  const busy = Boolean(active);
+  $('#mk-batch-body').innerHTML = data.batches.length ? data.batches.map(b => {
+    const r = b.results;
+    const kinds = b.issue_kinds || {};
+    const errors = (kinds.download_failed || 0) + (kinds.analysis_failed || 0) + (kinds.company_failed || 0);
+    const unfinished = b.companies < b.size;
+    const open = MARKET.batch === b.batch;
+    return `<tr>
+      <td><button class="mk-link" onclick="openMarketBatch(${b.batch})" aria-pressed="${open}">${b.batch}</button></td>
+      <td class="mk-left">${esc(b.first || '')}–${esc(b.last || '')}</td>
+      <td>${fmtInt(b.companies)}/${fmtInt(b.size)}</td>
+      <td>${mkCount(r.ok)}</td><td>${mkCount(r.partial)}</td>
+      <td class="${r.failed ? 'mk-error' : ''}">${mkCount(r.failed)}</td>
+      <td>${mkCount((r.no_filings || 0) + (r.no_xbrl || 0))}</td>
+      <td>${fmtInt(b.dumped)}/${fmtInt(b.filings)}</td>
+      <td>${mkCount(kinds.check_mismatch)}</td><td>${mkCount(kinds.missing_metric)}</td>
+      <td class="${errors ? 'mk-error' : ''}">${mkCount(errors)}</td>
+      <td><span class="mk-row-actions">
+        <button class="panel-btn row-btn" onclick="marketAction('rerun', ${b.batch})" ${busy ? 'disabled' : ''}
+                title="Analyse this batch again from the kept filings; nothing is downloaded">Rerun</button>
+        ${b.download_failed ? `<button class="panel-btn row-btn" onclick="marketAction('rerun', ${b.batch}, { retry_failed: true })" ${busy ? 'disabled' : ''}
+                title="Download the ${b.download_failed} filings that failed, then analyse the batch again">Retry downloads</button>` : ''}
+        ${unfinished ? `<button class="panel-btn row-btn" onclick="marketAction('resume', ${b.batch})" ${busy ? 'disabled' : ''}
+                title="Scan the companies this batch has not done yet">Resume</button>` : ''}
+      </span></td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="12" class="muted">No batch yet: choose how many companies and press Scan.</td></tr>';
+}
+
+async function marketStart() {
+  const count = Math.floor(Number($('#mk-count').value));
+  await marketRequest({ action: 'next', count });
+}
+
+async function marketAction(action, batch, extra = {}) {
+  await marketRequest({ action, batch, ...extra });
+}
+
+async function marketRequest(payload) {
+  try {
+    await mkJSON('/api/scan/run', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify(payload) });
+  } catch (err) {
+    $('#mk-meta').textContent = `Could not start: ${err.message}`;
+    return;
+  }
+  MARKET.follow = true;
+  if (payload.batch) {
+    MARKET.batch = payload.batch;
+    MARKET.view = 'log';
+    MARKET.run = null;
+  }
+  setTimeout(loadMarket, 700);
+}
+
+async function marketStop() {
+  try {
+    await mkJSON('/api/scan/cancel', { method: 'POST' });
+  } catch (err) {
+    $('#mk-meta').textContent = `Could not stop: ${err.message}`;
+  }
+  setTimeout(loadMarket, 1500);
+}
+
+function openMarketBatch(batch) {
+  if (MARKET.batch !== batch) {
+    MARKET.batch = batch;
+    MARKET.view = 'issues';
+    MARKET.kind = '';
+    MARKET.run = null;
+    MARKET.cik = null;
+  }
+  renderMarket();
+  loadMarketBatch(batch);
+}
+
+function setMarketView(view) {
+  MARKET.view = view;
+  if (view !== 'company') MARKET.cik = null;
+  renderMarketDetail();
+  if (view === 'log') loadMarketLog();
+}
+
+async function loadMarketBatch(batch, { keep = false } = {}) {
+  if (!batch) return;
+  try {
+    const kind = MARKET.kind ? `?kind=${encodeURIComponent(MARKET.kind)}` : '';
+    MARKET.detail = await mkJSON(`/api/scan/batch/${batch}${kind}`);
+  } catch (err) {
+    $('#mk-detail').hidden = false;
+    $('#mk-detail-meta').textContent = `Could not load batch ${batch}: ${err.message}`;
+    return;
+  }
+  renderMarketDetail();
+  if (MARKET.view === 'log') await loadMarketLog();
+  if (MARKET.view === 'company' && MARKET.cik && !keep) await loadMarketCompany(MARKET.cik);
+}
+
+function mkHead(cells) {
+  $('#mk-head').innerHTML = `<tr>${cells.map(([label, cls = '', title = '']) =>
+    `<th class="${cls}"${title ? ` title="${esc(title)}"` : ''}>${esc(label)}</th>`).join('')}</tr>`;
+}
+
+// One row per issue: the line, then where it sits and why, in the same cell.
+function mkIssueRows(issues, withTicker = true) {
+  if (!issues.length) return `<tr><td colspan="7" class="muted">No issues${MARKET.kind ? ' of this kind' : ''}.</td></tr>`;
+  return issues.map(i => {
+    const where = [i.statement, i.concept && i.concept !== i.label ? i.concept : '', i.accession].filter(Boolean).join(' · ');
+    return `<tr class="${i.severity === 'error' ? 'mk-error' : i.severity === 'info' ? 'mk-info' : ''}">
+      <td>${withTicker ? `<button class="mk-link" onclick="openMarketCompany(${i.cik})">${esc(i.ticker || i.cik)}</button>` : esc(i.form || '')}</td>
+      <td>${i.fiscal_year ? `FY${i.fiscal_year}` : esc(i.period || '')}</td>
+      <td class="mk-left">${esc(MK_KINDS[i.kind] || i.kind)}</td>
+      <td class="mk-text"><b>${esc(i.label || i.concept || '')}</b>${i.detail ? `<span class="mk-why">${esc(i.detail)}</span>` : ''}${where ? `<span class="mk-where">${esc(where)}</span>` : ''}</td>
+      <td>${mkNumber(i.reported)}</td><td>${mkNumber(i.computed)}</td><td>${mkNumber(i.difference)}</td>
+    </tr>`;
+  }).join('');
+}
+
+const MK_ISSUE_HEAD = [['Ticker'], ['Year'], ['Issue', 'mk-left'], ['Line, why, where', 'mk-left'],
+  ['Reported', '', 'What the filing says the total is'], ['Computed', '', 'The sum of its parts'], ['Difference']];
+
+function renderMarketDetail() {
+  const detail = MARKET.detail;
+  if (!detail) return;
+  const s = detail.summary;
+  $('#mk-detail').hidden = false;
+  $('#mk-detail-title').textContent = MARKET.view === 'company' && MARKET.company
+    ? `${MARKET.company.universe.ticker} · ${MARKET.company.universe.name}`
+    : `Batch ${s.batch}: ${s.first}–${s.last}`;
+  const views = { ...MK_VIEWS, ...(MARKET.cik ? { company: MARKET.company?.universe.ticker || 'Company' } : {}) };
+  $('#mk-views').innerHTML = Object.entries(views).map(([key, label]) =>
+    `<button class="${MARKET.view === key ? 'active' : ''}" aria-pressed="${MARKET.view === key}" onclick="setMarketView('${key}')">${esc(label)}</button>`).join('');
+  const kinds = s.issue_kinds || {};
+  $('#mk-kind').hidden = MARKET.view !== 'issues';
+  $('#mk-kind').innerHTML = `<option value="">Every issue (${fmtInt(s.issues)})</option>`
+    + Object.entries(kinds).map(([kind, n]) =>
+      `<option value="${esc(kind)}" ${MARKET.kind === kind ? 'selected' : ''}>${esc(MK_KINDS[kind] || kind)} (${fmtInt(n)})</option>`).join('');
+  $('#mk-csv').hidden = MARKET.view !== 'issues';
+  const runs = (MARKET.data?.runs || []).filter(run => run.batch === s.batch);
+  if (!MARKET.run && runs.length) MARKET.run = runs[0].id;
+  $('#mk-run-log').hidden = MARKET.view !== 'log' || !runs.length;
+  $('#mk-log-dl').hidden = MARKET.view !== 'log' || !MARKET.run;
+  $('#mk-run-log').innerHTML = runs.map(run =>
+    `<option value="${run.id}" ${run.id === MARKET.run ? 'selected' : ''}>Run ${run.id}: ${esc(run.kind)}, ${esc(run.status)}${run.started ? `, ${fmtDate(run.started)}` : ''}</option>`).join('');
+  const log = MARKET.view === 'log';
+  $('#mk-log-box').hidden = !log;
+  $('#mk-table-wrap').hidden = log;
+
+  if (MARKET.view === 'issues') {
+    const shown = detail.issues.length;
+    $('#mk-detail-meta').textContent = `${fmtInt(s.issues)} issues in ${fmtInt(s.companies)} companies`
+      + (shown < (MARKET.kind ? kinds[MARKET.kind] || 0 : s.issues) ? `; the first ${fmtInt(shown)} shown, the CSV has them all` : '')
+      + '. Errors first, then totals that do not add up and missing metrics; notes are dimmed.';
+    mkHead(MK_ISSUE_HEAD);
+    $('#mk-body').innerHTML = mkIssueRows(detail.issues);
+  } else if (MARKET.view === 'companies') {
+    $('#mk-detail-meta').textContent = `${fmtInt(s.companies)} of ${fmtInt(s.size)} companies done; `
+      + `${fmtInt(s.dumped)} of ${fmtInt(s.filings)} filings kept (${(s.bytes / 1048576).toFixed(1)} MB).`;
+    mkHead([['Ticker'], ['Name', 'mk-left'], ['Result', 'mk-left'], ['Years'],
+      ['Annual', '', 'Fiscal years analysed of the annual reports found'], ['10-Q', '', '10-Qs after the latest annual report'],
+      ['Adds up', '', 'Totals that add up, of those checked'], ['Mismatches'], ['Missing'], ['Issues'], ['Time'],
+      ['Error', 'mk-left']]);
+    $('#mk-body').innerHTML = detail.companies.map(c => `<tr class="${c.result === 'failed' ? 'mk-error' : !c.result ? 'mk-info' : ''}">
+        <td><button class="mk-link" onclick="openMarketCompany(${c.cik})">${esc(c.ticker)}</button></td>
+        <td class="mk-left">${esc(c.name || '')}</td>
+        <td class="mk-left">${esc(c.result ? MK_RESULTS[c.result] || c.result : 'not done yet')}</td>
+        <td>${c.first_fy ? `${c.first_fy}–${c.last_fy}` : '—'}</td>
+        <td>${c.result ? `${fmtInt(c.annual_analysed || 0)}/${fmtInt(c.annual_found || 0)}` : '—'}</td>
+        <td>${c.result ? fmtInt(c.quarterly_found || 0) + (c.overdue_10k ? ' (overdue)' : '') : '—'}</td>
+        <td>${c.checks_total ? `${fmtInt(c.checks_ok)}/${fmtInt(c.checks_total)}` : '—'}</td>
+        <td>${c.result ? mkCount(c.checks_mismatch) : '—'}</td><td>${c.result ? mkCount(c.missing_metrics) : '—'}</td>
+        <td>${c.result ? mkCount(c.issues) : '—'}</td>
+        <td>${c.seconds ? `${Math.round(c.seconds)} s` : '—'}</td>
+        <td class="mk-text">${esc(c.result && c.result !== 'ok' ? c.error || '' : '')}</td>
+      </tr>`).join('') || '<tr><td colspan="12" class="muted">No companies.</td></tr>';
+  } else if (MARKET.view === 'company' && MARKET.company) {
+    const { company, filings, issues } = MARKET.company;
+    $('#mk-detail-meta').innerHTML = esc(company
+      ? `${MK_RESULTS[company.result] || company.result}${company.error && company.result !== 'ok' ? `: ${company.error}` : ''} · `
+        + `${fmtInt(filings.filter(f => f.dumped).length)} of ${fmtInt(filings.length)} filings kept · ${fmtInt(issues.length)} issues`
+      : 'Not scanned yet.')
+      + ` · <button class="mk-link" onclick="openMarketCharts('${esc(MARKET.company.universe.ticker)}')">Open in Charts</button>`;
+    mkHead([['Form'], ...MK_ISSUE_HEAD.slice(1)]);
+    $('#mk-body').innerHTML = mkIssueRows(issues, false);
+    $('#mk-body2').innerHTML = filings.map(f => `<tr class="${f.error && !f.dumped ? 'mk-error' : ''}">
+        <td>${esc(f.form)}</td><td>${esc(f.report_date || '—')}</td><td>${esc(f.filed || '—')}</td>
+        <td class="mk-left">${f.dumped ? (f.xbrl ? 'kept' : 'kept, no XBRL') : f.error ? 'download failed' : 'not downloaded'}</td>
+        <td>${f.bytes ? `${fmtInt(Math.round(f.bytes / 1024))} KB` : '—'}</td>
+        <td>${f.seconds ? `${f.seconds.toFixed(1)} s` : '—'}</td>
+        <td class="mk-left">${esc(f.accession)}</td>
+        <td class="mk-text">${esc(f.error || (f.reader ? `reader ${f.reader}` : ''))}</td>
+      </tr>`).join('') || '<tr><td colspan="8" class="muted">No filings listed.</td></tr>';
+  }
+  $('#mk-filings').hidden = MARKET.view !== 'company' || !MARKET.company;
+}
+
+async function openMarketCompany(cik) {
+  MARKET.cik = cik;
+  MARKET.view = 'company';
+  await loadMarketCompany(cik);
+}
+
+async function loadMarketCompany(cik) {
+  try {
+    MARKET.company = await mkJSON(`/api/scan/company/${cik}`);
+  } catch (err) {
+    $('#mk-detail-meta').textContent = `Could not load the company: ${err.message}`;
+    return;
+  }
+  renderMarketDetail();
+}
+
+// The single-ticker pipeline reads the same kept filings, so this is quick.
+function openMarketCharts(ticker) {
+  $('#ticker').value = ticker;
+  updateMode();
+  handlePrimary();
+}
+
+async function loadMarketLog() {
+  if (!MARKET.run) {
+    $('#mk-log').textContent = 'No run of this batch yet.';
+    return;
+  }
+  try {
+    const data = await mkJSON(`/api/scan/run/${MARKET.run}/log`);
+    const box = $('#mk-log-box');
+    const atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 8;
+    $('#mk-log').innerHTML = data.lines.map(line => {
+      const cls = /\[!\]/.test(line) ? 'term-warn' : /\[\+\]/.test(line) ? 'term-ok' : '';
+      return cls ? `<span class="${cls}">${esc(line)}</span>` : esc(line);
+    }).join('\n') || 'The log is empty.';
+    $('#mk-detail-meta').textContent = data.total > data.lines.length
+      ? `The last ${fmtInt(data.lines.length)} of ${fmtInt(data.total)} lines; download the log for all of it.`
+      : `${fmtInt(data.total)} lines.`;
+    if (atEnd) box.scrollTop = box.scrollHeight;
+  } catch (err) {
+    $('#mk-log').textContent = `Could not load the log: ${err.message}`;
+  }
+}
+
+function downloadMarketIssues() {
+  if (MARKET.batch) location.href = `/api/scan/batch/${MARKET.batch}/issues.csv`;
+}
+
+function downloadMarketLog() {
+  if (MARKET.run) location.href = `/api/scan/run/${MARKET.run}/log?download=1`;
+}
+
 
 function simAnnualDividend() {
   const data = SIM.data;

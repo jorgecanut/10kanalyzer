@@ -12,9 +12,8 @@ Two extractors, each returning long-form rows (one row per line/fact):
 - ``extract_statements`` — the five primary statements, dimension-free.
 - ``extract_facts`` — every fact for the filing's period, dimensions included.
 
-What they return is kept in the filing cache, and this file's hash is part of
-its version (``filing_cache.KINDS``): code that only uses the rows (the note
-schedules, for instance) lives in ``edgar_dashboard.py``.
+Both run on the filing's dump (``filing_view.FilingView``), so changing them
+needs no SEC request.
 """
 
 from __future__ import annotations

@@ -108,7 +108,9 @@ class AuthTests(AppTestCase):
 
     def test_healthz_names_the_filing_cache_version(self):
         info = app.app.test_client().get("/healthz").get_json()["filing_cache"]
-        self.assertEqual(info["annual"]["current"], app.filing_cache.version("annual"))
+        self.assertEqual(info["filings"]["reader"], app.filing_cache.reader_id())
+        self.assertEqual(info["filings"]["schema"], app.filing_cache.schema())
+        self.assertTrue(info["filings"]["classified"])
         self.assertEqual(info["form4"]["versions"], [])
 
     def test_login_logout(self):
@@ -725,6 +727,73 @@ class DeletionTests(AppTestCase):
         self.assertEqual(self.client.get("/api/account").status_code, 401)
         login = app.app.test_client().post("/api/login", json={"email": "ada@example.com", "password": PASSWORD})
         self.assertEqual(login.status_code, 401)
+
+
+# Stands in for scan.py: records its arguments and identity, then waits to be stopped.
+FAKE_SCAN = textwrap.dedent("""
+    import os, sys, time
+    root = sys.argv[sys.argv.index("--root") + 1]
+    with open(os.path.join(root, "args.txt"), "w") as out:
+        out.write(" ".join(sys.argv[1:]) + "\\n" + os.environ.get("EDGAR_IDENTITY", "") + "\\n"
+                  + os.environ.get("EDGAR_RATE_LIMIT_PER_SEC", ""))
+    time.sleep(float(os.environ.get("FAKE_SCAN_SECONDS", "30")))
+""")
+
+
+class ScanApiTests(AppTestCase):
+    def setUp(self):
+        super().setUp()
+        fake = self.tmp / "fake_scan.py"
+        fake.write_text(FAKE_SCAN)
+        patcher = unittest.mock.patch.object(app, "SCAN_SCRIPT", fake)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(self.stop_scan)
+
+    def stop_scan(self):
+        proc = app.SCAN_PROC["proc"]
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        app.SCAN_PROC["proc"] = None
+
+    def args(self):
+        path = self.tmp / "data" / "market" / "args.txt"
+        deadline = time.time() + 10
+        while not path.is_file() and time.time() < deadline:
+            time.sleep(0.05)
+        return path.read_text().splitlines()
+
+    def test_overview_of_an_empty_scan(self):
+        info = self.client.get("/api/scan").get_json()
+        self.assertEqual((info["universe"], info["batches"], info["active"]), (0, [], None))
+        self.assertEqual(info["reader"]["id"], app.filing_cache.reader_id())
+        self.assertEqual(self.client.get("/api/scan/batch/1").status_code, 404)
+        self.assertEqual(self.client.get("/api/scan/run/1/log").status_code, 404)
+        self.assertEqual(app.app.test_client().get("/api/scan").status_code, 401)
+
+    def test_requests_are_checked(self):
+        for payload in ({"action": "next", "count": 0}, {"action": "next", "count": "many"},
+                        {"action": "delete"}, {"action": "rerun"}, {"action": "rerun", "batch": 1, "cik": "x"}):
+            self.assertEqual(self.client.post("/api/scan/run", json=payload).status_code, 400, payload)
+
+    def test_a_scan_runs_alone_with_the_users_identity_and_can_be_stopped(self):
+        res = self.client.post("/api/scan/run", json={"action": "next", "count": 25})
+        self.assertEqual(res.status_code, 202)
+        args, identity, rate = self.args()
+        self.assertIn("next --count 25", args)
+        self.assertIn("--cache-dir", args)
+        self.assertEqual(identity, "Ada Lovelace ada@example.com")
+        self.assertEqual(rate, "5")
+        again = self.client.post("/api/scan/run", json={"action": "rerun", "batch": 1})
+        self.assertEqual(again.status_code, 409)
+        self.assertTrue(self.client.post("/api/scan/cancel").get_json()["stopped"])
+        app.SCAN_PROC["proc"].wait(timeout=10)
+        self.assertIn("scan.py next --count 25", (self.tmp / "data" / "market" / "logs" / "launcher.log").read_text())
+
+    def test_rerun_passes_the_batch_and_the_options(self):
+        self.client.post("/api/scan/run", json={"action": "rerun", "batch": 3, "retry_failed": True, "cik": "320193"})
+        self.assertIn("rerun --batch 3 --retry-failed --cik 320193", self.args()[0])
 
 
 if __name__ == "__main__":
