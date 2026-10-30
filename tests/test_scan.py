@@ -4,8 +4,11 @@ Run from the repo root:  python -m unittest discover tests
 """
 
 import io
+import os
+import signal
 import sys
 import tempfile
+import time
 import unittest
 import unittest.mock
 from contextlib import redirect_stdout
@@ -21,6 +24,8 @@ import edgar_dashboard  # noqa: E402
 import extract  # noqa: E402
 import filing_cache  # noqa: E402
 import scan  # noqa: E402
+
+scan.ISOLATE = False          # mocks are not seen from a child process; one test turns it on
 
 UNIVERSE = [  # cik, ticker, name: deliberately not in ticker order
     (30, "CCC", "Charlie Corp"), (10, "AAA", "Alpha Inc"), (20, "BBB", "Bravo Fund"), (40, "DDD", "Delta Co"),
@@ -60,7 +65,7 @@ def _dumped(filing):
             "facts": dump.encode_frame(pd.DataFrame())}
 
 
-def _stage_two(revenue):
+def _stage_two(revenue, with_line=True):
     def extract_filing(view, period_key):
         check = {"period_of_report": period_key, "kind": "statement", "statement": "Balance Sheet",
                  "concept": "us-gaap_Assets", "label": "Total assets", "reported": 100.0, "computed": 90.0,
@@ -72,11 +77,13 @@ def _stage_two(revenue):
                "StockholdersEquity": 1.0}
         for metric in extract.METRIC_CONCEPTS:
             row.setdefault(metric, None)
-        return {"xbrl": True, "row": row, "statements": [], "facts": [], "checks": [check]}
+        line = {"statement": "income", "concept": "acme_Takings", "standard_concept": "Revenue", "label": "Takings",
+                "value": 5.0}
+        return {"xbrl": True, "row": row, "statements": [line] if with_line else [], "facts": [], "checks": [check]}
     return extract_filing
 
 
-class ScanTest(unittest.TestCase):
+class ScanCase(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
         self.cache = Path(tempfile.mkdtemp())
@@ -86,7 +93,7 @@ class ScanTest(unittest.TestCase):
                 self.db.execute("INSERT INTO universe VALUES (?, ?, ?, '', ?, '')", (cik, ticker, name, position))
         self.addCleanup(self.db.close)
 
-    def run_scan(self, *args, revenue=5.0, offline=False):
+    def run_scan(self, *args, revenue=5.0, offline=False, with_line=True):
         reader = unittest.mock.Mock(side_effect=_dumped)
         company = unittest.mock.Mock(side_effect=_Company)
         if offline:
@@ -94,7 +101,7 @@ class ScanTest(unittest.TestCase):
             reader.side_effect = AssertionError("rerun must not download")
         with unittest.mock.patch("edgar.Company", company), \
                 unittest.mock.patch.object(dump, "dump_filing", reader), \
-                unittest.mock.patch.object(extract, "extract_filing", _stage_two(revenue)), \
+                unittest.mock.patch.object(extract, "extract_filing", _stage_two(revenue, with_line)), \
                 unittest.mock.patch.object(scan, "_disable_download_cache"), \
                 redirect_stdout(io.StringIO()) as out:
             code = scan.main(["--root", str(self.root), "--cache-dir", str(self.cache), *args])
@@ -104,6 +111,8 @@ class ScanTest(unittest.TestCase):
         query = "SELECT * FROM issues" + (" WHERE kind = ?" if kind else "")
         return self.db.execute(query, (kind,) if kind else ()).fetchall()
 
+
+class ScanTest(ScanCase):
     def test_batches_follow_ticker_order_and_never_repeat_a_company(self):
         self.run_scan("next", "--count", "2")
         self.run_scan("next", "--count", "5")
@@ -154,6 +163,28 @@ class ScanTest(unittest.TestCase):
         self.assertIn("no SEC requests", log)
         runs = self.db.execute("SELECT kind, status FROM runs ORDER BY id").fetchall()
         self.assertEqual([tuple(row) for row in runs], [("next", "done"), ("rerun", "done")])
+
+    def test_a_metric_the_filing_never_reports_is_not_a_problem(self):
+        self.run_scan("next", "--count", "1", revenue=None, with_line=False)
+        self.assertEqual(self.issues("missing_metric"), [])
+        rows = self.issues("not_reported")
+        self.assertEqual((len(rows), rows[0]["severity"], rows[0]["concept"]), (3, "info", "Revenues"))
+
+    def test_metrics_that_contradict_each_other_are_reported(self):
+        row = {"Revenues": 21.8, "CostOfRevenue": 1773.0, "GrossProfit": 687.0, "OperatingIncomeLoss": 164.0,
+               "gross_profit_derived": False}
+        self.assertEqual([metric for metric, _ in scan._implausible(row)],
+                         ["GrossProfit", "OperatingIncomeLoss", "Revenues"])
+        fine = {"Revenues": 2460.0, "CostOfRevenue": 1773.0, "GrossProfit": 687.0, "OperatingIncomeLoss": 164.0,
+                "gross_profit_derived": False}
+        self.assertEqual(scan._implausible(fine), [])
+        self.assertEqual(scan._implausible({"Revenues": 0.0, "GrossProfit": 5.0}), [])
+
+    def test_a_line_no_rule_reads_names_its_tag(self):
+        self.run_scan("next", "--count", "1", revenue=None)
+        row = self.issues("missing_metric")[0]
+        self.assertEqual((row["severity"], row["label"]), ("warning", "Takings"))
+        self.assertIn("acme_Takings", row["detail"])
 
     def test_retry_failed_downloads_only_what_is_missing(self):
         self.run_scan("next", "--count", "3")
@@ -210,6 +241,47 @@ class ScanTest(unittest.TestCase):
             self.db.execute("INSERT INTO runs (batch, kind, status, pid) VALUES (1, 'next', 'running', 999999999)")
         scan.mark_stale_runs(self.db)
         self.assertEqual(self.db.execute("SELECT status FROM runs").fetchone()[0], "interrupted")
+
+
+class IsolationTest(ScanCase):
+    """Real child processes: a company that dies or hangs costs that company, not the batch."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = unittest.mock.patch.object(scan, "ISOLATE", True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.real_company = scan._company
+
+    def misbehave(self, ticker, action):
+        real = self.real_company
+
+        def company(db, root, batch, run, kind, member, *args):
+            if member["ticker"] == ticker:
+                action()
+            return real(db, root, batch, run, kind, member, *args)
+
+        patcher = unittest.mock.patch.object(scan, "_company", company)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_killed_company_is_failed_with_the_reason_and_the_batch_goes_on(self):
+        self.misbehave("BBB", lambda: os.kill(os.getpid(), signal.SIGKILL))
+        self.run_scan("next", "--count", "3")
+        results = {row["ticker"]: row for row in self.db.execute("SELECT * FROM companies")}
+        self.assertEqual(results["AAA"]["result"], "ok")
+        self.assertEqual(results["CCC"]["result"], "partial")      # reached, after the kill
+        self.assertEqual(results["BBB"]["result"], "failed")
+        self.assertIn("SIGKILL, most likely out of memory", results["BBB"]["error"])
+        self.assertEqual(self.db.execute("SELECT status FROM runs").fetchone()[0], "done")
+
+    def test_a_hung_company_hits_the_time_limit(self):
+        self.misbehave("AAA", lambda: time.sleep(60))
+        with unittest.mock.patch.object(scan, "COMPANY_TIMEOUT", 1):
+            self.run_scan("next", "--count", "1")
+        row = self.db.execute("SELECT result, error FROM companies").fetchone()
+        self.assertEqual(row["result"], "failed")
+        self.assertIn("time limit", row["error"])
 
 
 if __name__ == "__main__":

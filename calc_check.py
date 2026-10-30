@@ -71,11 +71,13 @@ def _role_name(role: str, definition: str | None = None) -> str:
     return text.replace("_", " ").strip()
 
 
-def period_values(facts: pd.DataFrame, period_of_report: str, currency: str | None) -> dict[str, dict]:
+def period_values(facts: pd.DataFrame, period_of_report: str, currency: str | None,
+                  min_days: int = ANNUAL_MIN_DAYS) -> dict[str, dict]:
     """Element id -> {value, decimals, label} for the filing's own period.
 
     ``facts`` is edgartools' ``xbrl.facts.to_dataframe()``. Duration facts must
-    end on the report date and span a year; instant facts must sit on it. When
+    end on the report date and span a year (``min_days``: less for a first or
+    transition year); instant facts must sit on it. When
     a concept appears twice (a rounded and a precise copy) the precise one wins.
     """
     if facts is None or facts.empty:
@@ -90,7 +92,7 @@ def period_values(facts: pd.DataFrame, period_of_report: str, currency: str | No
     start = pd.to_datetime(frame.get("period_start"), errors="coerce")
     end = pd.to_datetime(frame.get("period_end"), errors="coerce")
     instant = pd.to_datetime(frame.get("period_instant"), errors="coerce")
-    annual = end.eq(target) & ((end - start).dt.days >= ANNUAL_MIN_DAYS)
+    annual = end.eq(target) & ((end - start).dt.days >= min_days)
     frame = frame[annual | instant.eq(target)]
     decimals = frame["decimals"] if "decimals" in frame.columns else pd.Series(None, index=frame.index)
     frame["_decimals"] = pd.to_numeric(decimals, errors="coerce").astype(float)
@@ -111,7 +113,8 @@ def period_values(facts: pd.DataFrame, period_of_report: str, currency: str | No
     return out
 
 
-def convenience_values(facts: pd.DataFrame, period_of_report: str, currency: str | None) -> dict[str, list[float]]:
+def convenience_values(facts: pd.DataFrame, period_of_report: str, currency: str | None,
+                       min_days: int = ANNUAL_MIN_DAYS) -> dict[str, list[float]]:
     """Element id -> the filing's own-period values in another currency than ``currency``.
 
     Foreign filers such as TSMC add a USD translation of the latest year; the
@@ -122,7 +125,7 @@ def convenience_values(facts: pd.DataFrame, period_of_report: str, currency: str
     other = facts[facts["currency"].notna() & (facts["currency"].astype(str).str.upper() != currency)]
     out: dict[str, list[float]] = {}
     for code in other["currency"].astype(str).str.upper().unique():
-        for element, item in period_values(other, period_of_report, code).items():
+        for element, item in period_values(other, period_of_report, code, min_days).items():
             out.setdefault(element, []).append(item["value"])
     return out
 
@@ -182,6 +185,12 @@ def _hint(total: float, computed: float, tolerance: float, parts: list[tuple[str
             names = ", ".join(f"“{label(other)}”" for other in inside[:3]) + (" and more" if len(inside) > 3 else "")
             return (f"“{label(child)}” and its own parts ({names}) are listed in the same total, so they count "
                     "twice: the linkbase mixes two ways of reaching it.")
+    # A line the linkbase forgot: AAPI's cash change leaves out its investing cash flow.
+    difference = abs(total - computed)
+    listed = set(elements)
+    for element, item in values.items():
+        if element not in listed and difference and abs(abs(item["value"]) - difference) <= tolerance:
+            return f"The gap equals “{item['label']}”: the linkbase leaves that line out of this total."
     return ""
 
 
@@ -193,9 +202,10 @@ def _sum(parts: list[tuple[str, float]], values: dict[str, dict]) -> tuple[float
     return computed, tolerance, present
 
 
-def check_filing(xbrl, facts: pd.DataFrame, period_of_report: str, currency: str | None = None) -> list[dict]:
+def check_filing(xbrl, facts: pd.DataFrame, period_of_report: str, currency: str | None = None,
+                 min_days: int = ANNUAL_MIN_DAYS) -> list[dict]:
     """One row per total in the filing's calculation linkbase that has parts with values."""
-    values = period_values(facts, period_of_report, currency)
+    values = period_values(facts, period_of_report, currency, min_days)
     try:
         trees = xbrl.calculation_trees or {}
     except Exception:  # noqa: BLE001 - a filing without a usable linkbase has nothing to check

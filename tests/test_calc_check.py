@@ -109,6 +109,17 @@ class CheckTests(unittest.TestCase):
                            fact("x:State", 280e6, **duration)])
         self.assertIn("opposite sign of its parts' sum", rows[0]["hint"])
 
+    def test_a_line_the_linkbase_left_out_is_named(self):
+        # AAPI FY2012: the cash change sums operating and financing, not investing.
+        duration = {"instant": None, "start": "2025-01-01", "end": PERIOD}
+        role = "http://example.com/role/CashFlows"
+        rows = self.check({role: tree(("x_Change", "x_Operating", 1), ("x_Change", "x_Financing", 1))},
+                          [fact("x:Change", 5e6, **duration), fact("x:Operating", -30e6, **duration),
+                           fact("x:Financing", 205e6, **duration), fact("x:Investing", -170e6, **duration)])
+        self.assertEqual(rows[0]["status"], "mismatch")
+        self.assertIn("gap equals", rows[0]["hint"])
+        self.assertIn("Investing", rows[0]["hint"])
+
     def test_a_total_listed_beside_its_own_parts_is_explained(self):
         # Oracle FY2020: operating income and its own revenue and costs under income before taxes.
         duration = {"instant": None, "start": "2025-01-01", "end": PERIOD}

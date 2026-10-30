@@ -17,6 +17,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ctypes
+import gc
 import json
 import os
 import re
@@ -129,6 +131,35 @@ def list_annual(company, forms=ANNUAL_FORMS, log=print) -> list:
     return [filing for _, filing in dated]
 
 
+def filing_period(entry: dict, index_date: str) -> str:
+    """The period a dumped filing covers: SEC's index date, unless the filing disagrees.
+
+    The index can be wrong (Ameren's 2011 10-K: 2011-11-23, for a year that
+    ended 2011-12-31), and then no number matches. The cover page wins only
+    when the facts sit on its date and not on the index date.
+    """
+    stated = str((entry.get("dei") or {}).get("dei:DocumentPeriodEndDate") or "")[:10]
+    facts = entry.get("facts") or {}
+    if not stated or stated == index_date or not facts.get("columns"):
+        return index_date
+    count = {index_date: 0, stated: 0}
+    for column in ("period_end", "period_instant"):
+        if column in facts["columns"]:
+            for value in facts["data"][facts["columns"].index(column)]:
+                if value in count:
+                    count[value] += 1
+    return stated if count[stated] > count[index_date] else index_date
+
+
+def release_memory() -> None:
+    """Hand freed memory back: a read filing leaves 100+ MB behind until this runs."""
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):        # not glibc (Windows, macOS)
+        pass
+
+
 def obtain(filing, cik, cache_dir: str | None) -> tuple[dict, str]:
     """The dump of ``filing`` and where it came from: ``"dump"`` (no SEC request) or ``"read"``.
 
@@ -146,13 +177,19 @@ def obtain(filing, cik, cache_dir: str | None) -> tuple[dict, str]:
 
 
 def assemble(filings: list, n_filings: int | None, entry_of, ticker: str = "", log=print,
-             failures: list | None = None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+             failures: list | None = None, detail: bool = True,
+             on_filing=None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Stage 2 over annual filings (newest first): the four datasets of ``build_dataset``.
 
     ``entry_of(filing)`` returns ``(dump, source)``; the filings only need
     ``accession_no``, ``form`` and ``report_date``, so a scan can rerun this
     from the dump alone. A filing that fails is logged, skipped and, when
     ``failures`` is a list, recorded there (accession, period, error).
+    ``detail`` False leaves out the statement and fact rows (a scan needs only
+    the ratios and checks). ``filings`` is emptied as it is read: edgartools'
+    filing objects hold their whole parse, and a company with 30 large filings
+    would otherwise pass 2 GB. ``on_filing(period, form, accession, extracted)``
+    sees each filing's extraction.
     """
     records: list[dict] = []
     statement_records: list[dict] = []
@@ -161,9 +198,11 @@ def assemble(filings: list, n_filings: int | None, entry_of, ticker: str = "", l
     seen_periods: set[str] = set()
     counts = {"dump": 0, "read": 0}
 
-    for position, filing in enumerate(filings, 1):
+    total = len(filings)
+    for position in range(1, total + 1):
         if n_filings is not None and len(records) >= n_filings:
             break
+        filing, filings[position - 1] = filings[position - 1], None
         accession = getattr(filing, "accession_no", None)
 
         # Everything is guarded per filing: edgartools can raise on individual
@@ -188,19 +227,28 @@ def assemble(filings: list, n_filings: int | None, entry_of, ticker: str = "", l
             # run works from it, so only filings new to the dump are downloaded.
             if entry_of is None:
                 raise RuntimeError("no dump source")
-            log(f"[*] Filing {position}/{len(filings)}: {filing.form} for the year ended {period_key} "
+            log(f"[*] Filing {position}/{total}: {filing.form} for the year ended {period_key} "
                 f"({accession})")
             entry, source = entry_of(filing)
             counts[source] = counts.get(source, 0) + 1
             if source == "read":
                 log(f"    [*] downloaded and dumped in {time.monotonic() - started:.1f} s "
                     f"(reader {entry.get('reader_id') or filing_cache.reader_id()})")
+                release_memory()
             if entry.get("errors"):
                 log(f"    [!] parts of the dump failed: {entry['errors']}")
             if not entry.get("xbrl"):
                 log(f"    [!] {period_key} ({accession}): no XBRL; skipping")
                 continue
+            stated = filing_period(entry, period_key)
+            if stated != period_key:
+                log(f"    [*] SEC's index says {period_key}, the filing says {stated}: using the filing")
+                period_key = stated
+            if period_key in seen_periods:
+                continue
             extracted = extract.extract_filing(filing_view.FilingView(entry), period_key)
+            if on_filing is not None:
+                on_filing(period_key, filing.form, accession, extracted)
             row = extracted["row"]
             statement_rows = extracted["statements"]
             filing_facts = extracted["facts"]
@@ -216,8 +264,9 @@ def assemble(filings: list, n_filings: int | None, entry_of, ticker: str = "", l
             continue
 
         records.append(row)
-        statement_records.extend(statement_rows)
-        fact_records.extend(filing_facts)
+        if detail:
+            statement_records.extend(statement_rows)
+            fact_records.extend(filing_facts)
         check_records.extend(filing_checks)
         seen_periods.add(period_key)
         money = "" if row["currency"] == "USD" else f", {row['currency']}"
@@ -293,10 +342,11 @@ def build_dataset(ticker: str, n_filings: int | None,
     print("[*] Listing annual filings (10-K, 20-F, 40-F)")
     all_filings = list_annual(company)
     filings = all_filings[:n_filings]  # [:None] keeps them all
-    forms = ", ".join(f"{sum(f.form == form for f in all_filings)} {form}" for form in ANNUAL_FORMS
-                      if any(f.form == form for f in all_filings))
+    summary = [filing.form for filing in all_filings]
+    all_filings.clear()
+    forms = ", ".join(f"{summary.count(form)} {form}" for form in ANNUAL_FORMS if form in summary)
     reading = "reading all of them" if n_filings is None else f"reading the newest {len(filings)}"
-    print(f"[+] Found {len(all_filings)} annual filings ({forms or 'none'}); {reading}")
+    print(f"[+] Found {len(summary)} annual filings ({forms or 'none'}); {reading}")
     return assemble(filings, n_filings, lambda filing: obtain(filing, company.cik, cache_dir), ticker)
 
 
