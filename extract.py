@@ -29,6 +29,27 @@ ANNUAL_MIN_DAYS = 300
 # the prior-year comparative in the same filing (QCOM FY2020 goodwill
 # impairment was FY2019's 146M, not FY2020's 0).
 PERIOD_MATCH_DAYS = 20
+# A cover page spanning less than this names a date, not a reporting period.
+MIN_COVER_DAYS = 28
+# edgartools' standard concepts that name total revenue on an income statement.
+REVENUE_LINES = {"Revenue", "HealthCareRevenue"}
+# Metric -> (statement, label): the line that holds it when the filer used an
+# odd tag ("Loss from operations" tagged IncomeLossFromContinuingOperations).
+# "before income taxes" is pretax income, "sales and marketing" a cost.
+LINE_RULES = {
+    "Revenues": ("income", re.compile(
+        r"^(total )?(net )?(operating )?(revenues?|sales)\b(?!.*(cost|marketing|expense))", re.IGNORECASE)),
+    "OperatingIncomeLoss": ("income", re.compile(
+        r"^(total )?(operating \(?(income|profit|loss)\)?( \(?(income|profit|loss)\)?)?"
+        r"|\(?(income|profit|loss)\)?( \(?(income|profit|loss)\)?)? from operations)\s*$", re.IGNORECASE)),
+    "StockholdersEquity": ("balance", re.compile(
+        r"^total (?!liabilit).*\b(stockholders?|shareholders?|members?|partners?)\W+(\w+\W+)*(equity|deficit|capital)\b",
+        re.IGNORECASE)),
+}
+# Operating costs edgartools files as cost of goods sold: an airline has no
+# cost of revenue, and fuel plus catering would make up a gross margin for it.
+NOT_COST_OF_REVENUE = {"FuelCosts", "CostOfServicesCatering", "LaborAndRelatedExpense", "RelatedPartyCosts",
+                       "AssetManagementCosts", "ExplorationExpenseMining", "ResearchAndDevelopmentExpense"}
 
 # Post-merger filers tag the consolidated statements under a successor/
 # predecessor reporting basis using this axis. It marks a period's basis, not
@@ -50,6 +71,20 @@ METRIC_CONCEPTS: dict[str, tuple[list[str], str]] = {
             "SalesRevenueNet",
             # Older filings (pre-ASC 606) often split goods/services or use this.
             "SalesRevenueGoodsNet",
+            # Service companies before ASC 606 (ABM, AECOM, airlines).
+            "SalesRevenueServicesNet",
+            # Hospitals and care providers before ASC 606: net of bad debts first.
+            "HealthCareOrganizationRevenueNetOfPatientServiceRevenueProvisions",
+            "HealthCareOrganizationRevenue",
+            # Utilities, miners, energy, real estate, brokers.
+            "RegulatedAndUnregulatedOperatingRevenue",
+            "UtilitiesOperatingRevenue",
+            "ElectricUtilityRevenue",
+            "SalesRevenueEnergyServices",
+            "RevenueMineralSales",
+            "OilAndGasRevenue",
+            "RealEstateRevenueNet",
+            "RevenuesNetOfInterestExpense",
             # IFRS filers (e.g. Celestica 20-F); plain Revenue is IFRS's total.
             "RevenueFromContractsWithCustomers",
             "Revenue",
@@ -128,6 +163,9 @@ METRIC_CONCEPTS: dict[str, tuple[list[str], str]] = {
             "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
             # IFRS filers.
             "CashFlowsFromUsedInOperatingActivities",
+            # Small filers put the operating total on these (Akanda, Atlantica).
+            "CashFlowsFromUsedInOperations",
+            "NetCashProvidedByUsedInContinuingOperations",
         ],
         "duration",
     ),
@@ -180,6 +218,12 @@ METRIC_CONCEPTS: dict[str, tuple[list[str], str]] = {
             # IFRS filers.
             "EquityAttributableToOwnersOfParent",
             "Equity",
+            # Partnerships, LLCs and trusts have no stockholders.
+            "PartnersCapital",
+            "PartnersCapitalIncludingPortionAttributableToNoncontrollingInterest",
+            "MembersEquity",
+            "LimitedLiabilityCompanyLlcMembersEquity",
+            "AssetsNet",
         ],
         "instant",
     ),
@@ -231,6 +275,42 @@ EPS_CONCEPTS = [
 ]
 
 
+def annual_min_days(facts: pd.DataFrame, period_of_report: str) -> int:
+    """Shortest duration that counts as this filing's fiscal year.
+
+    A year is at least ``ANNUAL_MIN_DAYS``, except when the cover page itself
+    spans less: a company's first report (a SPAC formed in May) or a transition
+    year (Aurora's nine months to March 2023). The cover page is the filer's
+    statement of the period the report covers.
+    """
+    cover = facts[facts["concept"].isin(["dei:DocumentPeriodEndDate", "dei:DocumentType"])]
+    start = pd.to_datetime(cover.get("period_start"), errors="coerce")
+    end = pd.to_datetime(cover.get("period_end"), errors="coerce")
+    target = pd.Timestamp(period_of_report)
+    spans = (end - start).dt.days[(end - target).abs() <= pd.Timedelta(days=PERIOD_MATCH_DAYS)].dropna()
+    if not spans.empty and MIN_COVER_DAYS <= spans.max() < ANNUAL_MIN_DAYS:
+        return int(spans.max()) - 5
+    return _first_period_days(facts, target)
+
+
+def _first_period_days(facts: pd.DataFrame, target: pd.Timestamp) -> int:
+    """``ANNUAL_MIN_DAYS``, or less when the company did not exist a year ago.
+
+    A cover page can claim a full year for a SPAC formed in June. Its filing
+    then has no fact from before that date, unlike a successor's stub period,
+    which sits beside its predecessor's years.
+    """
+    start = pd.to_datetime(facts.get("period_start"), errors="coerce").dropna()
+    end = pd.to_datetime(facts.loc[start.index, "period_end"], errors="coerce")
+    latest = (end - target).abs() <= pd.Timedelta(days=PERIOD_MATCH_DAYS)
+    if not latest.any():
+        return ANNUAL_MIN_DAYS
+    span = (end[latest] - start[latest]).dt.days.max()
+    if not MIN_COVER_DAYS <= span < ANNUAL_MIN_DAYS or start.min() < end[latest].max() - pd.Timedelta(days=int(span)):
+        return ANNUAL_MIN_DAYS
+    return int(span) - 5
+
+
 def _concept_name(concept: str) -> str:
     """``us-gaap:Foo`` or ``us-gaap_Foo`` -> ``Foo`` (facts vs statement rows)."""
     for separator in (":", "_"):
@@ -263,6 +343,7 @@ def extract_metric(
     period_type: str,
     statement_values: dict[str, float] | None = None,
     currency: str | None = None,
+    min_days: int = ANNUAL_MIN_DAYS,
 ) -> float:
     """Return the value for the first matching concept, else nan.
 
@@ -275,7 +356,7 @@ def extract_metric(
     revenue is tagged ``fiscal_year=2018``), which silently duplicates years.
 
     Only dimension-free facts are considered. For duration concepts the fact
-    must span an entire year (>= 300 days) so quarterly facts are ignored; the
+    must span an entire year (``min_days``, see ``annual_min_days``) so quarterly facts are ignored; the
     remaining candidate closest to the report date wins. For instant concepts
     the value on the balance-sheet date closest to the report date is used.
     When a concept has no dimension-free fact, a scenario-only fact (successor/
@@ -304,7 +385,7 @@ def extract_metric(
         sub = sub.dropna(subset=["period_end"])
         if period_type == "duration":
             span = (sub["period_end"] - sub["period_start"]).dt.days
-            sub = sub[span >= ANNUAL_MIN_DAYS]
+            sub = sub[span >= min_days]
         if sub.empty:
             return np.nan
         # Closest period end to the filing's report date is the current year.
@@ -428,9 +509,10 @@ def _component_metric(
     period_type: str,
     statement_values: dict[str, float],
     currency: str | None,
+    min_days: int = ANNUAL_MIN_DAYS,
 ) -> float:
     """Sum of the first concept with a value in each group; nan when none has one."""
-    parts = [extract_metric(facts, group, period_of_report, period_type, statement_values, currency)
+    parts = [extract_metric(facts, group, period_of_report, period_type, statement_values, currency, min_days)
              for group in groups]
     found = [part for part in parts if pd.notna(part)]
     return float(sum(found)) if found else np.nan
@@ -472,6 +554,7 @@ def _cost_lines(statement_rows: list[dict]) -> dict[str, float]:
     revenue_concepts = {row["concept"] for row in revenue}
     revenue_words = set().union(*(_stream_words(row.get("label")) for row in revenue)) if revenue else set()
     lines: dict[str, tuple[float, str]] = {}
+    by_word: set[str] = set()
     for row in income:
         concept = str(row.get("concept") or "")
         name = _concept_name(concept)
@@ -485,11 +568,20 @@ def _cost_lines(statement_rows: list[dict]) -> dict[str, float]:
         # sold: its classification counts only for a line that says "cost".
         filed_as_cost = row.get("standard_concept") == "CostOfGoodsAndServicesSold" and (
             "cost" in name.lower() or "cost" in str(row.get("label") or "").lower())
+        if name in NOT_COST_OF_REVENUE:
+            continue
         if filed_as_cost or name.startswith("CostOf") or stream:
             lines.setdefault(concept, (float(value), parent))
+            if stream and not filed_as_cost and not name.startswith("CostOf"):
+                by_word.add(concept)
     totals = [concept for concept in lines if any(parent == concept for _, parent in lines.values())]
     if totals:
         return {totals[0]: lines[totals[0]][0]}
+    # One expense sharing a word with one revenue line is a coincidence
+    # (American's "Regional expenses", Gallagher's "Reimbursements"), not a
+    # cost of revenue split by stream the way Oracle's is.
+    if len(lines) == 1 and by_word:
+        return {}
     return {concept: value for concept, (value, _) in lines.items()}
 
 
@@ -502,14 +594,28 @@ def _cost_of_revenue(row: dict, statement_rows: list[dict]) -> None:
     gross profit elsewhere (a segment note) is not the company's.
     """
     lines = _cost_lines(statement_rows)
-    if not lines:
-        return
     current = row.get("CostOfRevenue")
+    if pd.notna(current) and current < 0:       # a cost shown as a deduction (Afya)
+        row["CostOfRevenue"] = current = -current
+    if not lines:
+        # A cost tagged only in a note (American's regional expenses) is part
+        # of the business, not the cost of its revenue.
+        shown = {_concept_name(str(r.get("concept") or "")) for r in statement_rows if r.get("statement") == "income"}
+        tags = set(METRIC_CONCEPTS["CostOfRevenue"][0])
+        if pd.notna(current) and shown & {"CostsAndExpenses", "OperatingExpenses"} and not shown & tags:
+            row["CostOfRevenue"] = np.nan
+        return
     single = pd.notna(current) and len(lines) > 1 and any(
         abs(current - value) <= max(1.0, abs(value) * 1e-6) for value in lines.values())
-    if pd.notna(current) and not single:
+    # A fact from a note (Alliance's $1M against its statement's $972M) as well.
+    total = sum(lines.values())
+    shown = any(abs(abs(float(r["value"])) - current) <= current * 1e-6 for r in statement_rows
+                if r.get("statement") == "income" and r.get("value") is not None and not pd.isna(r["value"])
+                ) if pd.notna(current) else False
+    stale = pd.notna(current) and not shown and abs(current - total) > total * 0.01
+    if pd.notna(current) and not single and not stale:
         return
-    row["CostOfRevenue"] = float(sum(lines.values()))
+    row["CostOfRevenue"] = float(total)
     on_statement = {_concept_name(str(r.get("concept") or "")) for r in statement_rows if r.get("statement") == "income"}
     if "GrossProfit" not in on_statement:
         row["GrossProfit"] = np.nan
@@ -531,6 +637,84 @@ def _capex_line(statement_rows: list[dict]) -> float:
                 and not re.search(r"Proceeds|Sale|Disposal", name)):
             found.setdefault(name, abs(float(row["value"])))
     return next(iter(found.values())) if len(found) == 1 else np.nan
+
+
+def _revenue_values(statement_rows: list[dict]) -> list[float]:
+    label = LINE_RULES["Revenues"][1]
+    return [abs(float(row["value"])) for row in statement_rows
+            if row.get("statement") == "income"
+            and (row.get("standard_concept") in REVENUE_LINES or label.search(str(row.get("label") or "")))
+            and row.get("value") is not None and not pd.isna(row["value"])]
+
+
+def _revenue_line(statement_rows: list[dict]) -> float:
+    """Total revenue from the income statement when no known tag has it.
+
+    edgartools maps each line to a ``standard_concept``. Airlines list cargo and
+    other revenue beside the total, so the largest line counts only if it
+    equals the sum of the others, or dwarfs them (airlines leave passenger
+    revenue unmapped): two parts with no total give nothing.
+    """
+    values = _revenue_values(statement_rows)
+    if not values:
+        return np.nan
+    largest = max(values)
+    others = sum(values) - largest
+    return largest if abs(largest - others) <= 0.01 * largest or largest >= 2 * others else np.nan
+
+
+def _statement_revenue(row: dict, statement_rows: list[dict]) -> None:
+    """The income statement's own revenue over a tagged fact that is not on it.
+
+    Tags are tried in a fixed order, so a ``Revenues`` fact from a note beats
+    the ``SalesRevenueNet`` of the statement: Applied Industrial's $21.8M
+    against net sales of $2,460M. A fact that is on the statement as part of
+    another income total is no company total either (Arbor's property income).
+    """
+    current = row.get("Revenues")
+    if pd.isna(current):
+        return
+    income = [line for line in statement_rows if line.get("statement") == "income" and line.get("value") is not None
+              and not pd.isna(line["value"])]
+    shown = [line for line in income if abs(abs(float(line["value"])) - abs(current)) <= abs(current) * 1e-6]
+    if any(str(line.get("parent_concept") or "").endswith(("NoninterestIncome", "_OtherIncome")) for line in shown):
+        row["Revenues"] = np.nan
+        return
+    if shown:
+        return
+    line = _revenue_line(statement_rows)
+    if pd.isna(line) or abs(line - current) <= abs(line) * 0.01:
+        return
+    # Going down takes a total with its parts: a lone small line can be a
+    # piece (a bank's fee income), and the tag the company's revenue.
+    values = _revenue_values(statement_rows)
+    if line > current or abs(sum(values) - 2 * line) <= line * 0.01:
+        row["Revenues"] = line
+
+
+def _stated_line(metric: str, statement_rows: list[dict], values: dict[str, dict]) -> float:
+    """``metric`` from the one statement line named after it, as the filer tagged the fact.
+
+    The fact's value, not the rendered one: a statement can show a loss as a
+    positive number under a "Loss from operations" label.
+    """
+    statement, label = LINE_RULES[metric]
+    found = [row for row in statement_rows
+             if row.get("statement") == statement and label.search(str(row.get("label") or ""))]
+    if len({str(row.get("concept")) for row in found}) != 1:
+        return np.nan
+    concept = str(found[0].get("concept"))
+    fact = values.get(concept)
+    if not fact:
+        return np.nan
+    value = float(fact["value"])
+    # An expense tag has no sign to trust: Axe Compute's "Total operating loss"
+    # is ``OperatingExpenses`` with a positive value.
+    if metric == "OperatingIncomeLoss" and "Expense" in concept and re.search(
+            r"\bloss\b", str(found[0].get("label")), re.IGNORECASE) and not re.search(
+            r"income|profit", str(found[0].get("label")), re.IGNORECASE):
+        return -abs(value)
+    return value
 
 
 def extract_filing(filing, period_key: str) -> dict:
@@ -558,6 +742,7 @@ def extract_filing(filing, period_key: str) -> dict:
         fiscal_year = int(period_key[:4])
 
     currency = reporting_currency(facts)
+    min_days = annual_min_days(facts, period_key)
     ratio, ratio_source, is_adr = ads_ratio(facts, currency)
     row: dict = {"period_of_report": period_key, "fiscal_year": fiscal_year,
                  "form": filing.form, "currency": currency or "USD",
@@ -565,23 +750,30 @@ def extract_filing(filing, period_key: str) -> dict:
     # Statement rows are also the fallback source for metrics a filer
     # renders but never tags as a consolidated fact.
     statement_rows = xbrl_extract.extract_statements(
-        xbrl, period_key, calc_check.period_values(facts, period_key, currency),
-        calc_check.convenience_values(facts, period_key, currency))
+        xbrl, period_key, calc_check.period_values(facts, period_key, currency, min_days),
+        calc_check.convenience_values(facts, period_key, currency, min_days))
     statement_values = _statement_values(statement_rows)
     for metric, (concepts, period_type) in METRIC_CONCEPTS.items():
         row[metric] = extract_metric(
-            facts, concepts, period_key, period_type, statement_values, currency
+            facts, concepts, period_key, period_type, statement_values, currency, min_days
         )
     for metric, groups in COMPONENT_METRICS.items():
         if pd.isna(row[metric]):
-            row[metric] = _component_metric(facts, groups, period_key,
-                                            METRIC_CONCEPTS[metric][1], statement_values, currency)
+            row[metric] = _component_metric(facts, groups, period_key, METRIC_CONCEPTS[metric][1],
+                                            statement_values, currency, min_days)
     if pd.isna(row["CapEx"]):
         row["CapEx"] = _capex_line(statement_rows)
+    _statement_revenue(row, statement_rows)
+    if pd.isna(row["Revenues"]):
+        row["Revenues"] = _revenue_line(statement_rows)
+    own_values = calc_check.period_values(facts, period_key, currency, min_days)
+    for metric in ("OperatingIncomeLoss", "StockholdersEquity"):
+        if pd.isna(row[metric]):
+            row[metric] = _stated_line(metric, statement_rows, own_values)
     _cost_of_revenue(row, statement_rows)
     filing_facts = xbrl_extract.extract_facts(xbrl, period_key)
     try:
-        filing_checks = calc_check.check_filing(xbrl, facts, period_key, currency)
+        filing_checks = calc_check.check_filing(xbrl, facts, period_key, currency, min_days)
     except Exception as exc:  # noqa: BLE001 - the check never costs the filing
         print(f"    [!] {period_key}: calculation check skipped ({exc.__class__.__name__}: {exc})")
         filing_checks = []

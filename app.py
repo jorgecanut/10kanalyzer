@@ -1989,8 +1989,14 @@ def _scan_reap(proc: subprocess.Popen, launcher) -> None:
         launcher.close()
     except OSError:
         pass
-    if code not in (0, -15):
-        _diag(None, "scan", "error", f"scan.py exited with code {code}")
+    if code in (0, -15):
+        return
+    reason = f"scan.py was killed by {signal.Signals(-code).name}" if code < 0 else f"scan.py exited with code {code}"
+    try:
+        with _scan_db() as db:
+            scanlib.mark_stale_runs(db, reason)
+    except (OSError, sqlite3.Error):
+        pass
 
 
 @app.get("/api/scan")

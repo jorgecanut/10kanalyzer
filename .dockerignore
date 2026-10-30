@@ -9,3 +9,8 @@ data/
 edgar_cache/
 edgar_data/
 *.log
+local/
+reports/
+.ruff_cache/
+.hallmark/
+.edgar_cache/

@@ -1335,7 +1335,7 @@
                   <th title="No 10-K, 20-F or 40-F (funds, new listings) or none with XBRL">No data</th>
                   <th title="Filings kept in the dump, of all listed">Filings</th>
                   <th title="Totals that do not add up to their parts">Mismatches</th>
-                  <th title="Key metrics with no tag found for a year">Missing</th>
+                  <th title="Lines the filing has that no rule reads yet">Unread</th>
                   <th title="Downloads or reads that failed">Errors</th>
                   <th></th>
                 </tr>
@@ -4814,7 +4814,7 @@ const fmtDate = value => {
 const MARKET = { data: null, batch: null, view: 'issues', kind: '', detail: null, run: null, cik: null,
                  company: null, timer: null, follow: false };
 const MK_KINDS = {
-  check_mismatch: 'Total does not add up', missing_metric: 'Metric missing', download_failed: 'Download failed',
+  check_mismatch: 'Total does not add up', missing_metric: 'Metric not read', implausible_value: 'Value looks wrong', not_reported: 'Not in the filing', download_failed: 'Download failed',
   analysis_failed: 'Filing unreadable', dump_part_failed: 'Part of a filing unread', company_failed: 'Company failed',
   overdue_10k: '10-K overdue',
 };
@@ -5053,7 +5053,7 @@ function renderMarketDetail() {
       + `${fmtInt(s.dumped)} of ${fmtInt(s.filings)} filings kept (${(s.bytes / 1048576).toFixed(1)} MB).`;
     mkHead([['Ticker'], ['Name', 'mk-left'], ['Result', 'mk-left'], ['Years'],
       ['Annual', '', 'Fiscal years analysed of the annual reports found'], ['10-Q', '', '10-Qs after the latest annual report'],
-      ['Adds up', '', 'Totals that add up, of those checked'], ['Mismatches'], ['Missing'], ['Issues'], ['Time'],
+      ['Adds up', '', 'Totals that add up, of those checked'], ['Mismatches'], ['Unread'], ['Issues'], ['Time'],
       ['Error', 'mk-left']]);
     $('#mk-body').innerHTML = detail.companies.map(c => `<tr class="${c.result === 'failed' ? 'mk-error' : !c.result ? 'mk-info' : ''}">
         <td><button class="mk-link" onclick="openMarketCompany(${c.cik})">${esc(c.ticker)}</button></td>

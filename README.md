@@ -124,15 +124,24 @@ moves. Each batch takes the next N companies no batch has taken, and for each:
    per second (single-ticker runs in the app drop to 4 meanwhile);
 3. runs stage 2 from the dump and records every problem as an **issue**: a
    total that does not add up to its parts (`check_mismatch`, with the
-   filing's value, the sum and the hint), a key metric with no tag for a year
-   (`missing_metric`), a filing that could not be downloaded or read, a
-   company that failed. 10-KTs and 10-Qs are dumped but not analysed yet.
+   filing's value, the sum and the hint), a key metric whose line the filing
+   has but no rule reads (`missing_metric`, naming the tag), a filing that
+   could not be downloaded or read, a company that failed. A metric the
+   filing has no line for, like a bank's operating income or a biotech's
+   revenue, is only a note (`not_reported`). Metrics of one year that
+   contradict each other (gross profit above revenue, revenue minus cost far
+   from gross profit) are reported as `implausible_value`: the totals checks
+   cannot see that the wrong fact was picked. 10-KTs and 10-Qs are dumped but
+   not analysed yet.
 
 **Rerun** repeats step 3 for a batch from the dump alone, with no SEC request:
 fix the code, rerun the same batch, compare the issues. **Retry downloads**
 also downloads the filings that failed; **Resume** finishes a stopped batch.
 One failing company never stops a batch, and a stopped or killed run keeps
-every company it finished.
+every company it finished. Each company runs in its own process with a limit
+of one hour, so its memory goes back at the end, and a crash or a hang fails
+that company with the reason (`killed by SIGKILL, most likely out of memory`)
+while the batch goes on. The log shows each company's peak memory.
 
 ```bash
 python scan.py next --count 100           # the next 100 companies as a new batch
@@ -480,6 +489,44 @@ A single service that publishes one HTTP port:
 ```bash
 docker compose up -d --build     # http://localhost:${HTTP_PORT:-8053}
 ```
+
+### Docker on a dev PC, then the server
+
+Work on one machine with the same image the server runs, then move the data.
+On the dev PC, `.env` (not in git) points the data at `./local/` (also not in
+git):
+
+```bash
+HTTP_PORT=8053
+STOCKY_DATA=./local/data
+EDGAR_CACHE=./local/edgar_cache
+EDGAR_DATA=./local/edgar_data
+```
+
+```bash
+mkdir -p local/data local/edgar_cache local/edgar_data
+sudo chown -R 10001:10001 local          # the container user
+docker compose up -d --build              # http://localhost:8053
+docker compose up -d --build              # again after every code change (seconds: pip is cached)
+docker compose logs -f dashboard          # the app's log
+docker compose exec dashboard python scan.py status
+docker compose exec dashboard python -m unittest discover tests
+```
+
+**Moving to the server.** The code goes through git, as always. The data is
+plain files: stop the container on both sides so SQLite is not mid-write,
+copy, fix the owner, start.
+
+```bash
+docker compose stop                                           # dev PC
+rsync -a local/data/filing_cache local/data/market user@server:/path/to/stocky/data/
+ssh user@server 'cd /path/to/stocky && sudo chown -R 10001:10001 data && sudo docker compose up -d --build'
+```
+
+`filing_cache/` (the dumps) and `market/` (the scan) can be copied any time,
+and again later: dump files never change, so `rsync` only sends new ones. Copy
+`stocky.db` and `users/` too only to move the accounts and their results;
+`secret_key` decides who stays signed in.
 
 ### Dockge
 

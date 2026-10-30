@@ -194,6 +194,151 @@ class DumpTest(unittest.TestCase):
         self.assertEqual(extract.extract_filing(filing_view.FilingView(entry), "2025-12-31"), {"xbrl": False})
 
 
+class FilingRulesTest(unittest.TestCase):
+    """Stage-2 rules found by scanning real filings."""
+
+    @staticmethod
+    def rows(*revenue):
+        return [{"statement": "income", "standard_concept": "Revenue", "value": value} for value in revenue]
+
+    def test_a_revenue_line_counts_only_as_the_total(self):
+        self.assertEqual(extract._revenue_line(self.rows(100.0)), 100.0)
+        self.assertEqual(extract._revenue_line(self.rows(669.0, 2529.0, 24855.0)), 24855.0)   # cargo, other, total
+        self.assertEqual(extract._revenue_line(self.rows(60.0, 50.0, 110.0)), 110.0)           # parts and their total
+        self.assertTrue(np.isnan(extract._revenue_line(self.rows(60.0, 50.0))))                # two parts, no total
+        self.assertTrue(np.isnan(extract._revenue_line([])))
+
+    def test_labels_find_oddly_tagged_lines_and_not_their_lookalikes(self):
+        rules = extract.LINE_RULES
+        for metric, label, expected in (
+                ("Revenues", "Revenue related party", True), ("Revenues", "Net sales", True),
+                ("Revenues", "Sales and marketing", False), ("Revenues", "Cost of revenue", False),
+                ("OperatingIncomeLoss", "Loss from operations", True),
+                ("OperatingIncomeLoss", "(Loss) income from operations", True),
+                ("OperatingIncomeLoss", "Operating income", True),
+                ("OperatingIncomeLoss", "Income from operations before income taxes", False),
+                ("OperatingIncomeLoss", "Administrative fee - related party", False),
+                ("StockholdersEquity", "TOTAL SHAREHOLDERS' AND MEMBERS' EQUITY", True),
+                ("StockholdersEquity", "Total liabilities and stockholders' equity", False)):
+            self.assertEqual(bool(rules[metric][1].search(label)), expected, label)
+
+    def test_a_stated_line_keeps_the_sign_of_the_fact(self):
+        rows = [{"statement": "income", "concept": "x_Loss", "label": "Loss from operations", "value": 5.0}]
+        self.assertEqual(extract._stated_line("OperatingIncomeLoss", rows, {"x_Loss": {"value": -5.0}}), -5.0)
+        self.assertTrue(np.isnan(extract._stated_line("OperatingIncomeLoss", rows, {})))
+
+    def test_a_loss_tagged_as_an_expense_is_a_loss(self):
+        rows = [{"statement": "income", "concept": "us-gaap_OperatingExpenses", "label": "Total operating loss",
+                 "value": 5.0}]
+        self.assertEqual(extract._stated_line("OperatingIncomeLoss", rows, {"us-gaap_OperatingExpenses": {"value": 5.0}}),
+                         -5.0)
+
+    def test_the_statement_revenue_beats_a_fact_from_a_note(self):
+        rows = [{"statement": "income", "concept": "us-gaap_SalesRevenueNet", "label": "Net Sales",
+                 "standard_concept": "Revenue", "value": 2459.0, "parent_concept": "us-gaap_GrossProfit"}]
+        row = {"Revenues": 21.8}
+        extract._statement_revenue(row, rows)
+        self.assertEqual(row["Revenues"], 2459.0)
+        row = {"Revenues": 2459.0}                                  # already the statement's
+        extract._statement_revenue(row, rows)
+        self.assertEqual(row["Revenues"], 2459.0)
+        row = {"Revenues": 21.8}                                    # nothing better to take
+        extract._statement_revenue(row, [])
+        self.assertEqual(row["Revenues"], 21.8)
+
+    def test_a_lone_small_line_does_not_lower_revenue_but_a_total_does(self):
+        line = {"statement": "income", "concept": "us-gaap_Fees", "label": "Revenue", "standard_concept": "Revenue"}
+        row = {"Revenues": 132.0}
+        extract._statement_revenue(row, [dict(line, value=12.0)])
+        self.assertEqual(row["Revenues"], 132.0)
+        row = {"Revenues": 564.0}
+        extract._statement_revenue(row, [dict(line, value=240.0), dict(line, value=7.0), dict(line, value=247.0)])
+        self.assertEqual(row["Revenues"], 247.0)
+
+    def test_a_part_of_other_income_is_not_revenue(self):
+        rows = [{"statement": "income", "concept": "us-gaap_RealEstateRevenueNet", "label": "Property operating income",
+                 "value": 11.0, "parent_concept": "us-gaap_NoninterestIncome"}]
+        row = {"Revenues": 11.0}
+        extract._statement_revenue(row, rows)
+        self.assertTrue(np.isnan(row["Revenues"]))
+
+    def test_one_expense_sharing_a_word_with_revenue_is_no_cost_of_revenue(self):
+        rows = [{"statement": "income", "concept": "us-gaap_PassengerRevenue", "label": "Regional passenger",
+                 "standard_concept": "Revenue", "value": 90.0},
+                {"statement": "income", "concept": "us-gaap_AirlineCapacityPurchaseArrangements",
+                 "label": "Regional", "value": 60.0, "parent_concept": "us-gaap_CostsAndExpenses"}]
+        self.assertEqual(extract._cost_lines(rows), {})
+
+    def test_the_statement_cost_beats_a_fact_from_a_note(self):
+        rows = [{"statement": "income", "concept": "us-gaap_CostOfGoodsSold", "label": "Cost of Revenue",
+                 "standard_concept": "CostOfGoodsAndServicesSold", "value": 930.0}]
+        row = {"CostOfRevenue": 1.0, "GrossProfit": 5.0}
+        extract._cost_of_revenue(row, rows)
+        self.assertEqual(row["CostOfRevenue"], 930.0)
+        self.assertTrue(np.isnan(row["GrossProfit"]))               # derived again from the right cost
+
+    def test_a_cost_shown_as_a_deduction_is_a_cost(self):
+        row = {"CostOfRevenue": -652.0}
+        extract._cost_of_revenue(row, [])
+        self.assertEqual(row["CostOfRevenue"], 652.0)
+
+    def test_payroll_is_no_cost_of_revenue_even_with_that_label(self):
+        rows = [{"statement": "income", "concept": "us-gaap_LaborAndRelatedExpense", "label": "Cost of Revenue",
+                 "standard_concept": "CostOfGoodsAndServicesSold", "value": 60.0,
+                 "parent_concept": "us-gaap_OperatingExpenses"}]
+        self.assertEqual(extract._cost_lines(rows), {})
+
+    def test_a_company_younger_than_a_year_has_a_short_first_year(self):
+        spac = pd.DataFrame({"concept": ["us-gaap:NetIncomeLoss", "dei:DocumentType"],
+                             "period_start": ["2025-06-10", "2025-06-10"],
+                             "period_end": ["2025-12-31", "2025-12-31"]})
+        self.assertEqual(extract.annual_min_days(spac, "2025-12-31"), 199)
+        successor = pd.DataFrame({"concept": ["us-gaap:NetIncomeLoss"] * 2,
+                                  "period_start": ["2023-01-01", "2024-08-01"],
+                                  "period_end": ["2023-12-31", "2024-12-31"]})
+        self.assertEqual(extract.annual_min_days(successor, "2024-12-31"), extract.ANNUAL_MIN_DAYS)
+
+    def test_an_airline_has_no_cost_of_revenue(self):
+        fuel = {"statement": "income", "concept": "us-gaap_FuelCosts", "label": "Fuel costs", "value": 8.0,
+                "standard_concept": "CostOfGoodsAndServicesSold"}
+        catering = {"statement": "income", "concept": "us-gaap_CostOfServicesCatering", "label": "Catering", "value": 1.0}
+        total = {"statement": "income", "concept": "us-gaap_CostsAndExpenses", "label": "Total", "value": 30.0}
+        self.assertEqual(extract._cost_lines([fuel, catering, total]), {})
+        row = {"CostOfRevenue": 6.0}                  # regional expenses, tagged in a note
+        extract._cost_of_revenue(row, [fuel, catering, total])
+        self.assertTrue(np.isnan(row["CostOfRevenue"]))
+
+    def test_a_cost_line_inside_its_total_counts_once(self):
+        # ADP: depreciation sits inside total costs of revenues.
+        part = {"statement": "income", "concept": "us-gaap_CostOfServicesDepreciationAndAmortization", "label": "D&A",
+                "value": 260.0, "standard_concept": "CostOfGoodsAndServicesSold", "parent_concept": "us-gaap_CostOfServices"}
+        whole = {"statement": "income", "concept": "us-gaap_CostOfServices", "label": "Total costs of revenues",
+                 "value": 6240.0, "standard_concept": "CostOfGoodsAndServicesSold"}
+        self.assertEqual(extract._cost_lines([part, whole]), {"us-gaap_CostOfServices": 6240.0})
+
+    def cover(self, start, end):
+        return pd.DataFrame({"concept": pd.Series(["dei:DocumentPeriodEndDate"], dtype="str"),
+                             "period_start": pd.Series([start], dtype="str"),
+                             "period_end": pd.Series([end], dtype="str")})
+
+    def test_a_short_first_or_transition_year_comes_from_the_cover_page(self):
+        self.assertEqual(extract.annual_min_days(self.cover("2024-01-01", "2024-12-31"), "2024-12-31"), 300)
+        self.assertEqual(extract.annual_min_days(self.cover("2022-07-01", "2023-03-31"), "2023-03-31"), 268)
+        self.assertEqual(extract.annual_min_days(self.cover("2023-03-31", "2023-03-31"), "2023-03-31"), 300)
+        self.assertEqual(extract.annual_min_days(self.cover(None, None), "2023-03-31"), 300)
+
+    def entry(self, stated, ends):
+        return {"dei": {"dei:DocumentPeriodEndDate": stated},
+                "facts": {"columns": ["period_end"], "types": ["str"], "data": [ends]}}
+
+    def test_the_filing_corrects_sec_index_only_when_its_facts_agree(self):
+        ameren = self.entry("2011-12-31", ["2011-12-31"] * 5)
+        self.assertEqual(edgar_dashboard.filing_period(ameren, "2011-11-23"), "2011-12-31")
+        typo = self.entry("2021-12-31", ["2020-12-31"] * 5)
+        self.assertEqual(edgar_dashboard.filing_period(typo, "2020-12-31"), "2020-12-31")
+        self.assertEqual(edgar_dashboard.filing_period({"xbrl": True}, "2020-12-31"), "2020-12-31")
+
+
 # --------------------------------------------------------------------------- #
 # Storage
 # --------------------------------------------------------------------------- #
@@ -477,6 +622,14 @@ class BuildDatasetDumpTest(unittest.TestCase):
         ratios, read, _ = self.build(3, stage_two=fixed)
         self.assertEqual(read, 0)
         self.assertEqual(ratios["Revenues"].tolist(), [1.0, 1.0, 1.0])
+
+    def test_filings_are_let_go_as_they_are_read(self):
+        # edgartools' filing objects keep their whole parse: a company with 30
+        # large filings passed the container's 2 GB when they were all kept.
+        filings = [_AnnualFiling("0000000001-25-000001", "2025-12-31")]
+        with unittest.mock.patch.object(extract, "extract_filing", _extracted), redirect_stdout(io.StringIO()):
+            edgar_dashboard.assemble(filings, None, lambda filing: (_dumped(filing), "read"))
+        self.assertEqual(filings, [None])
 
     def test_only_a_schema_bump_reads_again_and_going_back_finds_the_old_dumps(self):
         self.build(3)

@@ -42,7 +42,10 @@ import argparse
 import csv
 import io
 import json
+import multiprocessing
 import os
+import re
+import resource
 import signal
 import sqlite3
 import sys
@@ -56,6 +59,7 @@ from types import SimpleNamespace
 import pandas as pd
 
 import calc_check
+import extract
 import filing_cache
 
 # Below SEC's 10 requests per second together with a single-ticker run in the
@@ -75,7 +79,26 @@ QUARTERLY_FORM = "10-Q"
 MAX_QUARTERS = 3
 # Missing in a fiscal year: worth a look (a tag the pipeline does not know yet).
 KEY_METRICS = ("Revenues", "NetIncomeLoss", "OperatingIncomeLoss", "OperatingCashFlow", "StockholdersEquity")
+# Metric -> (statement, the statement line that would hold it). A bank has no
+# operating income and a biotech no revenue: a metric with no such line is
+# reported as not_reported, one with a line we failed to read as missing_metric.
+METRIC_LINES = {
+    "Revenues": ("income", {"Revenue", "HealthCareRevenue"}, extract.LINE_RULES["Revenues"][1]),
+    "NetIncomeLoss": ("income", {"NetIncome", "ProfitLoss"},
+                      re.compile(r"^net (income|loss|earnings|profit)|^(profit|loss) for the", re.IGNORECASE)),
+    "OperatingIncomeLoss": ("income", set(), extract.LINE_RULES["OperatingIncomeLoss"][1]),
+    "OperatingCashFlow": ("cashflow", {"NetCashFromOperatingActivities"},
+                          re.compile(r"operating activities$", re.IGNORECASE)),
+    "StockholdersEquity": ("balance", {"StockholdersEquity", "TotalEquity"}, extract.LINE_RULES["StockholdersEquity"][1]),
+}
+# Revenue minus cost may miss gross profit by this much of revenue (a filer's
+# rounding, a line between them) before it counts as a contradiction.
+GROSS_TOLERANCE = 0.02
 MAX_COUNT = 10_000
+# Each company runs in its own process, so its memory goes back at the end and
+# a crash or a hang costs that company, not the batch.
+ISOLATE = True
+COMPANY_TIMEOUT = 3600
 RESULTS = ("ok", "partial", "failed", "no_filings", "no_xbrl")
 
 SCHEMA_SQL = """
@@ -309,7 +332,7 @@ def dump_filings(db, cik: int, live: dict, cache_dir: Path, log, stats: dict, re
             continue
         if row["error"] and not retry_failed:
             continue
-        filing = live.get(accession)
+        filing = live.pop(accession, None)      # holds its whole parse: never keep it
         if filing is None:
             continue
         label = f"{row['form']} {row['report_date'] or '?'} ({accession})"
@@ -326,6 +349,8 @@ def dump_filings(db, cik: int, live: dict, cache_dir: Path, log, stats: dict, re
             with db:
                 db.execute("UPDATE filings SET dumped = 0, error = ?, seconds = ?, updated = ? WHERE accession = ?",
                            (error, time.monotonic() - started, _now(), accession))
+            del filing
+            _pipeline().release_memory()
             continue
         stats["downloaded"] += 1
         seconds = time.monotonic() - started
@@ -335,6 +360,8 @@ def dump_filings(db, cik: int, live: dict, cache_dir: Path, log, stats: dict, re
             + (f"{facts} facts, {(size or 0) / 1024:.0f} KB" if entry.get("xbrl") else "no XBRL")
             + (f"; parts failed: {entry['errors']}" if entry.get("errors") else ""))
         _mark_dumped(db, accession, {**entry, "reader_id": filing_cache.reader_id()}, path, seconds)
+        del entry, filing
+        _pipeline().release_memory()
 
 
 def _fact_count(entry: dict) -> int:
@@ -353,6 +380,17 @@ def _mark_dumped(db, accession: str, entry: dict, path: Path | None, seconds: fl
 # --------------------------------------------------------------------------- #
 # Step 3: stage 2 from the dump, and the issues
 # --------------------------------------------------------------------------- #
+
+def _metric_line(metric: str, rows: list[dict]) -> dict | None:
+    """The statement line that holds ``metric``, if the filing has one."""
+    statement, standards, pattern = METRIC_LINES[metric]
+    for row in rows:
+        if row.get("statement") != statement:
+            continue
+        if row.get("standard_concept") in standards or pattern.search(str(row.get("label") or "")):
+            return row
+    return None
+
 
 def _issue(kind: str, severity: str, **fields) -> dict:
     return {"kind": kind, "severity": severity, **fields}
@@ -384,7 +422,6 @@ def analyse_company(db, cik: int, ticker: str, cache_dir: Path, out_dir: Path, l
     if not annual:
         return {**summary, "result": "no_filings", "error": "no annual reports (10-K, 20-F, 40-F)"}, issues
 
-    by_accession = {row["accession"]: row for row in annual}
     candidates = [SimpleNamespace(accession_no=row["accession"], form=row["form"], report_date=row["report_date"])
                   for row in annual if row["dumped"] and row["form"] in ANALYSED_FORMS]
 
@@ -398,9 +435,14 @@ def analyse_company(db, cik: int, ticker: str, cache_dir: Path, out_dir: Path, l
         return entry, "dump"
 
     failures: list[dict] = []
+    filed: dict[str, dict] = {}
+
+    def on_filing(period, form, accession, extracted):
+        filed[period] = {"form": form, "accession": accession, "statements": extracted["statements"]}
+
     try:
-        raw, _statements, _facts, checks = _pipeline().assemble(candidates, None, entry_of, ticker,
-                                                             log=log, failures=failures)
+        raw, _statements, _facts, checks = _pipeline().assemble(candidates, None, entry_of, ticker, log=log,
+                                                                failures=failures, detail=False, on_filing=on_filing)
     except RuntimeError as exc:
         for failure in failures:
             issues.append(_issue("analysis_failed", "error", accession=failure["accession"], form=failure["form"],
@@ -412,7 +454,6 @@ def analyse_company(db, cik: int, ticker: str, cache_dir: Path, out_dir: Path, l
                              period=failure["period"], detail=failure["error"]))
         log(failure["traceback"].rstrip())
 
-    period_accession = {row["report_date"]: row["accession"] for row in annual}
     year_of = dict(zip(raw["period_of_report"], raw["fiscal_year"]))
     derived = _pipeline().clean_and_derive(raw.copy())
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -424,23 +465,32 @@ def analyse_company(db, cik: int, ticker: str, cache_dir: Path, out_dir: Path, l
     for check in checks.to_dict("records") if not checks.empty else []:
         if check["status"] != calc_check.STATUS_MISMATCH:
             continue
-        accession = period_accession.get(check["period_of_report"])
+        where = filed.get(check["period_of_report"], {})
         issues.append(_issue(
             "check_mismatch", "warning" if check["kind"] == "statement" else "info",
-            accession=accession, form=(by_accession.get(accession) or {"form": None})["form"],
+            accession=where.get("accession"), form=where.get("form"),
             fiscal_year=check.get("fiscal_year"), period=check["period_of_report"], statement=check["statement"],
             concept=check["concept"], label=check["label"], reported=check["reported"],
             computed=check["computed"], difference=check["difference"],
             detail=check.get("hint") or f"{check['parts']} parts; tolerance {check['tolerance']:g}"))
     # A key metric the pipeline found no tag for.
     for row in derived.to_dict("records"):
-        missing = [metric for metric in KEY_METRICS if pd.isna(row.get(metric))]
-        for metric in missing:
-            accession = period_accession.get(row["period_of_report"])
-            issues.append(_issue("missing_metric", "warning", accession=accession,
-                                 form=(by_accession.get(accession) or {"form": None})["form"],
-                                 fiscal_year=row.get("fiscal_year"), period=row["period_of_report"],
-                                 concept=metric, detail="no tag or statement line found"))
+        where = filed.get(row["period_of_report"], {})
+        for metric in (metric for metric in KEY_METRICS if pd.isna(row.get(metric))):
+            line = _metric_line(metric, where.get("statements") or [])
+            common = {"accession": where.get("accession"), "form": where.get("form"), "concept": metric,
+                      "fiscal_year": row.get("fiscal_year"), "period": row["period_of_report"]}
+            if line:
+                issues.append(_issue("missing_metric", "warning", label=line.get("label"), detail=(
+                    f"the statement has this line but no rule reads it: {line.get('concept')}"), **common))
+            else:
+                issues.append(_issue("not_reported", "info", detail="the filing's statements have no such line",
+                                     **common))
+
+        for metric, why in _implausible(row):
+            issues.append(_issue("implausible_value", "warning", accession=where.get("accession"),
+                                 form=where.get("form"), concept=metric, fiscal_year=row.get("fiscal_year"),
+                                 period=row["period_of_report"], detail=why))
 
     count = (lambda status: int((checks["status"] == status).sum()) if not checks.empty else 0)
     statuses = {"ok": count(calc_check.STATUS_OK), "mismatch": count(calc_check.STATUS_MISMATCH),
@@ -529,6 +579,121 @@ def pipeline_version() -> str:
 # Runs
 # --------------------------------------------------------------------------- #
 
+def _implausible(row: dict) -> list[tuple[str, str]]:
+    """Metrics of one year that contradict each other: (metric, why).
+
+    The calculation checks test the filer's totals, so they cannot see that the
+    pipeline picked the wrong fact: Applied Industrial's $21.8M of a note beside
+    net sales of $2,460M passed every one of them.
+    """
+    revenue, cost, gross, operating = (row.get(metric) for metric in (
+        "Revenues", "CostOfRevenue", "GrossProfit", "OperatingIncomeLoss"))
+    if not revenue or pd.isna(revenue) or revenue <= 0:
+        return []
+    found = []
+    if pd.notna(gross) and gross > revenue * 1.001:
+        found.append(("GrossProfit", f"gross profit {gross:,.0f} is above revenue {revenue:,.0f}"))
+    if pd.notna(operating) and operating > revenue * 1.001:
+        found.append(("OperatingIncomeLoss", f"operating income {operating:,.0f} is above revenue {revenue:,.0f}"))
+    if (pd.notna(gross) and pd.notna(cost) and not row.get("gross_profit_derived")
+            and abs(revenue - cost - gross) > revenue * GROSS_TOLERANCE):
+        found.append(("Revenues", f"revenue {revenue:,.0f} minus cost {cost:,.0f} is not gross profit {gross:,.0f}"))
+    return found
+
+
+def _company(db, root: Path, batch: int, run: int, kind: str, member: dict, cache_dir: Path,
+             retry_failed: bool, online: bool, log) -> dict:
+    """Scan or rerun one company and save the result; returns its download counts."""
+    cik, ticker = member["cik"], member["ticker"]
+    stats = {"downloaded": 0, "from_dump": 0, "download_failed": 0}
+    started = time.monotonic()
+    out_dir = root / "companies" / str(cik)
+    try:
+        if online:
+            from edgar import Company
+
+            company = Company(int(cik))
+            live = list_filings(db, company, cik, log)
+            dump_filings(db, cik, live, cache_dir, log, stats, retry_failed=kind != "rerun" or retry_failed)
+        elif not db.execute("SELECT 1 FROM companies WHERE cik = ?", (cik,)).fetchone():
+            log("    [!] never scanned (the run was stopped before it): use resume, not rerun")
+            return stats
+        summary, issues = analyse_company(db, cik, ticker, cache_dir, out_dir, log)
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:  # noqa: BLE001 - one company never stops the run
+        log(f"    [!] {ticker}: failed ({type(exc).__name__}: {exc})")
+        log.trace()
+        summary = {"result": "failed", "error": f"{type(exc).__name__}: {exc}"}
+        issues = [_issue("company_failed", "error", detail=summary["error"])]
+    seconds = time.monotonic() - started
+    _save_company(db, cik, member, batch, run, summary, issues, seconds, out_dir)
+    counts: dict[str, int] = {}
+    for issue in issues:
+        counts[issue["kind"]] = counts.get(issue["kind"], 0) + 1
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    log(f"[+] {ticker}: {summary['result']} in {seconds:.0f} s, peak {peak:.0f} MB"
+        + (f"; FY{summary.get('first_fy')}-FY{summary.get('last_fy')}" if summary.get("first_fy") else "")
+        + (f"; checks {summary.get('checks_ok', 0)}/{summary.get('checks_total', 0)} add up"
+           if summary.get("checks_total") else "")
+        + ("; issues: " + ", ".join(f"{n} {k}" for k, n in sorted(counts.items())) if counts else "")
+        + (f" ({summary['error']})" if summary.get("error") and summary["result"] != "ok" else ""))
+    return stats
+
+
+def _child(pipe, log_path: Path | None, task: tuple) -> None:
+    """One company in its own process, with its own database connection and log handle."""
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    log = Log(log_path)
+    db = connect(task[0])
+    pipe.send(_company(db, *task, log))
+    db.close()
+    log.close()
+
+
+def _exit_reason(code: int | None, seconds: float) -> str:
+    if code is None:
+        return f"stopped after {seconds:.0f} s without finishing (time limit {COMPANY_TIMEOUT} s)"
+    if code < 0:
+        name = signal.Signals(-code).name
+        hint = ", most likely out of memory" if name == "SIGKILL" else ""
+        return f"its process was killed by {name}{hint}"
+    return f"its process exited with code {code}"
+
+
+def _isolated(db, task: tuple, log) -> dict:
+    """Run ``_company`` in a child; a crash or a hang fails that company and the batch goes on."""
+    root, batch, run, member = task[0], task[1], task[2], task[4]
+    context = multiprocessing.get_context("fork")
+    receive, send = context.Pipe(duplex=False)
+    process = context.Process(target=_child, args=(send, log.path, task), daemon=True)
+    started = time.monotonic()
+    process.start()
+    send.close()
+    try:
+        while process.is_alive() and time.monotonic() - started < COMPANY_TIMEOUT:
+            process.join(1)
+    except KeyboardInterrupt:
+        process.terminate()
+        process.join(5)
+        raise
+    code = process.exitcode
+    if process.is_alive():
+        process.kill()
+        process.join(5)
+        code = None
+    stats = receive.recv() if code == 0 and receive.poll() else None
+    receive.close()
+    if stats is not None:
+        return stats
+    seconds = time.monotonic() - started
+    error = f"{_exit_reason(code, seconds)}; run it again with resume or rerun --retry-failed"
+    log(f"[!] {member['ticker']}: failed: {error}")
+    _save_company(db, member["cik"], member, batch, run, {"result": "failed", "error": error},
+                  [_issue("company_failed", "error", detail=error)], seconds, root / "companies" / str(member["cik"]))
+    return {}
+
+
 def start_run(db, root: Path, batch: int, kind: str, total: int, options: dict) -> tuple[int, Log]:
     with db:
         cursor = db.execute("""INSERT INTO runs (batch, kind, started, status, pid, total, reader, options)
@@ -560,6 +725,7 @@ def run_batch(db, root: Path, batch: int, kind: str, members: list, cache_dir: P
         log(f"[*] Filing dump {cache_dir}: {filing_cache.explain_reader()}")
         log(f"[*] Stage 2: {pipeline_version()}; SEC requests: "
             + (f"yes, at most {os.environ.get('EDGAR_RATE_LIMIT_PER_SEC', RATE_LIMIT)} per second" if online else "none"))
+        _pipeline()                           # first: sets the rate limit; children share it
         if online:
             _disable_download_cache(log)
         for position, member in enumerate(members, 1):
@@ -570,37 +736,10 @@ def run_batch(db, root: Path, batch: int, kind: str, members: list, cache_dir: P
                                                (cik, batch)).fetchone():
                 continue
             log(f"[*] Company {position}/{len(members)}: {ticker} {member['name']} (CIK {cik})")
-            started = time.monotonic()
-            out_dir = root / "companies" / str(cik)
-            try:
-                if online:
-                    from edgar import Company
-
-                    company = Company(int(cik))
-                    live = list_filings(db, company, cik, log)
-                    dump_filings(db, cik, live, cache_dir, log, stats, retry_failed=kind != "rerun" or retry_failed)
-                elif not db.execute("SELECT 1 FROM companies WHERE cik = ?", (cik,)).fetchone():
-                    log("    [!] never scanned (the run was stopped before it): use resume, not rerun")
-                    continue
-                summary, issues = analyse_company(db, cik, ticker, cache_dir, out_dir, log)
-            except KeyboardInterrupt:
-                raise
-            except Exception as exc:  # noqa: BLE001 - one company never stops the run
-                log(f"    [!] {ticker}: failed ({type(exc).__name__}: {exc})")
-                log.trace()
-                summary = {"result": "failed", "error": f"{type(exc).__name__}: {exc}"}
-                issues = [_issue("company_failed", "error", detail=summary["error"])]
-            seconds = time.monotonic() - started
-            _save_company(db, cik, member, batch, run, summary, issues, seconds, out_dir)
-            counts = {}
-            for issue in issues:
-                counts[issue["kind"]] = counts.get(issue["kind"], 0) + 1
-            log(f"[+] {ticker}: {summary['result']} in {seconds:.0f} s"
-                + (f"; FY{summary.get('first_fy')}-FY{summary.get('last_fy')}" if summary.get("first_fy") else "")
-                + (f"; checks {summary.get('checks_ok', 0)}/{summary.get('checks_total', 0)} add up"
-                   if summary.get("checks_total") else "")
-                + ("; issues: " + ", ".join(f"{n} {k}" for k, n in sorted(counts.items())) if counts else "")
-                + (f" ({summary['error']})" if summary.get("error") and summary["result"] != "ok" else ""))
+            task = (root, batch, run, kind, dict(member), cache_dir, retry_failed, online)
+            done = _isolated(db, task, log) if ISOLATE else _company(db, *task, log)
+            for key, value in done.items():
+                stats[key] += value
             with db:
                 db.execute("""UPDATE runs SET done = ?, downloaded = ?, from_dump = ?, download_failed = ?
                               WHERE id = ?""",
@@ -659,13 +798,25 @@ def _alive(pid) -> bool:
         return False
 
 
-def mark_stale_runs(db) -> None:
-    """A run whose process is gone (container restart) is marked interrupted."""
-    for row in db.execute("SELECT id, pid FROM runs WHERE status = 'running'").fetchall():
+def mark_stale_runs(db, reason: str = "the process disappeared (a container restart, or it was killed)") -> None:
+    """A run whose process is gone is marked interrupted, with the reason and a line in its log."""
+    for row in db.execute("SELECT id, pid, log, current FROM runs WHERE status = 'running'").fetchall():
         if not _alive(row["pid"]):
+            message = f"{reason}; it was on {row['current'] or 'no company'}"
             with db:
-                db.execute("UPDATE runs SET status = 'interrupted', finished = ?, current = NULL WHERE id = ?",
-                           (_now(), row["id"]))
+                db.execute("""UPDATE runs SET status = 'interrupted', finished = ?, current = NULL, message = ?
+                              WHERE id = ?""", (_now(), message, row["id"]))
+            if row["log"]:
+                try:
+                    with (market_dir_of(db) / row["log"]).open("a", encoding="utf-8") as handle:
+                        handle.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} [!] Run {row['id']} interrupted: {message}\n")
+                except OSError:
+                    pass
+
+
+def market_dir_of(db) -> Path:
+    """The scan folder a connection belongs to."""
+    return Path(db.execute("PRAGMA database_list").fetchone()["file"]).parent
 
 
 def batch_summary(db, batch: int) -> dict:
