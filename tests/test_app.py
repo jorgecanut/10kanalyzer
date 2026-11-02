@@ -56,6 +56,11 @@ class AppTestCase(unittest.TestCase):
         with app.JOBS_LOCK:
             app.JOBS.clear()
             app.SCREEN_BATCH.clear()
+        with app.THROTTLE_LOCK:
+            app.THROTTLE.clear()
+        env = unittest.mock.patch.dict("os.environ", {"STOCKY_ADMIN_EMAIL": "boss@example.com"})
+        env.start()
+        self.addCleanup(env.stop)
         self._threads = threading.active_count()
         self.client = self.signup("Ada Lovelace", "ada@example.com")
 
@@ -132,9 +137,11 @@ class AuthTests(AppTestCase):
 
     def test_account_never_exposes_the_id(self):
         user = self.client.get("/api/account").get_json()["user"]
+        usage = user.pop("usage")
         self.assertEqual(user, {"name": "Ada Lovelace", "email": "ada@example.com",
                                 "identity": "Ada Lovelace ada@example.com",
-                                "color": "orange", "avatar": False})
+                                "color": "orange", "avatar": False, "admin": False})
+        self.assertEqual((usage["runs"], usage["allowance"]), (0, app.LIMITS["runs_per_day"]))
 
     def test_email_and_password_changes_need_current_password(self):
         res = self.client.patch("/api/account", json={"email": "new@example.com"})
@@ -589,7 +596,7 @@ class RouteTests(AppTestCase):
         self.assertEqual(res.status_code, 400)
 
     def test_screener_caps_batch_size(self):
-        tickers = [f"T{i}" for i in range(26)]
+        tickers = [f"T{i}" for i in range(app.LIMITS["screener_tickers"] + 1)]
         res = self.client.post("/api/screener", json={"tickers": tickers})
         self.assertEqual(res.status_code, 400)
 
@@ -656,7 +663,11 @@ class QueueTests(AppTestCase):
         other = self.client.post("/api/run", json={"ticker": "AAA", "filings": 5}).get_json()
         self.assertEqual(other["status"], "queued")  # different filings: not the same generation
         self.wait_idle("AAA")
-        fresh = self.client.post("/api/run", json={"ticker": "AAA", "filings": 5, "fresh": True}).get_json()
+        # Regenerating at once is refused for a limited user, allowed for the admin.
+        fresh = self.client.post("/api/run", json={"ticker": "AAA", "filings": 5, "fresh": True})
+        self.assertEqual(fresh.status_code, 429)
+        with unittest.mock.patch.dict("os.environ", {"STOCKY_ADMIN_EMAIL": "ada@example.com"}):
+            fresh = self.client.post("/api/run", json={"ticker": "AAA", "filings": 5, "fresh": True}).get_json()
         self.assertEqual(fresh["status"], "queued")
 
     def test_screener_run_does_not_count_as_cached_graphs(self):
@@ -743,6 +754,9 @@ FAKE_SCAN = textwrap.dedent("""
 class ScanApiTests(AppTestCase):
     def setUp(self):
         super().setUp()
+        env = unittest.mock.patch.dict("os.environ", {"STOCKY_ADMIN_EMAIL": "ada@example.com"})
+        env.start()
+        self.addCleanup(env.stop)
         fake = self.tmp / "fake_scan.py"
         fake.write_text(FAKE_SCAN)
         patcher = unittest.mock.patch.object(app, "SCAN_SCRIPT", fake)
@@ -794,6 +808,115 @@ class ScanApiTests(AppTestCase):
     def test_rerun_passes_the_batch_and_the_options(self):
         self.client.post("/api/scan/run", json={"action": "rerun", "batch": 3, "retry_failed": True, "cik": "320193"})
         self.assertIn("rerun --batch 3 --retry-failed --cik 320193", self.args()[0])
+
+
+    def test_only_the_admin_reaches_the_scan(self):
+        other = self.signup("Bob", "bob@example.com")
+        self.assertEqual(other.get("/api/scan").status_code, 403)
+        self.assertEqual(other.post("/api/scan/run", json={"action": "next", "count": 5}).status_code, 403)
+        self.assertEqual(other.post("/api/scan/cancel").status_code, 403)
+
+
+class LimitTests(AppTestCase):
+    """Ada is a limited user; the admin is boss@example.com."""
+
+    def usage(self, client=None):
+        return (client or self.client).get("/api/account").get_json()["user"]["usage"]
+
+    def test_runs_count_against_the_daily_allowance(self):
+        with unittest.mock.patch.dict(app.LIMITS, {"runs_per_day": 3}):
+            self.client.post("/api/screener", json={"tickers": ["AAA", "BBB"]})
+            self.wait_idle("AAA", "BBB")
+            self.assertEqual(self.usage()["runs"], 2)
+            # Two more would pass the allowance: the whole batch is refused.
+            res = self.client.post("/api/screener", json={"tickers": ["CCC", "DDD"]})
+            self.assertEqual(res.status_code, 429)
+            self.assertIn("1 left", res.get_json()["error"])
+            self.assertEqual(self.client.post("/api/run", json={"ticker": "CCC"}).status_code, 202)
+            self.wait_idle("CCC")
+            self.assertEqual(self.client.post("/api/run", json={"ticker": "DDD"}).status_code, 429)
+            # Cached answers cost nothing.
+            self.assertEqual(self.client.post("/api/run", json={"ticker": "CCC"}).get_json()["status"], "cached")
+
+    def test_active_chart_runs_are_capped(self):
+        with unittest.mock.patch.dict(app.LIMITS, {"active_runs": 1}):
+            self.assertEqual(self.client.post("/api/run", json={"ticker": "AAA"}).status_code, 202)
+            self.assertEqual(self.client.post("/api/run", json={"ticker": "BBB"}).status_code, 429)
+
+    def test_one_screener_batch_at_a_time(self):
+        self.client.post("/api/screener", json={"tickers": ["AAA", "BBB"]})
+        self.assertEqual(self.client.post("/api/screener", json={"tickers": ["CCC"]}).status_code, 429)
+
+    def test_request_for_more_runs_is_granted_by_the_admin(self):
+        boss = self.signup("Boss", "boss@example.com")
+        self.assertIsNone(boss.get("/api/account").get_json()["user"]["usage"])
+        self.assertEqual(self.client.get("/api/admin/users").status_code, 403)
+        self.assertEqual(self.client.post("/api/usage/request", json={"note": "screening banks"}).status_code, 201)
+        self.assertEqual(self.client.post("/api/usage/request", json={}).status_code, 409)
+        self.assertTrue(self.usage()["pending_request"])
+        data = boss.get("/api/admin/users").get_json()
+        (pending,) = data["requests"]
+        self.assertEqual((pending["email"], pending["note"]), ("ada@example.com", "screening banks"))
+        res = boss.post(f"/api/admin/requests/{pending['id']}", json={"action": "accept", "grant": 15})
+        self.assertEqual(res.status_code, 200)
+        usage = self.usage()
+        self.assertEqual(usage["allowance"], app.LIMITS["runs_per_day"] + 15)
+        self.assertEqual(usage["last_request"]["status"], "accepted")
+        self.assertFalse(usage["pending_request"])
+        self.assertEqual(boss.post(f"/api/admin/requests/{pending['id']}", json={"action": "decline"}).status_code, 404)
+
+    def test_admin_disables_and_deletes_accounts(self):
+        boss = self.signup("Boss", "boss@example.com")
+        uid = self.uid()
+        self.assertEqual(boss.post(f"/api/admin/users/{self.uid('boss@example.com')}",
+                                   json={"disabled": True}).status_code, 400)
+        boss.post(f"/api/admin/users/{uid}", json={"disabled": True})
+        self.assertEqual(self.client.get("/api/account").status_code, 401)
+        login = app.app.test_client().post("/api/login", json={"email": "ada@example.com", "password": PASSWORD})
+        self.assertEqual(login.status_code, 403)
+        boss.post(f"/api/admin/users/{uid}", json={"disabled": False})
+        login = app.app.test_client().post("/api/login", json={"email": "ada@example.com", "password": PASSWORD})
+        self.assertEqual(login.status_code, 200)
+        self.assertEqual(boss.delete(f"/api/admin/users/{uid}", json={}).status_code, 400)
+        self.assertEqual(boss.delete(f"/api/admin/users/{uid}", json={"confirm": "DELETE"}).status_code, 200)
+        self.assertIsNone(app._get_user(uid))
+
+    def test_nobody_can_take_the_admin_email(self):
+        res = self.client.patch("/api/account", json={"email": "boss@example.com", "current_password": PASSWORD})
+        self.assertEqual(res.status_code, 409)
+
+    def test_failed_sign_ins_are_throttled(self):
+        anon = app.app.test_client()
+        for _ in range(app.LOGIN_FAILURES[0]):
+            anon.post("/api/login", json={"email": "ada@example.com", "password": "wrong-wrong"})
+        res = anon.post("/api/login", json={"email": "ada@example.com", "password": PASSWORD})
+        self.assertEqual(res.status_code, 429)
+
+    def test_admin_runs_go_first(self):
+        queue = app.RunQueue()
+        order = []
+        release = threading.Event()
+
+        def hold():
+            with queue.slot("a", False):
+                release.wait()
+
+        def take(uid, admin):
+            with queue.slot(uid, admin):
+                order.append(uid)
+
+        holder = threading.Thread(target=hold)
+        holder.start()
+        time.sleep(0.05)
+        threads = []
+        for uid, admin in (("a", False), ("a", False), ("b", False), ("boss", True)):
+            threads.append(threading.Thread(target=take, args=(uid, admin)))
+            threads[-1].start()
+            time.sleep(0.05)
+        release.set()
+        for thread in [holder, *threads]:
+            thread.join(5)
+        self.assertEqual(order, ["boss", "b", "a", "a"])
 
 
 if __name__ == "__main__":

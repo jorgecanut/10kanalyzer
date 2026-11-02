@@ -528,6 +528,15 @@
   .opt-msg { font-size:calc(var(--fs) * 14); color:var(--muted); }
   .opt-msg.is-error { color:var(--badge-error-fg); }
   .opt-actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .opt-row[hidden], .tabs button[hidden] { display:none; }
+  #acc-usage-note { margin:0 0 8px; }
+  #acc-usage-btn { margin-right:12px; }
+  /* Admin tab */
+  .adm-actions { display:flex; gap:8px; justify-content:flex-end; }
+  .adm-grant { width:5.5em; padding:4px 8px; border:1px solid var(--line); border-radius:var(--radius);
+               background:var(--bg); color:var(--text); font:inherit; text-align:right; }
+  table.data td.adm-note { white-space:normal; text-align:left; min-width:220px; overflow-wrap:anywhere; }
+  .adm-off { color:var(--badge-error-fg); }
   .danger-btn { padding:8px 14px; border:1px solid var(--badge-error-fg); border-radius:var(--radius);
                 background:var(--badge-error-bg); color:var(--badge-error-fg); font-size:calc(var(--fs) * 15);
                 font-weight:600; cursor:pointer; }
@@ -544,6 +553,7 @@
   .opt-order { margin:0 0 10px; padding:0; list-style:none; max-width:320px; }
   .opt-order li { display:flex; align-items:center; gap:6px; padding:3px 0; font-size:calc(var(--fs) * 15); }
   .opt-order li span { flex:1; }
+  .opt-order li[hidden] { display:none; }
   .opt-order button { padding:2px 9px; border:1px solid var(--line); border-radius:var(--radius-sm); background:none;
                       color:var(--muted); cursor:pointer; font-size:calc(var(--fs) * 14); }
   .opt-order button:hover:not(:disabled) { color:var(--text); border-color:var(--muted); }
@@ -963,7 +973,7 @@
         <button id="tab-screener" onclick="showTab('screener')">Screener</button>
         <button id="tab-simulation" onclick="showTab('simulation')">Simulation</button>
         <button id="tab-news" onclick="showTab('news')">News</button>
-        <button id="tab-market" onclick="showTab('market')">Market</button>
+        <button id="tab-market" onclick="showTab('market')"{% if not admin %} hidden{% endif %}>Market</button>
       </nav>
       <button id="tab-recent" class="tab-icon nav-btn" onclick="showTab('recent')"
               title="Recent runs" aria-label="Recent runs">
@@ -983,6 +993,19 @@
           </g>
         </svg>
       </button>
+      {% if admin %}
+      <button id="tab-admin" class="tab-icon nav-btn" onclick="showTab('admin')" title="Admin: users and limits"
+              aria-label="Admin">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
+            <path d="M12 3.2l7 2.6v5.4c0 4.4-2.9 8.1-7 9.6c-4.1-1.5-7-5.2-7-9.6V5.8z" fill="currentColor" opacity=".2" stroke="none" />
+            <path d="M12 3.2l7 2.6v5.4c0 4.4-2.9 8.1-7 9.6c-4.1-1.5-7-5.2-7-9.6V5.8z" />
+            <circle cx="12" cy="10.3" r="2.3" />
+            <path d="M8.3 16.2c.9-1.5 2.2-2.3 3.7-2.3s2.8.8 3.7 2.3" />
+          </g>
+        </svg>
+      </button>
+      {% endif %}
       <div class="bar">
         <input id="ticker" type="text" placeholder="AAPL, MSFT, NVDA" maxlength="120" aria-label="Tickers"
                oninput="updateMode()" onkeydown="if(event.key==='Enter')handlePrimary()">
@@ -1289,6 +1312,50 @@
     </div>
   </section>
 
+  <!-- Admin tab (admin only): every account, its runs today and requests for more. -->
+  <section id="pane-admin" class="hidden">
+    {% if admin %}
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">Requests for more runs</span>
+        <span class="panel-actions">
+          <button class="panel-btn icon-btn" onclick="loadAdmin()" title="Refresh" aria-label="Refresh">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh" /></svg>
+          </button>
+        </span>
+      </div>
+      <div class="panel-body">
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>User</th><th class="mk-left">Note</th><th>Asked</th><th>Today</th>
+              <th title="Extra runs for today">Grant</th><th></th></tr></thead>
+            <tbody id="adm-requests"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">Users</span>
+        <span class="panel-actions"><span class="muted" id="adm-limits"></span></span>
+      </div>
+      <div class="panel-body">
+        <p class="sim-meta" id="adm-msg" role="status"></p>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>User</th><th class="mk-left">Email</th><th>Joined</th>
+              <th title="Runs started today of the allowance">Runs today</th><th title="Queued or running now">Active</th>
+              <th class="mk-left">Status</th><th></th></tr></thead>
+            <tbody id="adm-users"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
+          </table>
+        </div>
+        <p class="sim-note">Limits reset at midnight UTC. Granted runs count for the day they are granted.
+          Turning an account off signs it out and stops its runs; nothing is deleted.</p>
+      </div>
+    </div>
+    {% endif %}
+  </section>
+
   <!-- Market tab: the global scan (scan.py), the same for every account. -->
   <section id="pane-market" class="hidden">
     <div class="panel">
@@ -1494,6 +1561,14 @@
             </div>
             <p class="opt-hint">PNG, JPEG or WebP, up to 5 MB; cropped to a square.</p>
             <span id="acc-photo-msg" class="opt-msg" role="status"></span>
+          </div>
+          <div class="opt-row" data-search="usage limit runs quota daily request more allowance" id="acc-usage-row" hidden>
+            <span class="opt-label">Runs today</span>
+            <p class="opt-hint" id="acc-usage"></p>
+            <input id="acc-usage-note" type="text" maxlength="500" placeholder="What you need them for (optional)"
+                   aria-label="Note for the admin">
+            <button class="panel-btn" id="acc-usage-btn" onclick="requestMoreRuns()">Ask for more runs</button>
+            <span id="acc-usage-msg" class="opt-msg" role="status"></span>
           </div>
           <div class="opt-row" data-search="sec edgar user agent contact identity">
             <span class="opt-label">SEC identity</span>
@@ -1804,6 +1879,9 @@ const LIVE = {};
 // Per-browser settings from Options. One JSON blob; bad values fall back.
 const TAB_NAMES = { home: 'Home', graph: 'Charts', insiders: 'Insiders', screener: 'Screener',
                     simulation: 'Simulation', news: 'News', market: 'Market', logs: 'Logs' };
+// The market scan and the Admin tab are the admin's alone (the server enforces it too).
+const IS_ADMIN = {{ 'true' if admin else 'false' }};
+const ADMIN_TABS = ['market', 'admin'];
 const PREF_DEFAULTS = {
   tab: 'home', tabOrder: ['home', 'graph', 'insiders', 'screener', 'simulation', 'news', 'market', 'logs'],
   filings: 'max', textSize: '1', date: 'dmy', number: 'en-US',
@@ -1873,10 +1951,10 @@ function applyPrefs(changed = '') {
 }
 
 function syncPrefControls() {
-  $('#pref-tab').innerHTML = PREFS.tabOrder.map(tab =>
+  $('#pref-tab').innerHTML = PREFS.tabOrder.filter(tab => IS_ADMIN || !ADMIN_TABS.includes(tab)).map(tab =>
     `<option value="${tab}">${TAB_NAMES[tab]}</option>`).join('');
   $('#pref-tab').value = PREFS.tab;
-  $('#pref-order').innerHTML = stripTabs().map((tab, i, order) => `<li><span>${TAB_NAMES[tab]}</span>
+  $('#pref-order').innerHTML = stripTabs().map((tab, i, order) => `<li${!IS_ADMIN && ADMIN_TABS.includes(tab) ? ' hidden' : ''}><span>${TAB_NAMES[tab]}</span>
       <button onclick="moveTab(${i}, -1)" ${i ? '' : 'disabled'} title="Move up" aria-label="Move ${TAB_NAMES[tab]} earlier">↑</button>
       <button onclick="moveTab(${i}, 1)" ${i < order.length - 1 ? '' : 'disabled'} title="Move down" aria-label="Move ${TAB_NAMES[tab]} later">↓</button></li>`).join('');
   $('#pref-filings').value = PREFS.filings;
@@ -2092,6 +2170,7 @@ function setAccount(user) {
   $('#acc-photo-remove').disabled = !user.avatar;
   applyProfileColor(user.color);
   try { localStorage.setItem('stocky-color', user.color); } catch {}
+  renderUsage(user.usage);
   $('#acc-colors').innerHTML = Object.entries(PROFILE_COLORS).map(([name, [dark, light]]) =>
     `<button role="radio" aria-checked="${name === user.color}" title="${name}" aria-label="${name}"
        style="--sw-dark:${dark}; --sw-light:${light}"
@@ -2177,6 +2256,122 @@ async function saveAccount() {
   }
 }
 
+/* Limits: runs today and asking the admin for more ---------------------------- */
+
+function renderUsage(usage) {
+  $('#acc-usage-row').hidden = !usage;    // the admin has no limit
+  if (!usage) return;
+  const last = usage.last_request;
+  let state = '';
+  if (usage.pending_request) state = ' Your request for more is waiting for the admin.';
+  else if (last && last.status === 'accepted' && (last.decided || '').slice(0, 10) === new Date().toISOString().slice(0, 10))
+    state = ` The admin granted you ${last.granted} more today.`;
+  else if (last && last.status === 'declined') state = ' The admin declined your last request.';
+  $('#acc-usage').textContent = `${usage.runs} of ${usage.allowance} used, ${usage.remaining} left until midnight UTC. `
+    + `Up to ${usage.limits.active_runs} chart runs at once and ${usage.limits.screener_tickers} tickers per screen.${state}`;
+  $('#acc-usage-btn').disabled = usage.pending_request;
+  $('#acc-usage-note').hidden = usage.pending_request;
+}
+
+async function requestMoreRuns() {
+  setOptMsg('#acc-usage-msg', 'Sending…');
+  try {
+    const res = await fetch('/api/usage/request', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note: $('#acc-usage-note').value }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not send.');
+    $('#acc-usage-note').value = '';
+    setAccount(data.user);
+    setOptMsg('#acc-usage-msg', 'Sent.');
+  } catch (err) { setOptMsg('#acc-usage-msg', err.message, true); }
+}
+
+/* Admin tab -------------------------------------------------------------------- */
+
+const ADMIN = { data: null, confirm: '' };
+
+async function adminJSON(url, options = {}) {
+  const res = await fetch(url, options);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
+
+async function loadAdmin() {
+  if (!IS_ADMIN) return;
+  try {
+    ADMIN.data = await adminJSON('/api/admin/users');
+    renderAdmin();
+  } catch (err) { setOptMsg('#adm-msg', err.message, true); }
+}
+
+function renderAdmin() {
+  const { users, requests, limits, grant_default: grant } = ADMIN.data;
+  const byId = Object.fromEntries(users.map(user => [user.id, user]));
+  $('#adm-limits').textContent = `Each user: ${limits.runs_per_day} runs a day, ${limits.active_runs} chart runs at once, `
+    + `${limits.screener_tickers} tickers per screen`;
+  $('#adm-requests').innerHTML = requests.length ? requests.map(req => {
+    const usage = byId[req.user_id]?.usage;
+    return `<tr><td>${esc(req.name)}<br><span class="muted">${esc(req.email)}</span></td>
+      <td class="adm-note">${req.note ? esc(req.note) : '<span class="muted">No note</span>'}</td>
+      <td>${fmtDate(req.created)}</td>
+      <td>${usage ? `${usage.runs} / ${usage.allowance}` : ''}</td>
+      <td><input class="adm-grant" id="adm-grant-${req.id}" type="number" min="1" max="1000" value="${grant}"
+                 aria-label="Extra runs for ${esc(req.name)}"></td>
+      <td><span class="adm-actions">
+        <button class="primary" onclick="answerRequest(${req.id}, 'accept')">Accept</button>
+        <button class="panel-btn" onclick="answerRequest(${req.id}, 'decline')">Decline</button></span></td></tr>`;
+  }).join('') : '<tr><td colspan="6" class="muted">No open requests.</td></tr>';
+  $('#adm-users').innerHTML = users.map(user => {
+    const usage = user.usage;
+    const actions = user.admin ? '<span class="muted">Admin</span>' : `<span class="adm-actions">
+        <button class="panel-btn" onclick="grantRuns('${user.id}')" title="Give ${grant} more runs for today">+${grant} today</button>
+        <button class="panel-btn" onclick="setDisabled('${user.id}', ${!user.disabled})">${user.disabled ? 'Turn on' : 'Turn off'}</button>
+        <button class="danger-btn" onclick="deleteUser('${user.id}')">${ADMIN.confirm === user.id ? 'Confirm delete' : 'Delete'}</button>
+      </span>`;
+    return `<tr><td>${esc(user.name)}</td><td class="mk-left">${esc(user.email)}</td><td>${fmtDate(user.created)}</td>
+      <td>${usage ? `${usage.runs} / ${usage.allowance}` : 'No limit'}</td><td>${user.active_jobs || ''}</td>
+      <td class="mk-left">${user.disabled ? '<span class="adm-off">Off</span>' : 'Active'}</td><td>${actions}</td></tr>`;
+  }).join('');
+}
+
+async function adminAction(url, body, done, method = 'POST') {
+  try {
+    await adminJSON(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    setOptMsg('#adm-msg', done);
+  } catch (err) { setOptMsg('#adm-msg', err.message, true); }
+  loadAdmin();
+}
+
+function answerRequest(id, action) {
+  const grant = Number($(`#adm-grant-${id}`).value);
+  adminAction(`/api/admin/requests/${id}`, { action, grant },
+              action === 'accept' ? `Granted ${grant} more runs for today.` : 'Request declined.');
+}
+
+function grantRuns(uid) {
+  adminAction(`/api/admin/users/${uid}`, { grant: ADMIN.data.grant_default },
+              `Granted ${ADMIN.data.grant_default} more runs for today.`);
+}
+
+function setDisabled(uid, disabled) {
+  adminAction(`/api/admin/users/${uid}`, { disabled }, disabled ? 'Account turned off.' : 'Account turned on.');
+}
+
+// First click arms the button for a few seconds; the second deletes.
+function deleteUser(uid) {
+  if (ADMIN.confirm !== uid) {
+    ADMIN.confirm = uid;
+    renderAdmin();
+    setTimeout(() => { if (ADMIN.confirm === uid) { ADMIN.confirm = ''; renderAdmin(); } }, 4000);
+    return;
+  }
+  ADMIN.confirm = '';
+  adminAction(`/api/admin/users/${uid}`, { confirm: 'DELETE' }, 'Account and its data deleted.', 'DELETE');
+}
+
 async function signOut() {
   await rawFetch('/api/logout', { method: 'POST' }).catch(() => {});
   location.href = '/login';
@@ -2188,6 +2383,7 @@ const OPT = { tab: 'account', opener: null, confirm: null };
 
 function openOptions(tab = OPT.tab) {
   OPT.opener = document.activeElement;
+  loadAccount();      // fresh runs-today count
   closeConfirm();
   fillAccountForm();
   setOptMsg('#acc-msg', '');
@@ -2791,7 +2987,8 @@ function syncTabFades() {
 // The URL names the open tab and the pinned ticker (#charts/AAPL), so Back,
 // Forward, reload and bookmarks land where you were. The pane ids stay internal.
 const TAB_SLUGS = { home: 'home', graph: 'charts', insiders: 'insiders', recent: 'recent',
-                    screener: 'screener', simulation: 'simulation', news: 'news', market: 'market', logs: 'logs' };
+                    screener: 'screener', simulation: 'simulation', news: 'news', market: 'market', logs: 'logs',
+                    admin: 'admin' };
 
 function parseHash() {
   const [slug = '', raw = ''] = decodeURIComponent(location.hash.slice(1)).split('/');
@@ -2819,10 +3016,11 @@ window.addEventListener('popstate', () => {
 });
 
 function showTab(name, { history: mode = 'push' } = {}) {
-  for (const tab of ['home', 'graph', 'insiders', 'recent', 'screener', 'simulation', 'news', 'market', 'logs']) {
+  if (!IS_ADMIN && ADMIN_TABS.includes(name)) name = 'home';
+  for (const tab of ['home', 'graph', 'insiders', 'recent', 'screener', 'simulation', 'news', 'market', 'logs', 'admin']) {
     const active = tab === name;
     $(`#pane-${tab}`).classList.toggle('hidden', !active);
-    $(`#tab-${tab}`).classList.toggle('active', active);
+    $(`#tab-${tab}`)?.classList.toggle('active', active);
   }
   // Slide the strip (horizontally only) so the selected tab is visible.
   const tabs = $('.tabs');
@@ -2841,6 +3039,7 @@ function showTab(name, { history: mode = 'push' } = {}) {
   else clearTimeout(MARKET.timer);
   if (name === 'logs') initLogs();
   else clearTimeout(LOGS.timer);
+  if (name === 'admin') loadAdmin();
   syncHash(mode, name);
 }
 
@@ -3416,6 +3615,21 @@ function drawEntry(entry) {
   entry.inst.setOption(option);
   entry.index = index;
   if (entry.mini) return;
+  // A tap opens a year's tooltip; tapping the same year again closes it, and
+  // so does a tap anywhere else (see the pointerdown listener below).
+  const zr = entry.inst.getZr();
+  zr.on('mousemove', () => { entry.tipLive = true; });
+  zr.on('click', event => {
+    const at = entry.inst.convertFromPixel({ gridIndex: 0 }, [event.offsetX, event.offsetY])?.[0];
+    if (at != null && entry.tipLive && at === entry.tipAt) {
+      // After ECharts' own click handler, which would open it again.
+      setTimeout(() => hideChartTip(entry), 0);
+    } else {
+      entry.tipAt = at;
+      entry.tipLive = true;
+    }
+  });
+  entry.inst.on('globalout', () => { entry.tipLive = false; entry.tipAt = null; });
   // Every move is a whole year: the subtitle, slider and axis follow at once.
   entry.inst.on('datazoom', () => {
     updateSpan(entry);
@@ -3430,6 +3644,23 @@ function drawEntry(entry) {
   updateSpan(entry);
   syncSteps(entry);
 }
+
+function hideChartTip(entry) {
+  if (!entry.inst || entry.inst.isDisposed()) return;
+  entry.inst.dispatchAction({ type: 'hideTip' });
+  entry.inst.dispatchAction({ type: 'updateAxisPointer', currTrigger: 'leave' });
+  entry.inst.dispatchAction({ type: 'downplay' });
+  entry.tipLive = false;
+  entry.tipAt = null;
+}
+
+// Touch screens never send "mouse left": close open tooltips on a tap outside their chart.
+document.addEventListener('pointerdown', event => {
+  for (const entry of EC.entries) {
+    if (entry.tipLive && !entry.el.contains(event.target)) hideChartTip(entry);
+  }
+  if (SIM.hideTip && !event.target.closest?.('.sim-chart svg')) SIM.hideTip();
+}, true);
 
 function rescale(entry) {
   if (!entry.inst) return;
@@ -3697,6 +3928,8 @@ function focusSeries(id, panelIndex, name, year) {
     entry.inst.dispatchAction({ type: 'downplay' });
     entry.inst.dispatchAction({ type: 'highlight', seriesIndex, dataIndex: at });
     entry.inst.dispatchAction({ type: 'showTip', seriesIndex, dataIndex: at });
+    entry.tipLive = true;
+    entry.tipAt = at;
   };
   // After the scroll settles, so the tooltip opens where the chart stops.
   setTimeout(run, SMOOTH === 'smooth' ? 450 : 0);
@@ -5524,6 +5757,7 @@ function renderSimulation() {
     dot.setAttribute('opacity', 0);
     tip.setAttribute('opacity', 0);
   };
+  SIM.hideTip = svg.onmouseleave;
   svg.onclick = event => {
     const rect = svg.getBoundingClientRect();
     const px = ((event.clientX - rect.left) / rect.width) * W;
