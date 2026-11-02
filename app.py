@@ -117,7 +117,7 @@ app.config.update(
 )
 
 # Jobs are keyed by "<user id>:<ticker>" (see _job_key) so users never share
-# or see each other's runs; the run lock below is still global (SEC limits).
+# or see each other's runs; RUN_QUEUE below still runs one at a time (SEC limits).
 JOBS: dict[str, dict] = {}
 # Tickers of each user's latest screener request, so a reloaded page can
 # resume its progress. Guarded by JOBS_LOCK; cleared by cancel.
@@ -125,8 +125,65 @@ SCREEN_BATCH: dict[str, list[str]] = {}
 JOBS_LOCK = threading.Lock()
 # Live child processes, keyed like JOBS, so cancel can stop them.
 PROCS: dict[str, subprocess.Popen] = {}
-# SEC is rate-limited and the scrape is heavy; run one at a time.
-RUN_LOCK = threading.Lock()
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(0, int(os.environ.get(name, default)))
+    except ValueError:
+        return default
+
+
+# The one admin is the account whose email is STOCKY_ADMIN_EMAIL (set in .env,
+# never in the repo). Everyone else gets these limits; the admin has none.
+LIMITS = {
+    "runs_per_day": _env_int("STOCKY_RUNS_PER_DAY", 20),        # pipeline runs started per UTC day
+    "active_runs": _env_int("STOCKY_ACTIVE_RUNS", 3),           # chart runs queued or running at once
+    "screener_tickers": _env_int("STOCKY_SCREENER_TICKERS", 10),  # tickers per screener request
+    "fresh_cooldown": _env_int("STOCKY_FRESH_COOLDOWN", 3600),  # seconds before a ticker can be regenerated
+}
+GRANT_DEFAULT = 20                   # extra runs an accepted request gives, unless the admin picks another
+GRANT_MAX = 1000
+LOGIN_FAILURES = (10, 15 * 60)       # failed sign-ins per email per window (seconds) before a pause
+SIGNUPS_PER_HOUR = _env_int("STOCKY_SIGNUPS_PER_HOUR", 20)
+THROTTLE: dict[str, collections.deque] = {}
+THROTTLE_LOCK = threading.Lock()
+
+
+class RunQueue:
+    """One pipeline run at a time (SEC is rate-limited and the scrape is heavy).
+
+    Waiting runs go in turn order rather than arrival order: the admin's first,
+    then each user's 1st waiting run, then each user's 2nd, and so on, so one
+    long screener batch never holds everybody else back.
+    """
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        self._waiting: list[tuple] = []
+        self._running: str | None = None
+        self._seq = 0
+
+    @contextmanager
+    def slot(self, uid: str, admin: bool):
+        with self._cond:
+            depth = sum(1 for ticket in self._waiting if ticket[3] == uid) + (self._running == uid)
+            self._seq += 1
+            ticket = (0 if admin else 1, depth, self._seq, uid)
+            self._waiting.append(ticket)
+            while self._running is not None or min(self._waiting) != ticket:
+                self._cond.wait()
+            self._waiting.remove(ticket)
+            self._running = uid
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._running = None
+                self._cond.notify_all()
+
+
+RUN_QUEUE = RunQueue()
 
 
 # --------------------------------------------------------------------------- #
@@ -169,6 +226,21 @@ def _db():
         )
         if "summary" not in {row["name"] for row in conn.execute("PRAGMA table_info(saved_news)")}:
             conn.execute("ALTER TABLE saved_news ADD COLUMN summary TEXT")
+        # Accounts the admin switched off: they cannot sign in until switched back on.
+        if "disabled" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0")
+        # Runs started per user per UTC day, and the extra runs the admin granted that day.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS usage ("
+            " user_id TEXT NOT NULL, day TEXT NOT NULL, runs INTEGER NOT NULL DEFAULT 0,"
+            " bonus INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_id, day))"
+        )
+        # A user asking the admin for more runs; status is pending, accepted or declined.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS quota_requests ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, created TEXT NOT NULL,"
+            " note TEXT, status TEXT NOT NULL DEFAULT 'pending', granted INTEGER, decided TEXT)"
+        )
         yield conn
         conn.commit()
     finally:
@@ -238,7 +310,86 @@ def _identity(user: dict) -> str:
 def _public_user(user: dict) -> dict:
     # The id is internal: it names the data folder and is never sent out.
     return {"name": user["name"], "email": user["email"], "identity": _identity(user),
-            "color": user.get("color") or COLORS[0], "avatar": _avatar_path(user["id"]).is_file()}
+            "color": user.get("color") or COLORS[0], "avatar": _avatar_path(user["id"]).is_file(),
+            "admin": _is_admin(user), "usage": _usage(user)}
+
+
+# --------------------------------------------------------------------------- #
+# Admin and limits
+# --------------------------------------------------------------------------- #
+
+def _admin_email() -> str:
+    return os.environ.get("STOCKY_ADMIN_EMAIL", "").strip().lower()
+
+
+def _is_admin(user: dict | None) -> bool:
+    admin = _admin_email()
+    return bool(admin and user and user["email"].strip().lower() == admin)
+
+
+def _require_admin() -> None:
+    if not _is_admin(g.user):
+        abort(403, "Only the admin can do this.")
+
+
+def _today() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def _usage(user: dict, conn: sqlite3.Connection | None = None) -> dict | None:
+    """Today's runs against the allowance; None for the admin, who has no limit."""
+    if _is_admin(user):
+        return None
+    if conn is None:
+        with _db() as conn:
+            return _usage(user, conn)
+    row = conn.execute("SELECT runs, bonus FROM usage WHERE user_id = ? AND day = ?",
+                       (user["id"], _today())).fetchone()
+    runs, bonus = (row["runs"], row["bonus"]) if row else (0, 0)
+    allowance = LIMITS["runs_per_day"] + bonus
+    last = conn.execute("SELECT status, granted, decided FROM quota_requests WHERE user_id = ?"
+                        " ORDER BY id DESC LIMIT 1", (user["id"],)).fetchone()
+    return {"runs": runs, "allowance": allowance, "remaining": max(0, allowance - runs),
+            "pending_request": bool(last and last["status"] == "pending"),
+            "last_request": dict(last) if last else None, "limits": dict(LIMITS)}
+
+
+def _charge_runs(user: dict, count: int) -> None:
+    """Count ``count`` new runs against today's allowance, or refuse them all (429)."""
+    if count <= 0 or _is_admin(user):
+        return
+    with _db() as conn:
+        day = _today()
+        # The insert takes the write lock, so two requests cannot both spend the last run.
+        conn.execute("INSERT OR IGNORE INTO usage (user_id, day) VALUES (?, ?)", (user["id"], day))
+        row = conn.execute("SELECT runs, bonus FROM usage WHERE user_id = ? AND day = ?",
+                           (user["id"], day)).fetchone()
+        left = LIMITS["runs_per_day"] + row["bonus"] - row["runs"]
+        if count > left:
+            asked = f"{count} runs" if count > 1 else "a run"
+            abort(429, f"Daily limit reached: this needs {asked} and you have {max(0, left)} left today. "
+                       "Ask the admin for more in Options › Account.")
+        conn.execute("UPDATE usage SET runs = runs + ? WHERE user_id = ? AND day = ?", (count, user["id"], day))
+
+
+def _grant_runs(conn: sqlite3.Connection, uid: str, amount: int) -> None:
+    day = _today()
+    conn.execute("INSERT OR IGNORE INTO usage (user_id, day) VALUES (?, ?)", (uid, day))
+    conn.execute("UPDATE usage SET bonus = bonus + ? WHERE user_id = ? AND day = ?", (amount, uid, day))
+
+
+def _throttle(key: str, limit: int, window: float, record: bool = True) -> bool:
+    """True when ``key`` already has ``limit`` events in the last ``window`` seconds."""
+    now = time.monotonic()
+    with THROTTLE_LOCK:
+        events = THROTTLE.setdefault(key, collections.deque())
+        while events and now - events[0] > window:
+            events.popleft()
+        if len(events) >= limit:
+            return True
+        if record:
+            events.append(now)
+        return False
 
 
 def _avatar_path(uid: str) -> Path:
@@ -446,7 +597,8 @@ def _worker(key: str, filings: int | str, job_id: str) -> None:
     ``key`` is ``_job_key(uid, ticker)``: results go to that user's directory
     and the SEC identity is that account's name and email, read at launch.
     """
-    with RUN_LOCK:
+    uid = key.split(":", 1)[0]
+    with RUN_QUEUE.slot(uid, _is_admin(_get_user(uid))):
         with JOBS_LOCK:
             job = JOBS.get(key)
             if not job or job.get("id") != job_id:
@@ -588,6 +740,22 @@ def _write_run_meta(directory: Path, filings: int | str, charts: bool) -> None:
         pass
 
 
+def _minutes(seconds: float) -> str:
+    minutes = max(1, math.ceil(seconds / 60))
+    return f"{minutes} minute{'s' if minutes != 1 else ''}"
+
+
+def _fresh_wait(ticker: str) -> float:
+    """Seconds until a limited user may regenerate ``ticker`` (0 when they may now)."""
+    try:
+        meta = json.loads((_ticker_dir(ticker) / "run.json").read_text())
+        finished = datetime.fromisoformat(meta["finished"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0
+    age = (datetime.now(timezone.utc) - finished).total_seconds()
+    return max(0.0, LIMITS["fresh_cooldown"] - age)
+
+
 def _cached_today(ticker: str, filings: int | str) -> str | None:
     """Finish time of today's graph run with the same filings, if there is one."""
     try:
@@ -664,12 +832,20 @@ app.secret_key = _secret_key()
 
 # Everything else needs a signed-in user.
 PUBLIC_ENDPOINTS = {"login_page", "login", "signup", "healthz", "static"}
+# The admin page and the market scan (heavy, shared by everyone) are the admin's alone.
+ADMIN_PATHS = ("/api/admin", "/api/scan")
 
 
 @app.before_request
 def load_user():
     g.user = _get_user(session.get("uid"))
-    if g.user is not None or request.endpoint in PUBLIC_ENDPOINTS:
+    if g.user is not None and g.user.get("disabled"):
+        g.user = None                # switched off by the admin: signed out everywhere
+    if g.user is not None:
+        if request.path.startswith(ADMIN_PATHS):
+            _require_admin()
+        return None
+    if request.endpoint in PUBLIC_ENDPOINTS:
         return None
     session.pop("uid", None)
     if request.path.startswith("/api/"):
@@ -686,7 +862,7 @@ def _start_session(uid: str) -> None:
 @app.get("/")
 def index():
     return render_template("index.html", version=app_version(),
-                           commit=(git_commit()["commit"] or "")[:7])
+                           commit=(git_commit()["commit"] or "")[:7], admin=_is_admin(g.user))
 
 
 @app.get("/login")
@@ -702,6 +878,8 @@ def signup():
     name = _clean_name(payload.get("name"))
     email = _clean_email(payload.get("email"))
     password = _clean_password(payload.get("password"))
+    if _throttle("signup", SIGNUPS_PER_HOUR, 3600):
+        abort(429, "Too many new accounts right now; try again in an hour.")
     uid = uuid.uuid4().hex
     try:
         with _db() as conn:
@@ -720,10 +898,16 @@ def login():
     payload = request.get_json(silent=True) or {}
     email = str(payload.get("email") or "").strip()
     password = str(payload.get("password") or "")
+    key = f"login:{email.lower()}"
+    if _throttle(key, *LOGIN_FAILURES, record=False):
+        abort(429, "Too many failed sign-ins; wait 15 minutes and try again.")
     with _db() as conn:
-        row = conn.execute("SELECT id, password_hash FROM users WHERE email = ?", (email,)).fetchone()
+        row = conn.execute("SELECT id, password_hash, disabled FROM users WHERE email = ?", (email,)).fetchone()
     if row is None or not check_password_hash(row["password_hash"], password):
+        _throttle(key, *LOGIN_FAILURES)
         abort(401, "Wrong email or password.")
+    if row["disabled"]:
+        abort(403, "This account has been disabled by the admin.")
     _start_session(row["id"])
     return jsonify(ok=True)
 
@@ -859,6 +1043,10 @@ def update_account():
     color = payload.get("color", user.get("color") or COLORS[0])
     if color not in COLORS:
         abort(400, "Unknown colour.")
+    if email.strip().lower() == _admin_email() and not _is_admin(user):
+        abort(409, "An account with that email already exists.")
+    if _is_admin(user) and email.strip().lower() != _admin_email():
+        abort(400, "The admin email is set by STOCKY_ADMIN_EMAIL; change it there first.")
     if email.lower() != user["email"].lower() or new_password:
         if not check_password_hash(user["password_hash"], str(payload.get("current_password") or "")):
             abort(403, "Enter your current password to change the email or password.")
@@ -956,14 +1144,119 @@ def delete_account():
     _require_confirm(payload)
     if not check_password_hash(g.user["password_hash"], str(payload.get("password") or "")):
         abort(403, "Wrong password.")
-    uid = g.user["id"]
+    _delete_user(g.user["id"])
+    session.clear()
+    return jsonify(deleted=True)
+
+
+def _delete_user(uid: str) -> None:
+    """Remove an account with its results, picture, saved news and usage."""
     _wipe_user(uid)
     _avatar_path(uid).unlink(missing_ok=True)
     with _db() as conn:
+        for table in ("saved_news", "usage", "quota_requests"):
+            conn.execute(f"DELETE FROM {table} WHERE user_id = ?", (uid,))
         conn.execute("DELETE FROM users WHERE id = ?", (uid,))
-        conn.execute("DELETE FROM saved_news WHERE user_id = ?", (uid,))
-    session.clear()
+
+
+@app.post("/api/usage/request")
+def request_more_runs():
+    """Ask the admin for more runs today; one open request at a time."""
+    if _is_admin(g.user):
+        abort(400, "The admin has no limit.")
+    note = " ".join(str((request.get_json(silent=True) or {}).get("note") or "").split())[:500]
+    with _db() as conn:
+        if conn.execute("SELECT 1 FROM quota_requests WHERE user_id = ? AND status = 'pending'",
+                        (g.user["id"],)).fetchone():
+            abort(409, "You already asked; the admin has not answered yet.")
+        conn.execute("INSERT INTO quota_requests (user_id, created, note) VALUES (?, ?, ?)",
+                     (g.user["id"], _now(), note or None))
+    return jsonify(user=_public_user(g.user)), 201
+
+
+# --------------------------------------------------------------------------- #
+# Admin page (load_user lets only the admin reach /api/admin)
+# --------------------------------------------------------------------------- #
+
+def _admin_target(uid: str) -> dict:
+    user = _get_user(uid)
+    if user is None:
+        abort(404, "No such account.")
+    if _is_admin(user):
+        abort(400, "That is the admin account.")
+    return user
+
+
+def _grant_amount(payload: dict) -> int:
+    try:
+        amount = int(payload.get("grant", GRANT_DEFAULT))
+    except (TypeError, ValueError):
+        abort(400, "grant must be a number")
+    if not 1 <= amount <= GRANT_MAX:
+        abort(400, f"grant must be between 1 and {GRANT_MAX}")
+    return amount
+
+
+@app.get("/api/admin/users")
+def admin_users():
+    with JOBS_LOCK:
+        active = collections.Counter(job.get("uid") for job in JOBS.values()
+                                     if job.get("status") in ("queued", "running"))
+    with _db() as conn:
+        rows = [dict(row) for row in conn.execute("SELECT * FROM users ORDER BY created")]
+        users = [{"id": user["id"], "name": user["name"], "email": user["email"], "created": user["created"],
+                  "disabled": bool(user.get("disabled")), "admin": _is_admin(user),
+                  "usage": _usage(user, conn), "active_jobs": active.get(user["id"], 0)} for user in rows]
+        requests_ = [dict(row) for row in conn.execute(
+            "SELECT q.id, q.user_id, q.created, q.note, u.name, u.email FROM quota_requests q"
+            " JOIN users u ON u.id = q.user_id WHERE q.status = 'pending' ORDER BY q.created")]
+    return jsonify(users=users, requests=requests_, limits=LIMITS, grant_default=GRANT_DEFAULT)
+
+
+@app.post("/api/admin/users/<uid>")
+def admin_update_user(uid: str):
+    """Switch an account off or on, or give it extra runs for today."""
+    user = _admin_target(uid)
+    payload = request.get_json(silent=True) or {}
+    if "disabled" in payload:
+        disabled = bool(payload["disabled"])
+        with _db() as conn:
+            conn.execute("UPDATE users SET disabled = ? WHERE id = ?", (int(disabled), uid))
+        if disabled:
+            _cancel_jobs(uid)
+    if "grant" in payload:
+        amount = _grant_amount(payload)
+        with _db() as conn:
+            _grant_runs(conn, uid, amount)
+    return jsonify(ok=True, name=user["name"])
+
+
+@app.delete("/api/admin/users/<uid>")
+def admin_delete_user(uid: str):
+    _admin_target(uid)
+    _require_confirm(request.get_json(silent=True))
+    _delete_user(uid)
     return jsonify(deleted=True)
+
+
+@app.post("/api/admin/requests/<int:request_id>")
+def admin_answer_request(request_id: int):
+    """Accept (with extra runs for today) or decline a request for more runs."""
+    payload = request.get_json(silent=True) or {}
+    action = payload.get("action")
+    if action not in ("accept", "decline"):
+        abort(400, "action must be accept or decline")
+    amount = _grant_amount(payload) if action == "accept" else None
+    with _db() as conn:
+        row = conn.execute("SELECT user_id FROM quota_requests WHERE id = ? AND status = 'pending'",
+                           (request_id,)).fetchone()
+        if row is None:
+            abort(404, "No such open request.")
+        conn.execute("UPDATE quota_requests SET status = ?, granted = ?, decided = ? WHERE id = ?",
+                     ("accepted" if amount else "declined", amount, _now(), request_id))
+        if amount:
+            _grant_runs(conn, row["user_id"], amount)
+    return jsonify(ok=True)
 
 
 def _filings(payload: dict, default: int | str) -> int | str:
@@ -1005,8 +1298,20 @@ def run():
         generated = _cached_today(ticker, filings)
         if generated:
             return jsonify(status="cached", ticker=ticker, generated=generated), 200
+    elif not _is_admin(g.user):
+        wait = _fresh_wait(ticker)
+        if wait:
+            abort(429, f"{ticker} was generated less than {_minutes(LIMITS['fresh_cooldown'])} ago; "
+                       f"you can regenerate it in {_minutes(wait)}.")
 
     with JOBS_LOCK:
+        if not _is_admin(g.user):
+            active = sum(1 for job in JOBS.values() if job.get("uid") == uid and job.get("charts", True)
+                         and job.get("status") in ("queued", "running"))
+            if active >= LIMITS["active_runs"]:
+                abort(429, f"You already have {active} chart runs going; wait for one to finish.")
+        # Under the jobs lock, so parallel requests cannot slip past the limits.
+        _charge_runs(g.user, 1)
         job_id = secrets.token_hex(8)
         JOBS[key] = _new_job(uid, ticker, job_id, charts=True)
 
@@ -1908,35 +2213,42 @@ def screener_run():
             tickers.append(ticker)
     if not tickers:
         abort(400, "Provide at least one ticker.")
-    if len(tickers) > 25:
-        abort(400, "Too many tickers (max 25).")
+    admin = _is_admin(g.user)
+    cap = 25 if admin else min(25, LIMITS["screener_tickers"])
+    if len(tickers) > cap:
+        abort(400, f"Too many tickers (max {cap}).")
     filings = _filings(payload, 10)
     uid = g.user["id"]
-    with JOBS_LOCK:
-        SCREEN_BATCH[uid] = tickers
 
     queued: list[str] = []
     cached: list[str] = []
     items = []
+    starts: list[tuple[str, str]] = []
     now = time.time()
-    for ticker in tickers:
-        path = _ticker_dir(ticker) / "evaluation.csv"
-        if path.is_file() and now - path.stat().st_mtime < 7 * 86400:
-            cached.append(ticker)
-            items.append({"ticker": ticker, "status": "cached"})
-            continue
-        key = _job_key(uid, ticker)
-        with JOBS_LOCK:
-            job = JOBS.get(key)
-            if job and job["status"] in ("queued", "running"):
+    with JOBS_LOCK:
+        mine = {job["ticker"]: job for job in JOBS.values()
+                if job.get("uid") == uid and job.get("status") in ("queued", "running")}
+        if not admin and any(not job.get("charts", True) for job in mine.values()):
+            abort(429, "Your last screener batch is still running; wait for it or cancel it.")
+        for ticker in tickers:
+            path = _ticker_dir(ticker) / "evaluation.csv"
+            if path.is_file() and now - path.stat().st_mtime < 7 * 86400:
+                cached.append(ticker)
+                items.append({"ticker": ticker, "status": "cached"})
+            elif ticker in mine:
                 queued.append(ticker)
-                items.append({"ticker": ticker, "status": job["status"]})
-                continue
-            job_id = secrets.token_hex(8)
-            JOBS[key] = _new_job(uid, ticker, job_id, charts=False)
-        threading.Thread(target=_worker, args=(key, filings, job_id), daemon=True).start()
-        queued.append(ticker)
-        items.append({"ticker": ticker, "status": "queued"})
+                items.append({"ticker": ticker, "status": mine[ticker]["status"]})
+            else:
+                starts.append((ticker, secrets.token_hex(8)))
+                queued.append(ticker)
+                items.append({"ticker": ticker, "status": "queued"})
+        # All or nothing: a batch the allowance cannot cover starts no run.
+        _charge_runs(g.user, len(starts))
+        SCREEN_BATCH[uid] = tickers
+        for ticker, job_id in starts:
+            JOBS[_job_key(uid, ticker)] = _new_job(uid, ticker, job_id, charts=False)
+    for ticker, job_id in starts:
+        threading.Thread(target=_worker, args=(_job_key(uid, ticker), filings, job_id), daemon=True).start()
 
     return jsonify(queued=queued, cached=cached, items=items), (202 if queued else 200)
 

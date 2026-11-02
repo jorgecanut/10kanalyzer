@@ -20,6 +20,13 @@ services:
       # explicitly so the bind mounts below match regardless of HOME.
       EDGAR_LOCAL_DATA_DIR: /home/appuser/.edgar
       EDGAR_CACHE_DIR: /home/appuser/.edgar_cache
+      # The one admin account (set it in .env, never here) and the other users' limits.
+      STOCKY_ADMIN_EMAIL: ${STOCKY_ADMIN_EMAIL:-}
+      STOCKY_RUNS_PER_DAY: ${STOCKY_RUNS_PER_DAY:-20}
+      STOCKY_ACTIVE_RUNS: ${STOCKY_ACTIVE_RUNS:-3}
+      STOCKY_SCREENER_TICKERS: ${STOCKY_SCREENER_TICKERS:-10}
+      STOCKY_FRESH_COOLDOWN: ${STOCKY_FRESH_COOLDOWN:-3600}
+      STOCKY_SIGNUPS_PER_HOUR: ${STOCKY_SIGNUPS_PER_HOUR:-20}
     ports:
       - "${HTTP_PORT:-8053}:8000"
     volumes:

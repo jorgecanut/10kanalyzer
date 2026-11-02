@@ -227,6 +227,23 @@ names their folder. The account's name and email are the SEC identity for that
 user's runs, so there is nothing to put in Docker or `.env`. Set
 `STOCKY_DATA_DIR` to keep `data/` somewhere else.
 
+**One admin, limited users.** `STOCKY_ADMIN_EMAIL` in `.env` (never in the
+repo) names the one admin account. The admin has no limits, the only access to
+the **Market** scan (`/api/scan*`) and an **Admin** tab (shield icon beside
+Logs) to see every account and its runs today, turn accounts off or on, delete
+them, give extra runs, and accept or decline requests for more. Every other
+account is limited (defaults; see `.env.example` to change them): 20 pipeline
+runs a day (UTC; each screener ticker is one run, cached answers are free), 3
+chart runs queued or running at once, 10 tickers per screener request and one
+screener batch at a time, and one regeneration of a ticker per hour. A user
+over the limit gets a 429 and can ask for more from Options → Account; an
+accepted request adds the granted runs to that day. Sign-ins pause after 10
+failures per email in 15 minutes and new accounts are capped per hour. The run
+queue still runs one pipeline at a time, but in turns: the admin's runs first,
+then each user's first waiting run, then each user's second, so one long
+screener batch never holds others back. Nobody can take the admin email by
+signing up or editing their account once the admin account exists.
+
 ```bash
 pip install -r requirements.txt
 python app.py            # http://localhost:8053
@@ -264,12 +281,17 @@ Routes:
 | `GET` | `/api/simulation/<ticker>` | Yahoo price history + dividends (`?range=1y`) |
 | `GET` | `/api/fundamentals/<ticker>` | Flat metric set behind the screener |
 | `GET` | `/api/screener` | Cached screener results, Greenblatt ranks |
-| `POST` | `/api/screener` | `{"tickers":[...],"filings":10}` (max 25 tickers; `filings` 1–20 or `"max"`, default 10) → data only, no charts |
+| `POST` | `/api/screener` | `{"tickers":[...],"filings":10}` (max 10 tickers for users, 25 for the admin; `filings` 1–20 or `"max"`, default 10) → data only, no charts |
+| `POST` | `/api/usage/request` | `{"note"}` → asks the admin for more runs today (one open request at a time) |
+| `GET` | `/api/admin/users` | Admin only: every account with its runs today and active jobs, plus open requests |
+| `POST` | `/api/admin/users/<id>` | Admin only: `{"disabled":true}` turns an account off (signs it out, stops its runs), `{"grant":20}` adds runs for today |
+| `DELETE` | `/api/admin/users/<id>` | Admin only: `{"confirm":"DELETE"}` deletes the account and all its data |
+| `POST` | `/api/admin/requests/<n>` | Admin only: `{"action":"accept","grant":20}` or `{"action":"decline"}` |
 | `GET` | `/files/<ticker>/<name>` | View a chart inline |
 | `GET` | `/download/<ticker>` | The charts (PNG, 5-year windows) and data files as a `.zip` |
 | `GET` | `/download/<ticker>/all` | The download dialog's zip: `?charts=` and `?files=` (comma-separated; absent = all), `?years=5\|10\|0` (years per chart image; 0 = one image), `?theme=light\|dark`, `?extras=` any of `insiders,news,screener,debug` (absent = all). Charts go in `charts/` as `<id>_<from>_<to>.png`; `?months=`, `?news_limit=`, `?news_days=` follow the tabs' options |
 | `GET` | `/download/<ticker>/<name>` | One file |
-| `GET` | `/api/scan` | The market scan: universe size, batches with result and issue counts, recent runs, the active run |
+| `GET` | `/api/scan` | Admin only, like every `/api/scan*` route. The market scan: universe size, batches with result and issue counts, recent runs, the active run |
 | `POST` | `/api/scan/run` | `{"action":"next","count":100}`, `{"action":"rerun","batch":1,"retry_failed":false,"cik":null}` or `{"action":"resume","batch":1}`; one scan at a time (409 otherwise) |
 | `POST` | `/api/scan/cancel` | Stop the running scan (the companies done are kept) |
 | `GET` | `/api/scan/batch/<n>` | A batch's companies and issues (`?kind=check_mismatch` …) |
