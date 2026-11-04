@@ -796,6 +796,9 @@ def extract_filing(filing, period_key: str) -> dict:
         return {"xbrl": False}
 
     facts = xbrl.facts.to_dataframe()
+    if facts.empty or "concept" not in facts.columns:
+        # Teucrium's 2011 10-K: XBRL attached, but the reader got no fact from it.
+        raise ValueError("the filing has XBRL but the dump holds no facts from it (a reader problem, stage 1)")
 
     # The filer's own fiscal-year label (authoritative, unlike the
     # calendar year of the period end).

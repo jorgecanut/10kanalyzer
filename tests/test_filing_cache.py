@@ -678,6 +678,28 @@ class BuildDatasetDumpTest(unittest.TestCase):
             edgar_dashboard.assemble(filings, None, lambda filing: (_dumped(filing), "read"))
         self.assertEqual(filings, [None])
 
+    def test_a_filing_with_no_date_in_the_index_is_skipped_or_failed_never_a_crash(self):
+        # Brookfield's 2008 40-F: no report date in SEC's index, no XBRL.
+        undated = SimpleNamespace(accession_no="0001193125-08-069697", form="40-F", report_date=None)
+        failures: list = []
+        log = io.StringIO()
+        with redirect_stdout(log), self.assertRaises(RuntimeError):     # nothing else to read
+            edgar_dashboard.assemble([undated], None, lambda filing: ({"xbrl": False}, "dump"), failures=failures)
+        self.assertEqual(failures, [])
+        self.assertIn("no report date in SEC's index, no XBRL", log.getvalue())
+        # With XBRL but no date anywhere it is a recorded failure.
+        undated = SimpleNamespace(accession_no="0001193125-08-069697", form="40-F", report_date=None)
+        with redirect_stdout(io.StringIO()), self.assertRaises(RuntimeError):
+            edgar_dashboard.assemble([undated], None, lambda filing: ({"xbrl": True, "facts": {}}, "dump"),
+                                     failures=failures)
+        self.assertIn("no report date", failures[0]["error"])
+
+    def test_xbrl_with_no_facts_says_so(self):
+        # Teucrium's 2011 10-K: the dump holds an empty facts table.
+        empty = SimpleNamespace(xbrl=lambda: SimpleNamespace(facts=SimpleNamespace(to_dataframe=pd.DataFrame)))
+        with self.assertRaisesRegex(ValueError, "no facts"):
+            extract.extract_filing(empty, "2011-12-31")
+
     def test_only_a_schema_bump_reads_again_and_going_back_finds_the_old_dumps(self):
         self.build(3)
         with unittest.mock.patch.object(dump, "SCHEMA", dump.SCHEMA + 1):

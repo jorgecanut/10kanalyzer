@@ -100,7 +100,8 @@ def _report_date(filing) -> str:
     report_date = getattr(filing, "report_date", None)
     if report_date:
         return str(report_date)
-    return str(filing.period_of_report or "")
+    # A scan's filings come from its database: no ``period_of_report`` to fetch.
+    return str(getattr(filing, "period_of_report", None) or "")
 
 
 ANNUAL_FORMS = ("10-K", "20-F", "40-F")
@@ -212,7 +213,17 @@ def assemble(filings: list, n_filings: int | None, entry_of, ticker: str = "", l
         try:
             period_of_report = _report_date(filing)
             if not period_of_report:
-                continue
+                # Old 40-Fs (Brookfield 2008) have no date in SEC's index: the
+                # filing's cover page gives it, and a filing with neither fails.
+                if entry_of is None:
+                    raise RuntimeError("no report date in SEC's index and no dump source")
+                entry, _ = entry_of(filing)
+                if not entry.get("xbrl"):
+                    log(f"    [!] ? ({accession}): no report date in SEC's index, no XBRL; skipping")
+                    continue
+                period_of_report = filing_period(entry, "")
+                if not period_of_report:
+                    raise ValueError("no report date in SEC's index or on the filing's cover page")
 
             # De-duplicate by the exact period end, NOT by calendar year.
             # Companies on a 52/53-week calendar can have two fiscal years whose
