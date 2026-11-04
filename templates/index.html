@@ -692,8 +692,25 @@
   .ec-range:hover::-webkit-slider-thumb { border-color:var(--text); }
   .ec-range:hover::-moz-range-thumb { border-color:var(--text); }
   .ec-step svg { width:16px; height:16px; display:block; }
+  /* The year count: − 6 years +, at the end of the slider row. With every
+     year on show the slider and its arrows go, and the count stays. */
+  .ec-zoom { flex:none; display:flex; align-items:center; gap:4px; margin-left:8px; }
+  .ec-count { min-width:8ch; text-align:center; color:var(--muted); font-size:calc(var(--fs) * 14);
+              font-variant-numeric:tabular-nums; }
+  .ec-years.is-all { justify-content:flex-end; }
+  .ec-years.is-all > .prev, .ec-years.is-all > .next, .ec-years.is-all > .ec-range { display:none; }
   .ec-empty, .ec-note { margin:8px 0 0; text-align:center; color:var(--muted); font-size:calc(var(--fs) * 15); }
   .ec-empty { padding:60px 0; }
+  /* Data issues behind a chart: always shown, closed to one line. */
+  .ec-warn { margin:10px 0 0; padding:8px 12px; border-radius:var(--radius-sm);
+             background:var(--badge-error-bg); color:var(--text); font-size:calc(var(--fs) * 15); }
+  .ec-warn summary { display:flex; align-items:center; gap:8px; color:var(--badge-error-fg); cursor:pointer; }
+  .ec-warn summary svg { flex:none; width:18px; height:18px; }
+  .ec-warn ul { margin:6px 0 2px; padding-left:20px; }
+  .ec-warn ul ul { margin:2px 0 6px; color:var(--muted); }
+  .ec-warn li.is-note > b { color:var(--muted); }
+  .ec-warn-none { margin:10px 0 0; color:var(--muted); font-size:calc(var(--fs) * 14); }
+  .ec-warn-mini { color:var(--badge-error-fg); }
   .ec-tip { min-width:180px; }
   .ec-tip-head { margin-bottom:4px; font-weight:700; }
   .ec-tip-row { display:flex; align-items:center; gap:4px; line-height:1.6; }
@@ -1402,12 +1419,16 @@
                   <th title="No 10-K, 20-F or 40-F (funds, new listings) or none with XBRL">No data</th>
                   <th title="Filings kept in the dump, of all listed">Filings</th>
                   <th title="Totals that do not add up to their parts">Mismatches</th>
-                  <th title="Lines the filing has that no rule reads yet">Unread</th>
+                  <th title="Metrics the filing has (a fact or a statement line) that the pipeline did not read">Unread</th>
+                  <th title="Metrics that could not be read because no statement was found in the filing">No statement</th>
+                  <th title="Metrics checked against the filing and not in it (banks have no revenue line, for one)">Not in filing</th>
+                  <th title="Metrics of one year that contradict each other">Looks wrong</th>
+                  <th title="Every other issue (parts of a filing unread, overdue 10-K...): open the batch for the list">Other</th>
                   <th title="Downloads or reads that failed">Errors</th>
                   <th></th>
                 </tr>
               </thead>
-              <tbody id="mk-batch-body"><tr><td colspan="12" class="muted">No batch yet.</td></tr></tbody>
+              <tbody id="mk-batch-body"><tr><td colspan="16" class="muted">No batch yet.</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -2938,7 +2959,7 @@ function renderHome() {
     home.innerHTML = spec
       ? spec.charts.map(chart => `<figure onclick="openChart('${esc(chartId(chart.id))}')" title="Open in the Charts tab">
           <div class="ec-mini" data-chart="${esc(chart.id)}" data-panel="0"></div>
-          <figcaption><span>${esc(chart.name)}</span></figcaption>
+          <figcaption><span>${esc(chart.name)}</span>${chartIssueCount(chart) ? `<span class="ec-warn-mini" title="${esc(chartIssueLine(chart))}">${chartIssueCount(chart)} data ${chartIssueCount(chart) === 1 ? 'issue' : 'issues'}</span>` : ''}</figcaption>
         </figure>`).join('')
       : `<p class="muted">${data && data.charts.length ? 'Loading charts…' : live ? 'Charts appear when the run finishes.' : 'No charts for this ticker yet.'}</p>`;
     if (spec) mountCharts(home, spec.charts, { mini: true });
@@ -3375,10 +3396,12 @@ function visibleYears(panel, width) {
 
 // The ECharts option for one panel, plus each series' index by name.
 // The page shows the last six years at most (the slider reaches the rest);
-// the full view shows every year that fits.
+// the full view shows every year that fits. The − / + under a chart sets the
+// number of years by hand (``span``): fewer and wider, or more and squished.
 const NORMAL_YEARS = 6;
+const MIN_YEARS = 2;
 
-function panelOption(panel, t, { mini = false, width = 800, full = false } = {}) {
+function panelOption(panel, t, { mini = false, width = 800, full = false, span = null, end = null } = {}) {
   const fs = t.fs;
   const text = (size, color = t.muted) => ({ fontFamily: t.font, fontSize: size * fs, color });
   const years = panel.years.map(String);
@@ -3443,9 +3466,14 @@ function panelOption(panel, t, { mini = false, width = 800, full = false } = {})
                 markLine: { silent: true, symbol: 'none', label: { show: false },
                             lineStyle: { type: 'solid', width: 1, color: t.ink }, data: [{ yAxis: 0 }] } });
 
-  const visible = mini ? years.length : Math.min(full ? Infinity : NORMAL_YEARS, visibleYears(panel, width));
+  const visible = mini ? years.length
+    : span ? Math.max(Math.min(MIN_YEARS, years.length), Math.min(span, years.length))
+    : Math.min(full ? Infinity : NORMAL_YEARS, visibleYears(panel, width));
   const zoom = !mini && visible < years.length;
-  const bounds = yBounds(panel, years.length - visible, years.length - 1);
+  // The window ends on ``end`` (kept across redraws), else on the latest year.
+  const last = end == null ? years.length - 1 : Math.max(visible - 1, Math.min(years.length - 1, end));
+  const first = last - visible + 1;
+  const bounds = yBounds(panel, first, last);
   const yAxis = panel.axes.map((axis, k) => {
     const fixed = axis.min != null || axis.max != null;
     return {
@@ -3478,7 +3506,7 @@ function panelOption(panel, t, { mini = false, width = 800, full = false } = {})
   };
   if (zoom) {
     option.dataZoom = [{
-      type: 'inside', xAxisIndex: 0, startValue: years.length - visible, endValue: years.length - 1,
+      type: 'inside', xAxisIndex: 0, startValue: first, endValue: last,
       // Years off the window are dropped: a line starts and ends at the
       // window's first and last years, with no run to the plot's edge.
       filterMode: 'filter',
@@ -3536,6 +3564,13 @@ function figureHtml(chart, custom = false) {
                      aria-label="Years shown" title="Years shown: one step per year">
               <button class="ec-step next" onclick="stepYears(this, 1)" title="One year forward" aria-label="One year forward">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+              <span class="ec-zoom" role="group" aria-label="Years on show">
+                <button class="ec-step fewer" onclick="zoomYears(this, -1)" title="One year fewer: wider bars" aria-label="Show one year fewer">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg></button>
+                <span class="ec-count" aria-live="polite"></span>
+                <button class="ec-step more" onclick="zoomYears(this, 1)" title="One year more: narrower bars" aria-label="Show one year more">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12M12 6v12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg></button>
+              </span>
             </div>
           </div>`
           : `<p class="ec-empty">${esc(panel.empty)}</p>`}
@@ -3552,7 +3587,33 @@ function figureHtml(chart, custom = false) {
        <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-expand" /></svg></button>`;
   return `<figure id="${chartId(chart.id)}" class="chart-fig ec-fig">
       <div class="ec-panels${chart.panels.length > 1 ? ' two' : ''}">${panels}</div>
+      ${custom ? '' : chartWarningsHtml(chart)}
       <div class="fig-actions">${max}${action}</div></figure>`;
+}
+
+// The data issues behind a chart (charts.json ``warnings``, data_issues.py):
+// a metric missing, a total that does not add up, a value that looks wrong.
+// Hiding is not fixing, so every one is listed under the chart it touches.
+const ISSUE_METRICS = { Revenues: 'Revenue', CostOfRevenue: 'Cost of revenue', GrossProfit: 'Gross profit',
+  OperatingIncomeLoss: 'Operating income', NetIncomeLoss: 'Net income', OperatingCashFlow: 'Operating cash flow',
+  StockholdersEquity: 'Equity', CapEx: 'Capital expenditure' };
+const chartIssueCount = chart => (chart.warnings || []).reduce((sum, w) => sum + w.years.length, 0);
+const issueWhat = w => w.label || ISSUE_METRICS[w.concept] || w.concept;
+const issueYears = years => years.map(y => `FY${y}`).join(', ');
+const chartIssueLine = chart => (chart.warnings || []).map(w => `${w.title}: ${issueWhat(w)} (${issueYears(w.years)})`).join('; ');
+function chartWarningsHtml(chart) {
+  if (chart.warnings === undefined) {
+    return `<p class="ec-warn-none">This run was made before data issues were checked: generate the charts again to check them.</p>`;
+  }
+  const count = chartIssueCount(chart);
+  if (!count) return '';
+  const items = chart.warnings.map(w => `<li class="${w.severity === 'warning' ? '' : 'is-note'}">
+      <b>${esc(w.title)}</b>: ${esc(issueWhat(w))}, ${esc(issueYears(w.years))}
+      <ul>${w.details.map(d => `<li>FY${d.year}: ${esc(d.detail)}</li>`).join('')}</ul></li>`).join('');
+  return `<details class="ec-warn">
+      <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4l9 16H3z M12 10v4 M12 17v.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        Something in this chart does not add up: ${fmtInt(count)} data ${count === 1 ? 'issue' : 'issues'}</summary>
+      <ul>${items}</ul></details>`;
 }
 
 // Full view for one chart: the figure fills the window and its panels are
@@ -3610,7 +3671,8 @@ function mountCharts(root, charts, { mini = false } = {}) {
 function drawEntry(entry) {
   const panel = entry.mini ? lastYears(entry.panel, 5) : entry.panel;
   const full = !!entry.el.closest('.chart-fig.is-max');
-  const { option, index } = panelOption(panel, chartTheme(), { mini: entry.mini, width: entry.el.clientWidth, full });
+  const { option, index } = panelOption(panel, chartTheme(), { mini: entry.mini, width: entry.el.clientWidth, full,
+                                                               span: entry.span, end: entry.end });
   entry.inst = echarts.init(entry.el, null, { renderer: 'canvas' });
   entry.inst.setOption(option);
   entry.index = index;
@@ -3632,6 +3694,7 @@ function drawEntry(entry) {
   entry.inst.on('globalout', () => { entry.tipLive = false; entry.tipAt = null; });
   // Every move is a whole year: the subtitle, slider and axis follow at once.
   entry.inst.on('datazoom', () => {
+    entry.end = zoomRange(entry)[1];
     updateSpan(entry);
     syncSteps(entry);
     rescale(entry);
@@ -3674,12 +3737,17 @@ function rescale(entry) {
 function syncSteps(entry) {
   const row = entry.el.closest('.ec-wrap')?.querySelector('.ec-years');
   if (!row) return;
-  const zoom = entry.inst.getOption().dataZoom;
   const n = entry.panel.years.length;
   const [from, to] = zoomRange(entry);
   const span = to - from + 1;
-  row.hidden = !(zoom && zoom.length) || span >= n;
+  // The year count stays while every year is on show, so it can go back down.
+  row.hidden = n <= MIN_YEARS;
   if (row.hidden) return;
+  row.querySelector('.ec-count').textContent = `${span} years`;
+  row.querySelector('.fewer').disabled = span <= MIN_YEARS;
+  row.querySelector('.more').disabled = span >= n;
+  row.classList.toggle('is-all', span >= n);
+  if (span >= n) return;
   const range = row.querySelector('.ec-range');
   const positions = n - span;
   range.max = String(positions);
@@ -3711,6 +3779,22 @@ function slideYears(range) {
 function stepYears(button, step) {
   const entry = entryOf(button);
   if (entry && entry.inst) moveWindow(entry, zoomRange(entry)[0] + step);
+}
+
+// − / +: one year fewer (wider bars) or more (squished), keeping the window's
+// last year; the chart is drawn again for the new count.
+function zoomYears(button, step) {
+  const entry = entryOf(button);
+  if (!entry || !entry.inst) return;
+  const n = entry.panel.years.length;
+  const [from, to] = zoomRange(entry);
+  const span = Math.max(MIN_YEARS, Math.min(n, to - from + 1 + step));
+  if (span === to - from + 1) return;
+  entry.span = span;
+  entry.end = Math.max(span - 1, to);
+  entry.inst.dispose();
+  entry.inst = null;
+  drawEntry(entry);
 }
 
 // A panel cut to its last ``n`` years (Home's thumbnails).
@@ -5047,7 +5131,7 @@ const fmtDate = value => {
 const MARKET = { data: null, batch: null, view: 'issues', kind: '', detail: null, run: null, cik: null,
                  company: null, timer: null, follow: false };
 const MK_KINDS = {
-  check_mismatch: 'Total does not add up', missing_metric: 'Metric not read', implausible_value: 'Value looks wrong', not_reported: 'Not in the filing', download_failed: 'Download failed',
+  check_mismatch: 'Total does not add up', missing_metric: 'Metric not read', implausible_value: 'Value looks wrong', not_reported: 'Not in the filing', statement_missing: 'Statement not found', download_failed: 'Download failed',
   analysis_failed: 'Filing unreadable', dump_part_failed: 'Part of a filing unread', company_failed: 'Company failed',
   overdue_10k: '10-K overdue',
 };
@@ -5057,6 +5141,12 @@ const MK_VIEWS = { issues: 'Issues', companies: 'Companies', log: 'Log' };
 const mkNumber = v => (v === null || v === undefined || v === '' ? '—'
   : Math.abs(Number(v)) >= 1000 ? fmtInt(Math.round(Number(v))) : fmtNum(Number(v), 3));
 const mkCount = v => (v ? fmtInt(v) : '<span class="mk-info">0</span>');
+// Kinds with their own column; every other kind adds up in "Other", so a new
+// or renamed kind can never drop out of the counts.
+const MK_COLUMN_KINDS = ['check_mismatch', 'missing_metric', 'statement_missing', 'not_reported', 'implausible_value',
+                         'download_failed', 'analysis_failed', 'company_failed'];
+const mkOther = (kinds, shown = MK_COLUMN_KINDS) =>
+  Object.entries(kinds || {}).reduce((sum, [kind, n]) => sum + (shown.includes(kind) ? 0 : n), 0);
 
 async function mkJSON(url, options) {
   const res = await fetch(url, options);
@@ -5131,6 +5221,7 @@ function renderMarket() {
     const r = b.results;
     const kinds = b.issue_kinds || {};
     const errors = (kinds.download_failed || 0) + (kinds.analysis_failed || 0) + (kinds.company_failed || 0);
+    const other = mkOther(kinds);
     const unfinished = b.companies < b.size;
     const open = MARKET.batch === b.batch;
     return `<tr>
@@ -5142,6 +5233,8 @@ function renderMarket() {
       <td>${mkCount((r.no_filings || 0) + (r.no_xbrl || 0))}</td>
       <td>${fmtInt(b.dumped)}/${fmtInt(b.filings)}</td>
       <td>${mkCount(kinds.check_mismatch)}</td><td>${mkCount(kinds.missing_metric)}</td>
+      <td>${mkCount(kinds.statement_missing)}</td><td>${mkCount(kinds.not_reported)}</td>
+      <td>${mkCount(kinds.implausible_value)}</td><td>${mkCount(other)}</td>
       <td class="${errors ? 'mk-error' : ''}">${mkCount(errors)}</td>
       <td><span class="mk-row-actions">
         <button class="panel-btn row-btn" onclick="marketAction('rerun', ${b.batch})" ${busy ? 'disabled' : ''}
@@ -5278,7 +5371,7 @@ function renderMarketDetail() {
     const shown = detail.issues.length;
     $('#mk-detail-meta').textContent = `${fmtInt(s.issues)} issues in ${fmtInt(s.companies)} companies`
       + (shown < (MARKET.kind ? kinds[MARKET.kind] || 0 : s.issues) ? `; the first ${fmtInt(shown)} shown, the CSV has them all` : '')
-      + '. Errors first, then totals that do not add up and missing metrics; notes are dimmed.';
+      + '. Errors first, then warnings; notes (dimmed) are still issues and count in every total.';
     mkHead(MK_ISSUE_HEAD);
     $('#mk-body').innerHTML = mkIssueRows(detail.issues);
   } else if (MARKET.view === 'companies') {
@@ -5286,7 +5379,9 @@ function renderMarketDetail() {
       + `${fmtInt(s.dumped)} of ${fmtInt(s.filings)} filings kept (${(s.bytes / 1048576).toFixed(1)} MB).`;
     mkHead([['Ticker'], ['Name', 'mk-left'], ['Result', 'mk-left'], ['Years'],
       ['Annual', '', 'Fiscal years analysed of the annual reports found'], ['10-Q', '', '10-Qs after the latest annual report'],
-      ['Adds up', '', 'Totals that add up, of those checked'], ['Mismatches'], ['Unread'], ['Issues'], ['Time'],
+      ['Adds up', '', 'Totals that add up, of those checked'], ['Mismatches'], ['Unread', '', 'Metrics in the filing that were not read'],
+      ['No statement', '', 'Metrics not read because no statement was found'], ['Not in filing', '', 'Metrics checked against the filing and not in it'],
+      ['Looks wrong', '', 'Metrics that contradict each other'], ['Other', '', 'Every other issue kind, errors included'], ['Issues'], ['Time'],
       ['Error', 'mk-left']]);
     $('#mk-body').innerHTML = detail.companies.map(c => `<tr class="${c.result === 'failed' ? 'mk-error' : !c.result ? 'mk-info' : ''}">
         <td><button class="mk-link" onclick="openMarketCompany(${c.cik})">${esc(c.ticker)}</button></td>
@@ -5296,11 +5391,13 @@ function renderMarketDetail() {
         <td>${c.result ? `${fmtInt(c.annual_analysed || 0)}/${fmtInt(c.annual_found || 0)}` : '—'}</td>
         <td>${c.result ? fmtInt(c.quarterly_found || 0) + (c.overdue_10k ? ' (overdue)' : '') : '—'}</td>
         <td>${c.checks_total ? `${fmtInt(c.checks_ok)}/${fmtInt(c.checks_total)}` : '—'}</td>
-        <td>${c.result ? mkCount(c.checks_mismatch) : '—'}</td><td>${c.result ? mkCount(c.missing_metrics) : '—'}</td>
+        ${['check_mismatch', 'missing_metric', 'statement_missing', 'not_reported', 'implausible_value'].map(kind =>
+          `<td>${c.result ? mkCount((c.issue_kinds || {})[kind]) : '—'}</td>`).join('')}
+        <td>${c.result ? mkCount(mkOther(c.issue_kinds, MK_COLUMN_KINDS.slice(0, 5))) : '—'}</td>
         <td>${c.result ? mkCount(c.issues) : '—'}</td>
         <td>${c.seconds ? `${Math.round(c.seconds)} s` : '—'}</td>
         <td class="mk-text">${esc(c.result && c.result !== 'ok' ? c.error || '' : '')}</td>
-      </tr>`).join('') || '<tr><td colspan="12" class="muted">No companies.</td></tr>';
+      </tr>`).join('') || '<tr><td colspan="16" class="muted">No companies.</td></tr>';
   } else if (MARKET.view === 'company' && MARKET.company) {
     const { company, filings, issues } = MARKET.company;
     $('#mk-detail-meta').innerHTML = esc(company

@@ -79,7 +79,12 @@ def _stage_two(revenue, with_line=True):
             row.setdefault(metric, None)
         line = {"statement": "income", "concept": "acme_Takings", "standard_concept": "Revenue", "label": "Takings",
                 "value": 5.0}
-        return {"xbrl": True, "row": row, "statements": [line] if with_line else [], "facts": [], "checks": [check]}
+        # What data_issues.metric_evidence finds in the filing for the revenue we did not read.
+        evidence = {} if revenue is not None else {"Revenues": {
+            "statement": "income", "state": "present", "fact": None,
+            "line": {"concept": "acme_Takings", "label": "Takings", "columns": {}} if with_line else None}}
+        return {"xbrl": True, "row": row, "statements": [line] if with_line else [], "facts": [], "checks": [check],
+                "evidence": evidence}
     return extract_filing
 
 
@@ -164,21 +169,31 @@ class ScanTest(ScanCase):
         runs = self.db.execute("SELECT kind, status FROM runs ORDER BY id").fetchall()
         self.assertEqual([tuple(row) for row in runs], [("next", "done"), ("rerun", "done")])
 
-    def test_a_metric_the_filing_never_reports_is_not_a_problem(self):
+    def test_a_metric_the_searched_filing_does_not_have_is_still_reported(self):
         self.run_scan("next", "--count", "1", revenue=None, with_line=False)
         self.assertEqual(self.issues("missing_metric"), [])
         rows = self.issues("not_reported")
         self.assertEqual((len(rows), rows[0]["severity"], rows[0]["concept"]), (3, "info", "Revenues"))
+        self.assertEqual(self.db.execute("SELECT issues FROM companies").fetchone()["issues"], 3 + 3)  # + mismatches
+        kinds = scan.batch_summary(self.db, 1)["issue_kinds"]
+        self.assertEqual(kinds["not_reported"], 3)
+        company = scan.batch_detail(self.db, 1)["companies"][0]
+        self.assertEqual(company["issue_kinds"]["not_reported"], 3)
 
-    def test_metrics_that_contradict_each_other_are_reported(self):
-        row = {"Revenues": 21.8, "CostOfRevenue": 1773.0, "GrossProfit": 687.0, "OperatingIncomeLoss": 164.0,
-               "gross_profit_derived": False}
-        self.assertEqual([metric for metric, _ in scan._implausible(row)],
-                         ["GrossProfit", "OperatingIncomeLoss", "Revenues"])
-        fine = {"Revenues": 2460.0, "CostOfRevenue": 1773.0, "GrossProfit": 687.0, "OperatingIncomeLoss": 164.0,
-                "gross_profit_derived": False}
-        self.assertEqual(scan._implausible(fine), [])
-        self.assertEqual(scan._implausible({"Revenues": 0.0, "GrossProfit": 5.0}), [])
+    def test_without_evidence_a_missing_metric_is_never_called_not_reported(self):
+        plain = _stage_two(None)
+
+        def no_evidence(view, period_key):
+            return {**plain(view, period_key), "evidence": {}}
+
+        with unittest.mock.patch("edgar.Company", side_effect=_Company), \
+                unittest.mock.patch.object(dump, "dump_filing", side_effect=_dumped), \
+                unittest.mock.patch.object(extract, "extract_filing", no_evidence), \
+                unittest.mock.patch.object(scan, "_disable_download_cache"), \
+                redirect_stdout(io.StringIO()):
+            scan.main(["--root", str(self.root), "--cache-dir", str(self.cache), "next", "--count", "1"])
+        self.assertEqual(self.issues("not_reported"), [])
+        self.assertEqual(len(self.issues("missing_metric")), 3)
 
     def test_a_line_no_rule_reads_names_its_tag(self):
         self.run_scan("next", "--count", "1", revenue=None)

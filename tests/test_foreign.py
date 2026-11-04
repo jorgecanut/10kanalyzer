@@ -44,6 +44,16 @@ class CurrencyTests(unittest.TestCase):
         value = extract.extract_metric(facts, ["Revenue"], PERIOD, "duration", currency="TWD")
         self.assertEqual(value, 3.8e12)
 
+    def test_net_income_falls_back_to_profit_from_continuing_operations(self):
+        # Austin Gold (AAUAF) tags its "Net loss for the year" only this way.
+        concepts = extract.METRIC_CONCEPTS["NetIncomeLoss"][0]
+        facts = pd.DataFrame([fact("ifrs-full:ProfitLossFromContinuingOperations", -2875061, currency="CAD")])
+        self.assertEqual(extract.extract_metric(facts, concepts, PERIOD, "duration", currency="CAD"), -2875061)
+        # A filer that also tags the whole year's profit keeps that one.
+        facts = pd.DataFrame([fact("ifrs-full:ProfitLossFromContinuingOperations", -5.0, currency="CAD"),
+                              fact("ifrs-full:ProfitLoss", -7.0, currency="CAD")])
+        self.assertEqual(extract.extract_metric(facts, concepts, PERIOD, "duration", currency="CAD"), -7.0)
+
     def test_sga_is_the_sum_of_its_ifrs_halves(self):
         facts = pd.DataFrame([fact("ifrs-full:DistributionCosts", 10e9), fact("ifrs-full:AdministrativeExpense", 5e9)])
         groups = extract.COMPONENT_METRICS["SellingGeneralAndAdministrativeExpense"]

@@ -33,6 +33,7 @@ import pandas as pd
 from edgar import Company, set_identity
 
 import calc_check
+import data_issues
 import charts
 import dump
 import extract
@@ -317,8 +318,8 @@ def assemble(filings: list, n_filings: int | None, entry_of, ticker: str = "", l
     return df, statements, facts, checks
 
 
-def build_dataset(ticker: str, n_filings: int | None,
-                  cache_dir: str | None = None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def build_dataset(ticker: str, n_filings: int | None, cache_dir: str | None = None,
+                  on_filing=None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Fetch the last ``n_filings`` annual filings (``None``: all) and assemble the datasets.
 
     Each filing is dumped once into ``cache_dir`` (see ``filing_cache``), so a
@@ -347,7 +348,8 @@ def build_dataset(ticker: str, n_filings: int | None,
     forms = ", ".join(f"{summary.count(form)} {form}" for form in ANNUAL_FORMS if form in summary)
     reading = "reading all of them" if n_filings is None else f"reading the newest {len(filings)}"
     print(f"[+] Found {len(summary)} annual filings ({forms or 'none'}); {reading}")
-    return assemble(filings, n_filings, lambda filing: obtain(filing, company.cik, cache_dir), ticker)
+    return assemble(filings, n_filings, lambda filing: obtain(filing, company.cik, cache_dir), ticker,
+                    on_filing=on_filing)
 
 
 # --------------------------------------------------------------------------- #
@@ -461,6 +463,22 @@ def _write_checks(checks: pd.DataFrame) -> None:
     print(f"[+] Calculation check ({counts['filings']} filings, calc_check.csv): statements "
           f"{statements['ok']}/{statements['totals']} totals add up, {statements['mismatch']} do not, "
           f"{statements['incomplete']} have untagged parts; notes {notes['ok']}/{notes['totals']}")
+
+
+def _write_issues(df: pd.DataFrame, checks: pd.DataFrame, filed: dict) -> list[dict]:
+    """``data_issues.csv``: every data issue of the run (the charts show the ones behind them)."""
+    issues = data_issues.company_issues(df, checks, filed)
+    path = os.path.join(OUTPUT_DIR, charts.ISSUES_FILE)
+    columns = ["kind", "severity", "fiscal_year", "period", "form", "accession", "statement", "concept", "label",
+               "reported", "computed", "difference", "detail"]
+    pd.DataFrame(issues, columns=columns).to_csv(path, index=False)
+    counts: dict[str, int] = {}
+    for issue in issues:
+        counts[issue["kind"]] = counts.get(issue["kind"], 0) + 1
+    print(f"[{'!' if issues else '+'}] Data issues ({charts.ISSUES_FILE}): "
+          + (", ".join(f"{n} {data_issues.TITLES.get(k, k).lower()}" for k, n in sorted(counts.items()))
+             if issues else "none"))
+    return issues
 
 
 def print_summary(df: pd.DataFrame) -> None:
@@ -620,11 +638,17 @@ def main() -> None:
 
     which = "every annual filing" if n_filings is None else f"the last {n_filings} annual filings"
     print(f"[*] Extracting {TICKER} data from {which}")
-    raw, statements, facts, checks = build_dataset(TICKER, n_filings, cache_dir)
+    filed: dict[str, dict] = {}
+
+    def on_filing(period, form, accession, extracted):
+        filed[period] = {"form": form, "accession": accession, "evidence": extracted.get("evidence")}
+
+    raw, statements, facts, checks = build_dataset(TICKER, n_filings, cache_dir, on_filing=on_filing)
     df = clean_and_derive(raw)
 
     df.to_csv(DATA_CSV, index=False)
     print(f"[+] Wrote ratio data to {os.path.abspath(DATA_CSV)}")
+    issues = _write_issues(df, checks, filed)
 
     # XBRL-driven artifacts: everything the filer stated, not a curated list.
     if not statements.empty:
@@ -671,7 +695,7 @@ def main() -> None:
 
     # charts.json only: the page draws it, and PNGs are drawn when downloaded.
     print("[*] Building charts")
-    rendered = charts.render_all(TICKER, OUTPUT_DIR, df, statements, facts, log=print)
+    rendered = charts.render_all(TICKER, OUTPUT_DIR, df, statements, facts, log=print, issues=issues)
     print(f"    [+] {len(rendered)} charts written to charts.json")
 
     print(f"\n[+] Done. {len(rendered)} charts and CSV data written to '{os.path.abspath(OUTPUT_DIR)}/'.")

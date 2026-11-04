@@ -44,7 +44,6 @@ import io
 import json
 import multiprocessing
 import os
-import re
 import resource
 import signal
 import sqlite3
@@ -59,7 +58,7 @@ from types import SimpleNamespace
 import pandas as pd
 
 import calc_check
-import extract
+import data_issues
 import filing_cache
 
 # Below SEC's 10 requests per second together with a single-ticker run in the
@@ -77,23 +76,6 @@ ANALYSED_FORMS = ("10-K", "20-F", "40-F")
 QUARTERLY_FORM = "10-Q"
 # A 10-K is overdue when more 10-Qs than this follow it.
 MAX_QUARTERS = 3
-# Missing in a fiscal year: worth a look (a tag the pipeline does not know yet).
-KEY_METRICS = ("Revenues", "NetIncomeLoss", "OperatingIncomeLoss", "OperatingCashFlow", "StockholdersEquity")
-# Metric -> (statement, the statement line that would hold it). A bank has no
-# operating income and a biotech no revenue: a metric with no such line is
-# reported as not_reported, one with a line we failed to read as missing_metric.
-METRIC_LINES = {
-    "Revenues": ("income", {"Revenue", "HealthCareRevenue"}, extract.LINE_RULES["Revenues"][1]),
-    "NetIncomeLoss": ("income", {"NetIncome", "ProfitLoss"},
-                      re.compile(r"^net (income|loss|earnings|profit)|^(profit|loss) for the", re.IGNORECASE)),
-    "OperatingIncomeLoss": ("income", set(), extract.LINE_RULES["OperatingIncomeLoss"][1]),
-    "OperatingCashFlow": ("cashflow", {"NetCashFromOperatingActivities"},
-                          re.compile(r"operating activities$", re.IGNORECASE)),
-    "StockholdersEquity": ("balance", {"StockholdersEquity", "TotalEquity"}, extract.LINE_RULES["StockholdersEquity"][1]),
-}
-# Revenue minus cost may miss gross profit by this much of revenue (a filer's
-# rounding, a line between them) before it counts as a contradiction.
-GROSS_TOLERANCE = 0.02
 MAX_COUNT = 10_000
 # Each company runs in its own process, so its memory goes back at the end and
 # a crash or a hang costs that company, not the batch.
@@ -381,17 +363,6 @@ def _mark_dumped(db, accession: str, entry: dict, path: Path | None, seconds: fl
 # Step 3: stage 2 from the dump, and the issues
 # --------------------------------------------------------------------------- #
 
-def _metric_line(metric: str, rows: list[dict]) -> dict | None:
-    """The statement line that holds ``metric``, if the filing has one."""
-    statement, standards, pattern = METRIC_LINES[metric]
-    for row in rows:
-        if row.get("statement") != statement:
-            continue
-        if row.get("standard_concept") in standards or pattern.search(str(row.get("label") or "")):
-            return row
-    return None
-
-
 def _issue(kind: str, severity: str, **fields) -> dict:
     return {"kind": kind, "severity": severity, **fields}
 
@@ -438,7 +409,7 @@ def analyse_company(db, cik: int, ticker: str, cache_dir: Path, out_dir: Path, l
     filed: dict[str, dict] = {}
 
     def on_filing(period, form, accession, extracted):
-        filed[period] = {"form": form, "accession": accession, "statements": extracted["statements"]}
+        filed[period] = {"form": form, "accession": accession, "evidence": extracted.get("evidence")}
 
     try:
         raw, _statements, _facts, checks = _pipeline().assemble(candidates, None, entry_of, ticker, log=log,
@@ -461,36 +432,9 @@ def analyse_company(db, cik: int, ticker: str, cache_dir: Path, out_dir: Path, l
     if not checks.empty:
         checks.to_csv(out_dir / "calc_check.csv", index=False)
 
-    # Every total that does not add up: the main thing to fix.
-    for check in checks.to_dict("records") if not checks.empty else []:
-        if check["status"] != calc_check.STATUS_MISMATCH:
-            continue
-        where = filed.get(check["period_of_report"], {})
-        issues.append(_issue(
-            "check_mismatch", "warning" if check["kind"] == "statement" else "info",
-            accession=where.get("accession"), form=where.get("form"),
-            fiscal_year=check.get("fiscal_year"), period=check["period_of_report"], statement=check["statement"],
-            concept=check["concept"], label=check["label"], reported=check["reported"],
-            computed=check["computed"], difference=check["difference"],
-            detail=check.get("hint") or f"{check['parts']} parts; tolerance {check['tolerance']:g}"))
-    # A key metric the pipeline found no tag for.
-    for row in derived.to_dict("records"):
-        where = filed.get(row["period_of_report"], {})
-        for metric in (metric for metric in KEY_METRICS if pd.isna(row.get(metric))):
-            line = _metric_line(metric, where.get("statements") or [])
-            common = {"accession": where.get("accession"), "form": where.get("form"), "concept": metric,
-                      "fiscal_year": row.get("fiscal_year"), "period": row["period_of_report"]}
-            if line:
-                issues.append(_issue("missing_metric", "warning", label=line.get("label"), detail=(
-                    f"the statement has this line but no rule reads it: {line.get('concept')}"), **common))
-            else:
-                issues.append(_issue("not_reported", "info", detail="the filing's statements have no such line",
-                                     **common))
-
-        for metric, why in _implausible(row):
-            issues.append(_issue("implausible_value", "warning", accession=where.get("accession"),
-                                 form=where.get("form"), concept=metric, fiscal_year=row.get("fiscal_year"),
-                                 period=row["period_of_report"], detail=why))
+    # Every data issue: totals that do not add up, metrics not read (checked
+    # against the filing itself), values that contradict each other.
+    issues.extend(data_issues.company_issues(derived, checks, filed))
 
     count = (lambda status: int((checks["status"] == status).sum()) if not checks.empty else 0)
     statuses = {"ok": count(calc_check.STATUS_OK), "mismatch": count(calc_check.STATUS_MISMATCH),
@@ -570,7 +514,8 @@ def pipeline_version() -> str:
     import hashlib
 
     digest = hashlib.sha1()
-    for name in ("extract.py", "xbrl_extract.py", "calc_check.py", "edgar_dashboard.py", "scan.py"):
+    for name in ("extract.py", "xbrl_extract.py", "calc_check.py", "data_issues.py", "edgar_dashboard.py",
+                 "scan.py"):
         digest.update((HERE / name).read_bytes().replace(b"\r\n", b"\n"))
     return f"{release}+{digest.hexdigest()[:8]}"
 
@@ -578,28 +523,6 @@ def pipeline_version() -> str:
 # --------------------------------------------------------------------------- #
 # Runs
 # --------------------------------------------------------------------------- #
-
-def _implausible(row: dict) -> list[tuple[str, str]]:
-    """Metrics of one year that contradict each other: (metric, why).
-
-    The calculation checks test the filer's totals, so they cannot see that the
-    pipeline picked the wrong fact: Applied Industrial's $21.8M of a note beside
-    net sales of $2,460M passed every one of them.
-    """
-    revenue, cost, gross, operating = (row.get(metric) for metric in (
-        "Revenues", "CostOfRevenue", "GrossProfit", "OperatingIncomeLoss"))
-    if not revenue or pd.isna(revenue) or revenue <= 0:
-        return []
-    found = []
-    if pd.notna(gross) and gross > revenue * 1.001:
-        found.append(("GrossProfit", f"gross profit {gross:,.0f} is above revenue {revenue:,.0f}"))
-    if pd.notna(operating) and operating > revenue * 1.001:
-        found.append(("OperatingIncomeLoss", f"operating income {operating:,.0f} is above revenue {revenue:,.0f}"))
-    if (pd.notna(gross) and pd.notna(cost) and not row.get("gross_profit_derived")
-            and abs(revenue - cost - gross) > revenue * GROSS_TOLERANCE):
-        found.append(("Revenues", f"revenue {revenue:,.0f} minus cost {cost:,.0f} is not gross profit {gross:,.0f}"))
-    return found
-
 
 def _company(db, root: Path, batch: int, run: int, kind: str, member: dict, cache_dir: Path,
              retry_failed: bool, online: bool, log) -> dict:
@@ -865,6 +788,14 @@ def batch_detail(db, batch: int, kind: str | None = None, limit: int = 2000) -> 
         """SELECT c.*, u.cik AS cik, u.ticker AS ticker, u.name AS name, u.exchange AS exchange
            FROM batch_companies b JOIN universe u ON u.cik = b.cik
            LEFT JOIN companies c ON c.cik = b.cik WHERE b.batch = ? ORDER BY b.position""", (batch,))]
+    # Every issue kind per company, so none can drop out of the table by being renamed.
+    kinds: dict[int, dict] = {}
+    for row in db.execute("""SELECT cik, kind, COUNT(*) n FROM issues
+                             WHERE cik IN (SELECT cik FROM batch_companies WHERE batch = ?)
+                             GROUP BY cik, kind""", (batch,)):
+        kinds.setdefault(row["cik"], {})[row["kind"]] = row["n"]
+    for company in companies:
+        company["issue_kinds"] = kinds.get(company["cik"], {})
     query = """SELECT * FROM issues WHERE cik IN (SELECT cik FROM batch_companies WHERE batch = ?)"""
     args: list = [batch]
     if kind:

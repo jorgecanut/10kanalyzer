@@ -409,6 +409,8 @@ def _year_windows(years: list[int], window: int = CHART_WINDOW) -> Iterable[list
 # chart names its own range.
 # --------------------------------------------------------------------------- #
 SPEC_FILE = "charts.json"
+# The run's data issues (data_issues.company_issues), beside its CSVs.
+ISSUES_FILE = "data_issues.csv"
 SPEC_VERSION = 1
 # Downloaded PNGs are kept here per theme and window size until the next run.
 PNG_CACHE_DIR = ".png_cache"
@@ -1345,14 +1347,46 @@ def render_pngs(
 # --------------------------------------------------------------------------- #
 # Public entry points.
 # --------------------------------------------------------------------------- #
+# The key metrics each chart is drawn from, also when a metric has no value at
+# all (its series is then left out, so the series alone would not tell).
+CHART_METRICS = {
+    "01_income_statement": {"Revenues", "CostOfRevenue", "GrossProfit", "OperatingIncomeLoss", "NetIncomeLoss"},
+    "02_margins": {"Revenues", "GrossProfit", "OperatingIncomeLoss", "NetIncomeLoss"},
+    "03_balance": {"StockholdersEquity"},
+    "05_cashflow_operations": {"Revenues", "OperatingCashFlow", "CapEx"},
+    "07_returns": {"NetIncomeLoss", "StockholdersEquity", "OperatingIncomeLoss"},
+    # P/E, P/B, P/FCF, EV/EBIT, F-score and Z-score.
+    "08_valuation": {"Revenues", "GrossProfit", "OperatingIncomeLoss", "NetIncomeLoss", "OperatingCashFlow",
+                     "CapEx", "StockholdersEquity"},
+}
+
+
+def attach_warnings(spec: dict, issues: list[dict] | None) -> None:
+    """Give each chart the data issues behind it (``warnings``); the page shows them on the chart.
+
+    Hiding is not fixing: a chart drawn from a number that is missing, does not
+    add up or looks wrong says so.
+    """
+    import data_issues
+
+    for chart in spec["charts"]:
+        concepts = set(CHART_METRICS.get(chart["id"], set()))
+        for panel in chart["panels"]:
+            for series in panel["series"]:
+                concepts.update(series.get("concepts") or [])
+        years = sorted({year for panel in chart["panels"] for year in panel["years"]})
+        chart["warnings"] = data_issues.chart_warnings(concepts, years, issues or [])
+
+
 def build_spec(
     ticker: str,
     output_dir: str,
     df: pd.DataFrame,
     statements: pd.DataFrame,
     facts: pd.DataFrame,
+    issues: list[dict] | None = None,
 ) -> dict:
-    """Every chart's spec; fills the data-quality rows as a side effect."""
+    """Every chart's spec, with its data issues; fills the data-quality rows as a side effect."""
     global _CURRENCY
     _QUALITY_ROWS.clear()
     years = sorted(df["fiscal_year"].dropna().astype(int).unique().tolist())
@@ -1371,7 +1405,10 @@ def build_spec(
         valuation = chart_valuation(ticker, output_dir)
         if valuation:
             charts.append(valuation)
-    return {"version": SPEC_VERSION, "ticker": ticker, "currency": _CURRENCY, "years": years, "charts": charts}
+    spec = {"version": SPEC_VERSION, "ticker": ticker, "currency": _CURRENCY, "years": years, "charts": charts,
+            "issues_checked": issues is not None}
+    attach_warnings(spec, issues)
+    return spec
 
 
 def _spec_currency(df: pd.DataFrame) -> str:
@@ -1398,17 +1435,24 @@ def render_all(
     statements: pd.DataFrame,
     facts: pd.DataFrame,
     log=None,
+    issues: list[dict] | None = None,
 ) -> list[str]:
     """Write ``charts.json`` and ``data_quality.csv``; returns the chart ids.
 
+    ``issues`` (``data_issues.company_issues``) become each chart's warnings;
+    None means they were not checked, and the page says that instead.
     ``log`` (``print`` in the pipeline) gets one line per chart.
     """
     with _SPEC_LOCK:
-        spec = build_spec(ticker, output_dir, df, statements, facts)
+        spec = build_spec(ticker, output_dir, df, statements, facts, issues)
         for chart in spec["charts"] if log else []:
             series = sum(len(panel["series"]) for panel in chart["panels"])
             years = sorted({year for panel in chart["panels"] for year in panel["years"]})
-            log(f"    [+] Chart {chart['name']}: {series} series, {_span(years)}")
+            warned = sum(len(warning["years"]) for warning in chart["warnings"])
+            log(f"    [{'!' if warned else '+'}] Chart {chart['name']}: {series} series, {_span(years)}"
+                + (f"; {warned} data issues: " + ", ".join(
+                    f"{w['title'].lower()} ({w['label'] or w['concept']})" for w in chart["warnings"])
+                   if warned else ""))
         if not spec["charts"]:
             return []
         clear_images(output_dir)
@@ -1436,4 +1480,7 @@ def render_from_dir(ticker: str, output_dir: str) -> list[str]:
         return []
     statements = _read_csv(os.path.join(output_dir, "statements.csv"))
     facts = _read_csv(os.path.join(output_dir, "facts.csv"))
-    return render_all(ticker, output_dir, df, statements, facts)
+    issues = _read_csv(os.path.join(output_dir, ISSUES_FILE))
+    has_issues = os.path.isfile(os.path.join(output_dir, ISSUES_FILE))
+    return render_all(ticker, output_dir, df, statements, facts,
+                      issues=issues.to_dict("records") if has_issues else None)
