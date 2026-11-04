@@ -124,11 +124,17 @@ moves. Each batch takes the next N companies no batch has taken, and for each:
    per second (single-ticker runs in the app drop to 4 meanwhile);
 3. runs stage 2 from the dump and records every problem as an **issue**: a
    total that does not add up to its parts (`check_mismatch`, with the
-   filing's value, the sum and the hint), a key metric whose line the filing
-   has but no rule reads (`missing_metric`, naming the tag), a filing that
-   could not be downloaded or read, a company that failed. A metric the
-   filing has no line for, like a bank's operating income or a biotech's
-   revenue, is only a note (`not_reported`). Metrics of one year that
+   filing's value, the sum and the hint), a key metric the filing holds (a
+   fact or a statement line, with or without a value for the year) that no
+   rule reads (`missing_metric`, naming the tag and value), a metric that
+   could not be read because no statement was found (`statement_missing`),
+   a filing that could not be downloaded or read, a company that failed. A
+   metric is `not_reported` (a note, like a bank's operating income or a
+   biotech's revenue) only after the stored filing itself was searched:
+   its statement, every line of it and its facts (`data_issues.py`). Every
+   kind is counted in the Market tab, with an "Other" column for kinds
+   without their own, and a chart drawn from a number with an open issue
+   lists it under the chart. Metrics of one year that
    contradict each other (gross profit above revenue, revenue minus cost far
    from gross profit) are reported as `implausible_value`: the totals checks
    cannot see that the wrong fact was picked. 10-KTs and 10-Qs are dumped but

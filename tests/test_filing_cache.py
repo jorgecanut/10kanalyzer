@@ -298,6 +298,19 @@ class FilingRulesTest(unittest.TestCase):
                                   "period_end": ["2023-12-31", "2024-12-31"]})
         self.assertEqual(extract.annual_min_days(successor, "2024-12-31"), extract.ANNUAL_MIN_DAYS)
 
+    def test_a_cover_page_claiming_a_full_year_does_not_hide_a_short_first_year(self):
+        # AACO's first 10-K: the cover says 2025-01-01 to 2025-12-31, the
+        # company was formed on 13 November and its numbers cover 48 days.
+        # Its cybersecurity text blocks and a share count carry the cover's year too.
+        aaco = pd.DataFrame({"concept": ["dei:DocumentType", "dei:DocumentPeriodEndDate",
+                                         "cyd:CybersecurityRiskRoleOfManagementTextBlock",
+                                         "aacou:NumberOfOrdinarySharesSubjectToForfeiture", "us-gaap:NetIncomeLoss",
+                                         "us-gaap:OperatingIncomeLoss"],
+                             "currency": [None, None, None, None, "USD", "USD"],
+                             "period_start": ["2025-01-01"] * 4 + ["2025-11-13"] * 2,
+                             "period_end": ["2025-12-31"] * 6})
+        self.assertEqual(extract.annual_min_days(aaco, "2025-12-31"), 43)
+
     def test_an_airline_has_no_cost_of_revenue(self):
         fuel = {"statement": "income", "concept": "us-gaap_FuelCosts", "label": "Fuel costs", "value": 8.0,
                 "standard_concept": "CostOfGoodsAndServicesSold"}

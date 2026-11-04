@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 import calc_check
+import data_issues
 import xbrl_extract
 
 # Minimum span (in days) for a "duration" fact to count as the annual figure.
@@ -102,6 +103,10 @@ METRIC_CONCEPTS: dict[str, tuple[list[str], str]] = {
             "ProfitLossAttributableToOwnersOfParent",
             # Last resort: total net income including non-controlling interests.
             "ProfitLoss",
+            # IFRS filers with no discontinued operations may tag only this
+            # (Austin Gold, AAUAF: "Net loss for the year"); with none, it is
+            # the year's profit or loss.
+            "ProfitLossFromContinuingOperations",
         ],
         "duration",
     ),
@@ -298,8 +303,15 @@ def _first_period_days(facts: pd.DataFrame, target: pd.Timestamp) -> int:
 
     A cover page can claim a full year for a SPAC formed in June. Its filing
     then has no fact from before that date, unlike a successor's stub period,
-    which sits beside its predecessor's years.
+    which sits beside its predecessor's years. Only amounts of money count:
+    the cover page (``dei:``), the text and flag disclosures (cybersecurity,
+    insider-trading policy) and even a share count carry the year the cover
+    claims. AACO's 10-K for 2025 says January to December; its money covers
+    48 days from 13 November.
     """
+    facts = facts[~facts["concept"].astype(str).str.startswith("dei:")]
+    if "currency" in facts.columns and facts["currency"].notna().any():
+        facts = facts[facts["currency"].notna()]
     start = pd.to_datetime(facts.get("period_start"), errors="coerce").dropna()
     end = pd.to_datetime(facts.loc[start.index, "period_end"], errors="coerce")
     latest = (end - target).abs() <= pd.Timedelta(days=PERIOD_MATCH_DAYS)
@@ -777,5 +789,13 @@ def extract_filing(filing, period_key: str) -> dict:
     except Exception as exc:  # noqa: BLE001 - the check never costs the filing
         print(f"    [!] {period_key}: calculation check skipped ({exc.__class__.__name__}: {exc})")
         filing_checks = []
+    # For each key metric not read: what the filing holds for it, so a gap is
+    # never called "not in the filing" without looking (data_issues.py).
+    try:
+        evidence = data_issues.metric_evidence(xbrl, facts, period_key, row)
+    except Exception as exc:  # noqa: BLE001 - missing evidence is reported as unverified, not hidden
+        print(f"    [!] {period_key}: could not search the filing for missing metrics "
+              f"({exc.__class__.__name__}: {exc})")
+        evidence = {}
     return {"xbrl": True, "row": row, "statements": statement_rows,
-            "facts": filing_facts, "checks": filing_checks}
+            "facts": filing_facts, "checks": filing_checks, "evidence": evidence}
