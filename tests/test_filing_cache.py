@@ -282,6 +282,40 @@ class FilingRulesTest(unittest.TestCase):
         extract._cost_of_revenue(row, [])
         self.assertEqual(row["CostOfRevenue"], 652.0)
 
+    def test_the_cost_is_what_the_gross_profit_line_adds_up(self):
+        # AMD FY2023: the total sits beside its parts, all under gross profit.
+        def line(concept, label, value, parent="us-gaap_GrossProfit", standard=None):
+            return {"statement": "income", "concept": concept, "label": label, "value": value,
+                    "parent_concept": parent, "standard_concept": standard}
+        rows = [line("us-gaap_RevenueFromContractWithCustomerExcludingAssessedTax", "Net revenue", 22680.0,
+                     standard="Revenue"),
+                line("us-gaap_CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization", "Cost of sales",
+                     11278.0, standard="CostOfGoodsAndServicesSold"),
+                line("amd_AmortizationOfAcquisitionRelatedIntangibles", "Amortization", 942.0),
+                line("us-gaap_CostOfGoodsAndServicesSold", "Total cost of sales", 12220.0, parent=None,
+                     standard="CostOfGoodsAndServicesSold"),
+                line("us-gaap_GrossProfit", "Gross profit", 10460.0, parent="us-gaap_OperatingIncomeLoss")]
+        row = {"Revenues": 22680.0, "CostOfRevenue": 12220.0, "GrossProfit": 10460.0}
+        extract._cost_of_revenue(row, rows)
+        self.assertEqual(row["CostOfRevenue"], 12220.0)
+        self.assertEqual(row["GrossProfit"], 10460.0)
+        # Without the gross profit line, the "Total" line alone is the cost.
+        self.assertEqual(extract._cost_lines(rows[:4]), {"us-gaap_CostOfGoodsAndServicesSold": 12220.0})
+        # Parts that do not make the gross profit filed settle nothing.
+        self.assertTrue(np.isnan(extract._gross_profit_cost(30000.0, rows)))
+
+    def test_a_part_of_the_statement_revenue_total_gives_way_to_the_total(self):
+        # AstraZeneca FY2021: product sales tagged as revenue from contracts.
+        rows = [{"statement": "income", "concept": "ifrs-full_RevenueFromSaleOfGoods", "label": "Product Sales",
+                 "value": 36541.0, "parent_concept": "ifrs-full_Revenue"},
+                {"statement": "income", "concept": "azn_CollaborationRevenue", "label": "Collaboration Revenue",
+                 "value": 876.0, "parent_concept": "ifrs-full_Revenue"},
+                {"statement": "income", "concept": "ifrs-full_Revenue", "label": "Total Revenue",
+                 "standard_concept": "Revenue", "value": 37417.0, "parent_concept": "ifrs-full_GrossProfit"}]
+        row = {"Revenues": 36541.0}
+        extract._statement_revenue(row, rows)
+        self.assertEqual(row["Revenues"], 37417.0)
+
     def test_payroll_is_no_cost_of_revenue_even_with_that_label(self):
         rows = [{"statement": "income", "concept": "us-gaap_LaborAndRelatedExpense", "label": "Cost of Revenue",
                  "standard_concept": "CostOfGoodsAndServicesSold", "value": 60.0,

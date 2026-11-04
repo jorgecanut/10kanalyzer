@@ -589,6 +589,14 @@ def _cost_lines(statement_rows: list[dict]) -> dict[str, float]:
     totals = [concept for concept in lines if any(parent == concept for _, parent in lines.values())]
     if totals:
         return {totals[0]: lines[totals[0]][0]}
+    # A "Total cost of sales" the presentation puts beside its parts, not
+    # above them (AMD, AeroVironment): it is the total, not one more part.
+    labelled = {concept for concept in lines if any(
+        str(row.get("concept")) == concept and re.match(r"\s*total\b", str(row.get("label") or ""), re.IGNORECASE)
+        for row in income)}
+    if len(labelled) == 1:
+        concept = next(iter(labelled))
+        return {concept: lines[concept][0]}
     # One expense sharing a word with one revenue line is a coincidence
     # (American's "Regional expenses", Gallagher's "Reimbursements"), not a
     # cost of revenue split by stream the way Oracle's is.
@@ -597,14 +605,51 @@ def _cost_lines(statement_rows: list[dict]) -> dict[str, float]:
     return {concept: value for concept, (value, _) in lines.items()}
 
 
+def _gross_profit_cost(revenue: float, statement_rows: list[dict]) -> float:
+    """Cost of revenue as the statement's own gross profit defines it, else nan.
+
+    The lines that roll up into the income statement's gross profit line,
+    other than revenue, are the cost of revenue: AMD shows "Cost of sales",
+    amortization and a "Total cost of sales" that sits beside them rather than
+    above them; Allegro adds a related-party cost line; Amtech an impairment.
+    Taken only when revenue minus those lines is the gross profit filed.
+    """
+    income = [line for line in statement_rows if line.get("statement") == "income"
+              and line.get("value") is not None and not pd.isna(line["value"])]
+    gross = [line for line in income if _concept_name(str(line.get("concept") or "")) == "GrossProfit"]
+    if pd.isna(revenue) or len({str(line["concept"]) for line in gross}) != 1:
+        return np.nan
+    gross_concept = str(gross[0]["concept"])
+    revenue_concepts = {str(line["concept"]) for line in income if line.get("standard_concept") in REVENUE_LINES}
+    seen: set[str] = set()
+    cost = 0.0
+    for line in income:
+        concept = str(line.get("concept") or "")
+        if str(line.get("parent_concept") or "") != gross_concept or concept in seen:
+            continue
+        seen.add(concept)
+        if concept in revenue_concepts or abs(abs(float(line["value"])) - abs(revenue)) <= abs(revenue) * 1e-6:
+            continue
+        cost += abs(float(line["value"]))
+    gross_profit = float(gross[0]["value"])
+    if not cost or abs(revenue - cost - gross_profit) > max(1.0, abs(revenue) * 0.005):
+        return np.nan
+    return cost
+
+
 def _cost_of_revenue(row: dict, statement_rows: list[dict]) -> None:
     """Cost of revenue from its lines when no total was found or the one found is a single line.
 
     Oracle tags its hardware cost alone with ``CostOfRevenue`` (FY2010) and
     has no total later on. Gross profit is then derived (revenue minus cost),
     unless the income statement itself shows a gross profit line: a tagged
-    gross profit elsewhere (a segment note) is not the company's.
+    gross profit elsewhere (a segment note) is not the company's. A statement
+    whose gross profit line adds up from its parts settles it first.
     """
+    by_gross = _gross_profit_cost(row.get("Revenues", np.nan), statement_rows)
+    if pd.notna(by_gross):
+        row["CostOfRevenue"] = by_gross
+        return
     lines = _cost_lines(statement_rows)
     current = row.get("CostOfRevenue")
     if pd.notna(current) and current < 0:       # a cost shown as a deduction (Afya)
@@ -691,6 +736,16 @@ def _statement_revenue(row: dict, statement_rows: list[dict]) -> None:
     shown = [line for line in income if abs(abs(float(line["value"])) - abs(current)) <= abs(current) * 1e-6]
     if any(str(line.get("parent_concept") or "").endswith(("NoninterestIncome", "_OtherIncome")) for line in shown):
         row["Revenues"] = np.nan
+        return
+    # A part of the statement's revenue total, not the total: AstraZeneca's
+    # product sales (also tagged as revenue from contracts in a note) under
+    # "Total Revenue", which adds collaboration revenue.
+    parents = {str(line.get("parent_concept") or "") for line in shown}
+    totals = [abs(float(line["value"])) for line in income
+              if str(line.get("concept")) in parents and line.get("standard_concept") in REVENUE_LINES
+              and abs(float(line["value"])) > abs(current) * (1 + 1e-6)]
+    if totals:
+        row["Revenues"] = max(totals)
         return
     if shown:
         return
