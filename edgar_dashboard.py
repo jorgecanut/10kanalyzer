@@ -565,9 +565,10 @@ def _start_insiders(ticker: str, output_dir: str,
 
     def work() -> None:
         try:
-            import insider
+            import insider_report
 
-            result["path"] = insider.write_insiders(ticker, output_dir, cache_dir=cache_dir)
+            # insider.write_insiders, plus what failed written into the file.
+            result["path"] = insider_report.write_insiders(ticker, output_dir, cache_dir=cache_dir)
         except Exception as exc:  # noqa: BLE001 - optional artifact must never abort
             result["error"] = exc
 
@@ -596,7 +597,14 @@ def _report_insiders(started: tuple[threading.Thread, dict]) -> None:
             payload = json.load(fh)
         trades = len(payload) if isinstance(payload, list) else len(payload.get("transactions", []))
     except Exception:  # noqa: BLE001 - count is cosmetic only
-        trades = None
+        payload, trades = None, None
+    # What insider_report.py recorded: a failure or unread Form 4s are not "no trades".
+    problems = payload if isinstance(payload, dict) else {}
+    if problems.get("error"):
+        print(f"[!] insider trades not collected: {problems['error']}")
+        return
+    if problems.get("skipped"):
+        print(f"[!] {len(problems['skipped'])} Form 4 filings could not be read; their trades are missing")
     if trades is None:
         print(f"[+] Wrote insider transactions ({insider_path})")
     else:
@@ -703,7 +711,8 @@ def _run(args, n_filings: int | None, cache_dir: str | None, live_dir: str) -> N
     filed: dict[str, dict] = {}
 
     def on_filing(period, form, accession, extracted):
-        filed[period] = {"form": form, "accession": accession, "evidence": extracted.get("evidence")}
+        filed[period] = {"form": form, "accession": accession, "evidence": extracted.get("evidence"),
+                         "statement_problems": extracted.get("statement_problems")}
 
     raw, statements, facts, checks = build_dataset(TICKER, n_filings, cache_dir, on_filing=on_filing)
     df = clean_and_derive(raw)

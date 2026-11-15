@@ -105,6 +105,25 @@ class AppTestCase(unittest.TestCase):
 
 
 class AuthTests(AppTestCase):
+    def test_the_database_schema_is_set_up_once_not_on_every_connection(self):
+        with unittest.mock.patch.object(app, "_init_db", wraps=app._init_db) as setup:
+            for _ in range(3):
+                self.assertEqual(self.client.get("/api/account").status_code, 200)
+        self.assertEqual(setup.call_count, 0)                  # done when Ada signed up
+        (app.DATA_DIR / "stocky.db").unlink()                  # a wiped data folder is set up again
+        with app._db() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0], 0)
+
+    def test_a_failed_insider_collection_is_passed_on(self):
+        folder = app._user_dir(self.uid()) / "AAA"
+        folder.mkdir(parents=True)
+        (folder / "insider.json").write_text(json.dumps({
+            "ticker": "AAA", "months": 36, "since": None, "transactions": [], "error": "OSError: SEC unreachable",
+            "skipped": [{"accession": "x", "error": "ValueError: bad XML"}]}))
+        data = self.client.get("/api/insiders/AAA").get_json()
+        self.assertEqual(data["error"], "OSError: SEC unreachable")
+        self.assertEqual(data["skipped"], 1)
+
     def test_a_huge_request_body_is_refused(self):
         anon = app.app.test_client()
         res = anon.post("/api/login", data=b"x" * (app.MAX_BODY_BYTES + 1), content_type="application/json")

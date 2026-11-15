@@ -30,6 +30,10 @@ STATEMENTS: dict[str, tuple[str, str]] = {
     "comprehensive": ("comprehensive_income", "Comprehensive Income"),
 }
 
+# A filing without one of these has a problem; equity and comprehensive income
+# statements are often simply not there.
+PRIMARY_STATEMENTS = ("income", "balance", "cashflow")
+
 _FACT_COLUMNS = [
     "concept", "label", "numeric_value", "unit_ref", "currency", "decimals",
     "period_start", "period_end", "period_instant", "is_dimensioned",
@@ -90,8 +94,14 @@ def extract_statements(
     period_of_report: str,
     values: dict[str, dict] | None = None,
     convenience: dict[str, list[float]] | None = None,
+    problems: list[dict] | None = None,
 ) -> list[dict]:
     """Every dimension-free line of the five primary statements, long-form.
+
+    ``problems``, when a list, gets ``{"statement", "detail"}`` for every
+    statement no line was taken from: it failed to render, it has no column
+    for the period, or (income, balance, cash flow) it is not in the filing.
+    ``data_issues.py`` reports them; skipping one silently hid it.
 
     For some foreign filers edgartools renders a line's USD convenience copy
     (TSMC's 2019 equity) among lines in TWD. A rendered number that equals
@@ -105,12 +115,22 @@ def extract_statements(
         try:
             statement = getattr(xbrl.statements, method)()
             data = statement.to_dataframe() if statement is not None else None
-        except Exception:  # noqa: BLE001 - a missing statement must not sink the filing
+        except Exception as exc:  # noqa: BLE001 - a missing statement must not sink the filing
+            if problems is not None:
+                # From a dump the error is replayed with its original text (filing_view.py).
+                why = str(exc) if getattr(exc, "replayed", False) else f"{type(exc).__name__}: {exc}"
+                problems.append({"statement": key, "detail": f"it could not be rendered ({why})"})
             continue
         if data is None or data.empty or "concept" not in data.columns:
+            if problems is not None and key in PRIMARY_STATEMENTS:
+                problems.append({"statement": key, "detail": "it was not found in the filing"})
             continue
         column = _period_column(data, period_of_report)
         if column is None:
+            if problems is not None:
+                columns = ", ".join(str(c) for c in data.columns if str(c)[:4].isdigit()) or "none"
+                problems.append({"statement": key, "detail": f"it has no column for the year ended "
+                                                             f"{period_of_report} (its columns: {columns})"})
             continue
 
         line_rows: list[dict] = []

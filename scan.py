@@ -93,7 +93,8 @@ CREATE TABLE IF NOT EXISTS batch_companies (
 CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY, batch INTEGER, kind TEXT, started TEXT, finished TEXT, status TEXT,
     pid INTEGER, log TEXT, total INTEGER, done INTEGER DEFAULT 0, current TEXT, downloaded INTEGER DEFAULT 0,
-    from_dump INTEGER DEFAULT 0, download_failed INTEGER DEFAULT 0, message TEXT, reader TEXT, options TEXT);
+    from_dump INTEGER DEFAULT 0, download_failed INTEGER DEFAULT 0, message TEXT, reader TEXT, options TEXT,
+    proc_start TEXT);
 CREATE TABLE IF NOT EXISTS companies (
     cik INTEGER PRIMARY KEY, ticker TEXT, name TEXT, batch INTEGER, last_run INTEGER, updated TEXT,
     result TEXT, error TEXT, annual_found INTEGER, annual_dumped INTEGER, annual_xbrl INTEGER,
@@ -144,6 +145,9 @@ def connect(root: Path | None = None) -> sqlite3.Connection:
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
     db.executescript(SCHEMA_SQL)
+    # Added later: when the run's process started, to tell it from another one with its pid.
+    if "proc_start" not in {row["name"] for row in db.execute("PRAGMA table_info(runs)")}:
+        db.execute("ALTER TABLE runs ADD COLUMN proc_start TEXT")
     return db
 
 
@@ -409,7 +413,8 @@ def analyse_company(db, cik: int, ticker: str, cache_dir: Path, out_dir: Path, l
     filed: dict[str, dict] = {}
 
     def on_filing(period, form, accession, extracted):
-        filed[period] = {"form": form, "accession": accession, "evidence": extracted.get("evidence")}
+        filed[period] = {"form": form, "accession": accession, "evidence": extracted.get("evidence"),
+                         "statement_problems": extracted.get("statement_problems")}
 
     try:
         raw, _statements, _facts, checks = _pipeline().assemble(candidates, None, entry_of, ticker, log=log,
@@ -619,9 +624,10 @@ def _isolated(db, task: tuple, log) -> dict:
 
 def start_run(db, root: Path, batch: int, kind: str, total: int, options: dict) -> tuple[int, Log]:
     with db:
-        cursor = db.execute("""INSERT INTO runs (batch, kind, started, status, pid, total, reader, options)
-                               VALUES (?, ?, ?, 'running', ?, ?, ?, ?)""",
-                            (batch, kind, _now(), os.getpid(), total, filing_cache.reader_id(), json.dumps(options)))
+        cursor = db.execute("""INSERT INTO runs (batch, kind, started, status, pid, total, reader, options,
+                               proc_start) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?)""",
+                            (batch, kind, _now(), os.getpid(), total, filing_cache.reader_id(), json.dumps(options),
+                             _proc_start(os.getpid())))
         run = cursor.lastrowid
         log_path = root / "logs" / f"run-{run:04d}.log"
         db.execute("UPDATE runs SET log = ? WHERE id = ?", (str(log_path.relative_to(root)), run))
@@ -713,18 +719,35 @@ def _disable_download_cache(log) -> None:
 # Reports (also read by the app)
 # --------------------------------------------------------------------------- #
 
-def _alive(pid) -> bool:
+def _proc_start(pid) -> str | None:
+    """When process ``pid`` started (clock ticks since boot, from ``/proc``); None where there is no ``/proc``."""
+    try:
+        with open(f"/proc/{int(pid)}/stat", "rb") as handle:
+            return handle.read().rsplit(b")", 1)[1].split()[19].decode()
+    except (OSError, TypeError, ValueError, IndexError):
+        return None
+
+
+def _alive(pid, started: str | None = None) -> bool:
+    """Whether the run's process is still there.
+
+    A pid alone is not enough: after a container restart it soon belongs to
+    another process, the run would look alive for ever and Cancel would stop
+    that other process. ``started`` (``_proc_start`` when the run began) must
+    still be the pid's start time.
+    """
     try:
         os.kill(int(pid), 0)
-        return True
     except (OSError, TypeError, ValueError):
         return False
+    now = _proc_start(pid)
+    return not (started and now and now != started)
 
 
 def mark_stale_runs(db, reason: str = "the process disappeared (a container restart, or it was killed)") -> None:
     """A run whose process is gone is marked interrupted, with the reason and a line in its log."""
-    for row in db.execute("SELECT id, pid, log, current FROM runs WHERE status = 'running'").fetchall():
-        if not _alive(row["pid"]):
+    for row in db.execute("SELECT id, pid, proc_start, log, current FROM runs WHERE status = 'running'").fetchall():
+        if not _alive(row["pid"], row["proc_start"]):
             message = f"{reason}; it was on {row['current'] or 'no company'}"
             with db:
                 db.execute("""UPDATE runs SET status = 'interrupted', finished = ?, current = NULL, message = ?

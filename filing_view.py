@@ -35,7 +35,9 @@ class _Statements:
         def read():
             entry = self._stored.get(key)
             if isinstance(entry, dict) and "error" in entry:
-                raise RuntimeError(entry["error"])       # edgartools failed on it when dumped
+                error = RuntimeError(entry["error"])     # edgartools failed on it when dumped
+                error.replayed = True                    # its text already names the original error
+                raise error
             return None if entry is None else _Frame(entry)
         return read
 

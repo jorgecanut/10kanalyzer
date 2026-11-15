@@ -2942,6 +2942,8 @@ function renderHome() {
   $('#home-insider-status').textContent = !ins ? 'Loading insider trades…'
     : ins.failed ? 'Could not load insider trades.'
     : ins.missing ? 'No insider data yet; it is collected when the run finishes.'
+    : ins.error ? `Insider trades could not be collected (${ins.error}); run ${ticker} again.`
+    : ins.skipped ? `${ins.skipped} Form 4 filing${ins.skipped === 1 ? '' : 's'} could not be read; trades may be missing.`
     : trades.length ? '' : 'No open-market insider trades in the collected period.';
   $('#home-insiders').innerHTML = trades.map(insiderRow).join('');
 
@@ -4625,16 +4627,20 @@ function renderInsiders() {
     ? `; this run only ${since ? `goes back to ${fmtDate(since)}` : `covers ${data.months || 6} months`}; run ${ticker} again for up to 3 years`
     : '';
   const collected = data.generated ? `${ticker}, collected ${fmtDate(data.generated)}` : ticker;
+  // A failed collection or unread Form 4s: the list may be short, and "no trades" would be a guess.
+  const problem = data.error ? `; the collection failed (${data.error}), so trades are missing: run ${ticker} again`
+    : data.skipped ? `; ${data.skipped} Form 4 filing${data.skipped === 1 ? '' : 's'} could not be read, so trades may be missing`
+    : '';
   if (!rows.length) {
     INSIDER.rows = [];
     $('#insider-body').innerHTML = '';
     const none = { buy: 'buys', sell: 'sells' }[INSIDER.type] || 'trades';
-    $('#insider-status').textContent = `${collected}: no open-market insider ${none} in the last ${period}${short}`;
+    $('#insider-status').textContent = `${collected}: no open-market insider ${none} in the last ${period}${short}${problem}`;
     return;
   }
   INSIDER.rows = rows;
   $('#insider-body').innerHTML = rows.map(insiderRow).join('');
-  $('#insider-status').textContent = `${collected}: ${rows.length} ${kind} in the last ${period}, newest first${short}`;
+  $('#insider-status').textContent = `${collected}: ${rows.length} ${kind} in the last ${period}, newest first${short}${problem}`;
 }
 
 async function loadRecent() {
@@ -5133,7 +5139,7 @@ const MARKET = { data: null, batch: null, view: 'issues', kind: '', detail: null
 const MK_KINDS = {
   check_mismatch: 'Total does not add up', missing_metric: 'Metric not read', implausible_value: 'Value looks wrong', not_reported: 'Not in the filing', statement_missing: 'Statement not found', download_failed: 'Download failed',
   analysis_failed: 'Filing unreadable', dump_part_failed: 'Part of a filing unread', company_failed: 'Company failed',
-  overdue_10k: '10-K overdue', valuation_input_missing: 'Valuation input missing',
+  overdue_10k: '10-K overdue', statement_unread: 'Statement not read', valuation_input_missing: 'Valuation input missing',
   valuation_assumed: 'Valuation uses an assumption', valuation_skipped: 'Valuation not computed',
 };
 const MK_RESULTS = { ok: 'OK', partial: 'Partial', failed: 'Failed', no_filings: 'No annual reports', no_xbrl: 'No XBRL' };

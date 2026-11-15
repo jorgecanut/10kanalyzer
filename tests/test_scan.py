@@ -257,6 +257,18 @@ class ScanTest(ScanCase):
         scan.mark_stale_runs(self.db)
         self.assertEqual(self.db.execute("SELECT status FROM runs").fetchone()[0], "interrupted")
 
+    def test_a_pid_now_held_by_another_process_is_not_the_run(self):
+        # After a container restart the old pid belongs to something else.
+        import os
+        with self.db:
+            self.db.execute("INSERT INTO runs (batch, kind, status, pid, proc_start) VALUES "
+                            "(1, 'next', 'running', ?, ?)", (os.getpid(), "1"))
+            self.db.execute("INSERT INTO runs (batch, kind, status, pid, proc_start) VALUES "
+                            "(1, 'next', 'running', ?, ?)", (os.getpid(), scan._proc_start(os.getpid())))
+        scan.mark_stale_runs(self.db)
+        self.assertEqual([row[0] for row in self.db.execute("SELECT status FROM runs ORDER BY id")],
+                         ["interrupted", "running"])
+
 
 class IsolationTest(ScanCase):
     """Real child processes: a company that dies or hangs costs that company, not the batch."""

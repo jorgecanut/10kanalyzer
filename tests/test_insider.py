@@ -14,6 +14,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import insider  # noqa: E402
+import insider_report  # noqa: E402
 
 RANGE_NOTE = ("The price reported in Column 4 is a weighted average price. These shares were sold in "
               "multiple transactions at prices ranging from $600.00 to $602.00, inclusive.")
@@ -75,6 +76,43 @@ class IssuerTests(unittest.TestCase):
         own = ownership([trade(Date="2099-01-01")])
         own.issuer = None
         self.assertEqual(len(self.collect([own])), 1)
+
+
+class FailureTests(unittest.TestCase):
+    """A failure is written down: it must not read as "this company has no insider trades"."""
+
+    def write(self, company):
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder, \
+                unittest.mock.patch.object(insider, "Company", company), \
+                unittest.mock.patch.object(insider, "_warn"):
+            path = insider_report.write_insiders("ACME", folder)
+            return json.loads(Path(path).read_text())
+
+    def test_a_form_4_that_cannot_be_read_is_listed(self):
+        def broken():
+            raise ValueError("bad XML")
+        good = ownership([trade(Date="2099-01-01")])
+        company = unittest.mock.Mock(cik=1)
+        company.get_filings.return_value = [
+            SimpleNamespace(filing_date="2099-01-01", accession_no="0000000001-99-000001", obj=lambda: good),
+            SimpleNamespace(filing_date="2099-01-01", accession_no="0000000001-99-000002", obj=broken)]
+        payload = self.write(unittest.mock.Mock(return_value=company))
+        self.assertEqual(len(payload["transactions"]), 1)
+        self.assertIsNone(payload["error"])
+        self.assertEqual(payload["skipped"], [{"accession": "0000000001-99-000002", "error": "bad XML"}])
+
+    def test_a_collection_that_fails_says_why(self):
+        payload = self.write(unittest.mock.Mock(side_effect=OSError("SEC unreachable")))
+        self.assertEqual(payload["transactions"], [])
+        self.assertEqual(payload["error"], "SEC unreachable")
+
+    def test_the_form_4_cache_is_not_made_stale_by_this(self):
+        # Its version is the hash of insider.py: reporting problems must not live there.
+        import filing_cache
+        self.assertEqual(filing_cache.KINDS["form4"], ("insider.py",))
+        self.assertIs(insider._warn.__module__ == "insider", True)
 
 
 if __name__ == "__main__":

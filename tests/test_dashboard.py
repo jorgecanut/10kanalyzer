@@ -65,6 +65,22 @@ class BackgroundInsidersTest(unittest.TestCase):
                 edgar_dashboard._report_insiders(started)
         self.assertIn("Wrote insider transactions (3 trades)", out.getvalue())
 
+    def test_a_collection_that_failed_is_not_reported_as_written(self):
+        def failed(ticker, output_dir, cache_dir=None):
+            insider._warn("failed to collect insiders for TEST: SEC unreachable")
+            path = Path(output_dir) / "insider.json"
+            path.write_text(json.dumps({"transactions": []}), encoding="utf-8")
+            return str(path)
+
+        with tempfile.TemporaryDirectory() as folder, \
+                unittest.mock.patch.object(insider, "write_insiders", failed), \
+                unittest.mock.patch("sys.stderr", io.StringIO()):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                edgar_dashboard._report_insiders(edgar_dashboard._start_insiders("TEST", folder))
+        self.assertIn("[!] insider trades not collected: SEC unreachable", out.getvalue())
+        self.assertNotIn("Wrote insider transactions", out.getvalue())
+
     def test_a_failure_is_reported_not_raised(self):
         def broken(ticker, output_dir, cache_dir=None):
             raise RuntimeError("boom")
