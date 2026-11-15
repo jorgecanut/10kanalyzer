@@ -1361,14 +1361,19 @@ def render_pngs(
 # The market inputs valuation.py reports issues on (a missing price, an assumed zero).
 VALUATION_INPUTS = ("Price", "Shares", "Cash", "Depreciation", "LongTermDebt", "Splits")
 CHART_METRICS = {
-    "01_income_statement": {"Revenues", "CostOfRevenue", "GrossProfit", "OperatingIncomeLoss", "NetIncomeLoss"},
-    "02_margins": {"Revenues", "GrossProfit", "OperatingIncomeLoss", "NetIncomeLoss"},
-    "03_balance": {"StockholdersEquity"},
-    "05_cashflow_operations": {"Revenues", "OperatingCashFlow", "CapEx"},
-    "07_returns": {"NetIncomeLoss", "StockholdersEquity", "OperatingIncomeLoss"},
+    # With the statements each chart is read from (a ``statement_unread`` issue names one).
+    "01_income_statement": {"Revenues", "CostOfRevenue", "GrossProfit", "OperatingIncomeLoss", "NetIncomeLoss",
+                            "IncomeStatement"},
+    "02_margins": {"Revenues", "GrossProfit", "OperatingIncomeLoss", "NetIncomeLoss", "IncomeStatement"},
+    "03_balance": {"StockholdersEquity", "BalanceSheet"},
+    "04_debt": {"BalanceSheet"},
+    "05_cashflow_operations": {"Revenues", "OperatingCashFlow", "CapEx", "CashFlowStatement"},
+    "06_cashflow_financing": {"CashFlowStatement"},
+    "07_returns": {"NetIncomeLoss", "StockholdersEquity", "OperatingIncomeLoss", "IncomeStatement", "BalanceSheet"},
     # P/E, P/B, P/FCF, EV/EBIT, F-score and Z-score.
     "08_valuation": {"Revenues", "GrossProfit", "OperatingIncomeLoss", "NetIncomeLoss", "OperatingCashFlow",
-                     "CapEx", "StockholdersEquity", *VALUATION_INPUTS},
+                     "CapEx", "StockholdersEquity", *VALUATION_INPUTS,
+                     "IncomeStatement", "BalanceSheet", "CashFlowStatement"},
 }
 
 

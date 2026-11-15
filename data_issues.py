@@ -15,6 +15,8 @@ Issue kinds made here:
 - ``statement_missing``: no statement to read the metric from could be found in the filing.
 - ``not_reported``: the statement is there, with no such line and no fact for the year.
 - ``implausible_value``: metrics of one year contradict each other.
+- ``statement_unread``: a statement the extraction took no line from (it failed to render, has no
+  column for the year, or a primary one is not in the filing).
 """
 
 from __future__ import annotations
@@ -60,7 +62,11 @@ EVIDENCE = {
 }
 # Lines named like the metric that are something else: EPS, share counts.
 NOT_THE_LINE = re.compile(r"per (share|unit)|PerShare|PerUnit|weighted|Weighted", re.IGNORECASE)
-STATEMENT_NAMES = {"income": "income statement", "balance": "balance sheet", "cashflow": "cash flow statement"}
+STATEMENT_NAMES = {"income": "income statement", "balance": "balance sheet", "cashflow": "cash flow statement",
+                   "equity": "statement of equity", "comprehensive": "statement of comprehensive income"}
+# What a ``statement_unread`` issue is filed under, so the charts drawn from that statement show it.
+STATEMENT_CONCEPTS = {"income": "IncomeStatement", "balance": "BalanceSheet", "cashflow": "CashFlowStatement",
+                      "equity": "StatementOfEquity", "comprehensive": "ComprehensiveIncome"}
 STATEMENT_METHODS = {"income": "income_statement", "balance": "balance_sheet", "cashflow": "cash_flow_statement"}
 # A fact's period must end this close to the report date to count for the year.
 PERIOD_MATCH_DAYS = 20
@@ -74,6 +80,7 @@ TITLES = {
     "statement_missing": "Statement not found",
     "not_reported": "Not in the filing",
     "implausible_value": "Value looks wrong",
+    "statement_unread": "Statement not read",
     # Made by valuation.py: a ratio left blank, a ratio built on an assumption, no valuation at all.
     "valuation_input_missing": "Valuation input missing",
     "valuation_assumed": "Valuation uses an assumption",
@@ -265,6 +272,11 @@ def company_issues(derived: pd.DataFrame, checks: pd.DataFrame, filed: dict[str,
             issues.append(_issue(kind, severity, concept=metric, label=label, detail=detail, **common))
         for metric, why in implausible(row):
             issues.append(_issue("implausible_value", "warning", concept=metric, detail=why, **common))
+        for problem in where.get("statement_problems") or []:
+            name = STATEMENT_NAMES.get(problem["statement"], problem["statement"])
+            issues.append(_issue("statement_unread", "warning", statement=name,
+                                 concept=STATEMENT_CONCEPTS.get(problem["statement"], problem["statement"]),
+                                 detail=f"no line of the {name} was read: {problem['detail']}", **common))
     return issues
 
 

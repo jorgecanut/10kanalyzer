@@ -131,6 +131,19 @@ class CompanyIssuesTests(unittest.TestCase):
         reported = derived.assign(operating_income_derived=False)
         self.assertEqual(data_issues.company_issues(reported, pd.DataFrame(), filed), [])
 
+    def test_a_statement_that_was_not_read_is_an_issue_of_its_year(self):
+        derived = pd.DataFrame([{"period_of_report": PERIOD, "fiscal_year": 2024, "Revenues": 1.0,
+                                 "OperatingIncomeLoss": 1.0, "NetIncomeLoss": 1.0, "OperatingCashFlow": 1.0,
+                                 "StockholdersEquity": 1.0}])
+        filed = {PERIOD: {"form": "10-K", "accession": "a", "statement_problems": [
+            {"statement": "cashflow", "detail": "it could not be rendered (KeyError: 'x')"}]}}
+        [issue] = data_issues.company_issues(derived, pd.DataFrame(), filed)
+        self.assertEqual((issue["kind"], issue["concept"], issue["fiscal_year"], issue["statement"]),
+                         ("statement_unread", "CashFlowStatement", 2024, "cash flow statement"))
+        self.assertIn("KeyError", issue["detail"])
+        [warning] = data_issues.chart_warnings({"CashFlowStatement"}, [2024], [issue])
+        self.assertEqual(warning["title"], "Statement not read")
+
     def test_metrics_that_contradict_each_other(self):
         row = {"Revenues": 21.8, "CostOfRevenue": 1773.0, "GrossProfit": 687.0, "OperatingIncomeLoss": 164.0,
                "gross_profit_derived": False}
@@ -171,6 +184,42 @@ class ChartWarningTests(unittest.TestCase):
         spec = charts.build_spec("TST", "/nonexistent", df, pd.DataFrame(), pd.DataFrame())
         self.assertFalse(spec["issues_checked"])
         self.assertTrue(all(chart["warnings"] == [] for chart in spec["charts"]))
+
+
+class StatementProblemTests(unittest.TestCase):
+    """A statement the extraction skips is said, not dropped."""
+
+    def problems(self, **statements):
+        import xbrl_extract
+        absent = {method: (lambda: None) for method, _ in xbrl_extract.STATEMENTS.values()}
+        xbrl = SimpleNamespace(statements=SimpleNamespace(**{**absent, **statements}))
+        found = []
+        rows = xbrl_extract.extract_statements(xbrl, PERIOD, problems=found)
+        return rows, {item["statement"]: item["detail"] for item in found}
+
+    def frame(self, column):
+        data = pd.DataFrame([{"concept": "us-gaap_Assets", "label": "Total assets", column: 5.0}])
+        return lambda: SimpleNamespace(to_dataframe=lambda: data)
+
+    def test_a_statement_that_fails_to_render(self):
+        def broken():
+            raise KeyError("role")
+        _, found = self.problems(income_statement=broken, balance_sheet=self.frame(PERIOD),
+                                 cash_flow_statement=self.frame(PERIOD))
+        self.assertEqual(list(found), ["income"])
+        self.assertIn("KeyError", found["income"])
+
+    def test_a_statement_without_a_column_for_the_year(self):
+        rows, found = self.problems(income_statement=self.frame(PERIOD), balance_sheet=self.frame("2019-12-31"),
+                                    cash_flow_statement=self.frame(PERIOD))
+        self.assertEqual(list(found), ["balance"])
+        self.assertIn("2019-12-31", found["balance"])
+        self.assertEqual({row["statement"] for row in rows}, {"income", "cashflow"})
+
+    def test_a_primary_statement_that_is_not_there(self):
+        # Equity and comprehensive income are often absent; the three primary ones are not.
+        _, found = self.problems(income_statement=self.frame(PERIOD), balance_sheet=self.frame(PERIOD))
+        self.assertEqual(list(found), ["cashflow"])
 
 
 if __name__ == "__main__":

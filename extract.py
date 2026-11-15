@@ -819,9 +819,12 @@ def extract_filing(filing, period_key: str) -> dict:
                  "ads": is_adr, "ads_ratio": ratio, "ads_ratio_source": ratio_source}
     # Statement rows are also the fallback source for metrics a filer
     # renders but never tags as a consolidated fact.
+    statement_problems: list[dict] = []
     statement_rows = xbrl_extract.extract_statements(
         xbrl, period_key, calc_check.period_values(facts, period_key, currency, min_days),
-        calc_check.convenience_values(facts, period_key, currency, min_days))
+        calc_check.convenience_values(facts, period_key, currency, min_days), problems=statement_problems)
+    for problem in statement_problems:
+        print(f"    [!] {period_key}: the {problem['statement']} statement was not read: {problem['detail']}")
     statement_values = _statement_values(statement_rows)
     for metric, (concepts, period_type) in METRIC_CONCEPTS.items():
         row[metric] = extract_metric(
@@ -856,4 +859,5 @@ def extract_filing(filing, period_key: str) -> dict:
               f"({exc.__class__.__name__}: {exc})")
         evidence = {}
     return {"xbrl": True, "row": row, "statements": statement_rows,
-            "facts": filing_facts, "checks": filing_checks, "evidence": evidence}
+            "facts": filing_facts, "checks": filing_checks, "evidence": evidence,
+            "statement_problems": statement_problems}

@@ -206,11 +206,33 @@ def _normalise_ticker(raw: str) -> str:
     return ticker
 
 
+# Database files whose tables were set up by this process (see _init_db).
+_DB_READY: set[str] = set()
+_DB_LOCK = threading.Lock()
+
+
 @contextmanager
 def _db():
     """The local account database; commits on success and always closes."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DATA_DIR / "stocky.db")
+    path = DATA_DIR / "stocky.db"
+    with _DB_LOCK:
+        # Once per file, not on every connection (several a request); again if the file is gone.
+        if str(path) not in _DB_READY or not path.is_file():
+            _init_db(path)
+            _DB_READY.add(str(path))
+    conn = sqlite3.connect(path)
+    try:
+        conn.row_factory = sqlite3.Row
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _init_db(path: Path) -> None:
+    """Create the tables, and add the columns that came after a database was made."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
     try:
         conn.row_factory = sqlite3.Row
         conn.execute(
@@ -246,7 +268,6 @@ def _db():
             " id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, created TEXT NOT NULL,"
             " note TEXT, status TEXT NOT NULL DEFAULT 'pending', granted INTEGER, decided TEXT)"
         )
-        yield conn
         conn.commit()
     finally:
         conn.close()
@@ -2101,6 +2122,9 @@ def insiders(ticker: str):
         months=payload.get("months") or 6,
         since=payload.get("since"),
         transactions=payload.get("transactions") or [],
+        # Why the collection failed, and how many Form 4s could not be read: not "no trades".
+        error=payload.get("error"),
+        skipped=len(payload.get("skipped") or []),
     )
 
 

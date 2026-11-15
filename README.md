@@ -128,6 +128,9 @@ moves. Each batch takes the next N companies no batch has taken, and for each:
    fact or a statement line, with or without a value for the year) that no
    rule reads (`missing_metric`, naming the tag and value), a metric that
    could not be read because no statement was found (`statement_missing`),
+   a statement no line was taken from, because it failed to render, has no
+   column for the year or (income, balance sheet, cash flow) is not in the
+   filing (`statement_unread`, shown under the charts drawn from it),
    a filing that could not be downloaded or read, a company that failed. A
    metric is `not_reported` (a note, like a bank's operating income or a
    biotech's revenue) only after the stored filing itself was searched:
@@ -480,6 +483,12 @@ often report a price of 0 and give the range only in a footnote ("weighted
 average … $X to $Y"); the value then uses the midpoint, shows as **≈** and has
 `value_estimated: true`. Form 4s the company files as the insider of *another*
 issuer (a stake it holds, an acquisition) are left out.
+A collection that fails, or a Form 4 that cannot be read, is written into
+`insider.json` (`error`, `skipped`) by `insider_report.py`, and the Insiders
+tab, Home and the run log say so: an empty or short list for either reason is
+not "no trades". It lives beside `insider.py` rather than in it because the
+Form 4 cache is versioned by that file's hash, and editing it would make every
+company's Form 4s be read from SEC again.
 
 Every tab's panel title is just the tab name, every refresh button is the
 circular-arrow icon, and every ticker drop-down reads `TICKER (last run date)`.
@@ -1029,6 +1038,13 @@ this project must not regress them.
 
 - No request body may exceed 6 MB (a profile picture is at most 5): sign-in
   and sign-up are public and used to read a body of any size into memory.
+
+- A market scan is told from another process by its pid **and** its start
+  time (`runs.proc_start`): after a container restart the old pid soon belongs
+  to something else, the scan looked alive for ever and Cancel would have
+  stopped that other process.
+- The account database's tables are set up once per process, not on every
+  connection (several a request).
 
 Known remaining exposure: the sign-in pause is per email only (no per-address
 limit, and it can lock a known email out for 15 minutes) and there
