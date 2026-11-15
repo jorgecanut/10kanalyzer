@@ -115,6 +115,22 @@ class CompanyIssuesTests(unittest.TestCase):
                                  "statement_missing"])
         self.assertTrue(all(issue["accession"] == "0001-24-000001" for issue in issues))
 
+    def test_a_derived_operating_income_does_not_hide_the_one_not_read(self):
+        # Gross profit less SG&A and R&D stood in for it, and no issue was raised.
+        derived = pd.DataFrame([{"period_of_report": PERIOD, "fiscal_year": 2024, "Revenues": 1000.0,
+                                 "OperatingIncomeLoss": 300.0, "operating_income_derived": True,
+                                 "NetIncomeLoss": 50.0, "OperatingCashFlow": 80.0, "StockholdersEquity": 500.0}])
+        fact = {"concept": "us-gaap:OperatingIncomeLoss", "value": 120e6, "days": 365, "end": PERIOD,
+                "currency": "USD"}
+        filed = {PERIOD: {"form": "10-K", "accession": "a", "evidence": {"OperatingIncomeLoss": {
+            "statement": "income", "state": "present", "line": None, "fact": fact}}}}
+        issues = data_issues.company_issues(derived, pd.DataFrame(), filed)
+        self.assertEqual([(issue["kind"], issue["concept"]) for issue in issues],
+                         [("missing_metric", "OperatingIncomeLoss")])
+        self.assertIn("derived", issues[0]["detail"])
+        reported = derived.assign(operating_income_derived=False)
+        self.assertEqual(data_issues.company_issues(reported, pd.DataFrame(), filed), [])
+
     def test_metrics_that_contradict_each_other(self):
         row = {"Revenues": 21.8, "CostOfRevenue": 1773.0, "GrossProfit": 687.0, "OperatingIncomeLoss": 164.0,
                "gross_profit_derived": False}

@@ -396,9 +396,14 @@ def clean_and_derive(df: pd.DataFrame) -> pd.DataFrame:
         | df["ResearchAndDevelopmentExpense"].notna()
     )
     derived_operating = df["GrossProfit"] - sga - rnd
+    missing_operating = df["OperatingIncomeLoss"].isna()
     df.loc[has_op_components, "OperatingIncomeLoss"] = df.loc[
         has_op_components, "OperatingIncomeLoss"
     ].fillna(derived_operating)
+    # An estimate (it leaves out depreciation, impairments and other operating
+    # costs), so it is flagged: the charts star it and data_issues.py still
+    # reports the operating income that was not read.
+    df["operating_income_derived"] = missing_operating & df["OperatingIncomeLoss"].notna()
 
     # Derived health metrics (guard every denominator against zero).
     df["GrossMargin"] = _safe_div(df["GrossProfit"], df["Revenues"])
@@ -476,9 +481,13 @@ def _write_checks(checks: pd.DataFrame) -> None:
           f"{statements['incomplete']} have untagged parts; notes {notes['ok']}/{notes['totals']}")
 
 
-def _write_issues(df: pd.DataFrame, checks: pd.DataFrame, filed: dict) -> list[dict]:
-    """``data_issues.csv``: every data issue of the run (the charts show the ones behind them)."""
-    issues = data_issues.company_issues(df, checks, filed)
+def _write_issues(df: pd.DataFrame, checks: pd.DataFrame, filed: dict,
+                  extra: list[dict] | None = None) -> list[dict]:
+    """``data_issues.csv``: every data issue of the run (the charts show the ones behind them).
+
+    ``extra`` are the valuation's (a missing price, an assumed zero, no valuation at all).
+    """
+    issues = data_issues.company_issues(df, checks, filed) + list(extra or [])
     path = os.path.join(OUTPUT_DIR, charts.ISSUES_FILE)
     columns = ["kind", "severity", "fiscal_year", "period", "form", "accession", "statement", "concept", "label",
                "reported", "computed", "difference", "detail"]
@@ -659,7 +668,6 @@ def main() -> None:
 
     df.to_csv(DATA_CSV, index=False)
     print(f"[+] Wrote ratio data to {os.path.abspath(DATA_CSV)}")
-    issues = _write_issues(df, checks, filed)
 
     # XBRL-driven artifacts: everything the filer stated, not a curated list.
     if not statements.empty:
@@ -677,24 +685,35 @@ def main() -> None:
 
     # Optional valuation artifacts: price history vs. reported fundamentals.
     # Entirely best-effort so a data source outage cannot fail the run.
+    valuation_issues: list[dict] = []
+
+    def skipped(why: str) -> dict:
+        return {"kind": "valuation_skipped", "severity": "warning", "concept": "Price", "detail": why}
+
     try:
         import valuation
 
-        print("[*] Valuation: fetching the monthly price history (Yahoo Finance)")
+        print("[*] Valuation: fetching the monthly price history and the stock splits (Yahoo Finance)")
         history = valuation.fetch_price_history(TICKER)
+        splits = valuation.fetch_splits(TICKER)
         # Foreign filers: the quote is in USD per ADS, the filings in their own currency.
         scale, price_currency, note = valuation.market_scale(TICKER, df, facts, statements)
         if note:
             print(f"[*] Valuation: {note}")
         evaluation = valuation.build_evaluation(TICKER, df, statements, facts, history,
-                                                price_scale=scale, price_currency=price_currency)
+                                                price_scale=scale, price_currency=price_currency,
+                                                splits=splits, issues=valuation_issues)
         if evaluation.empty:
-            print("[!] valuation skipped: no price history")
+            print("[!] valuation skipped: no fiscal years to value")
+            valuation_issues.append(skipped("no fiscal years to value"))
         else:
             valuation.write_evaluation(TICKER, evaluation, OUTPUT_DIR)
             print(f"[+] Wrote valuation data ({len(evaluation)} years)")
     except Exception as exc:  # noqa: BLE001 - optional artifact must never abort
         print(f"[!] valuation skipped: {type(exc).__name__}: {exc}")
+        valuation_issues = [skipped(f"{type(exc).__name__}: {exc}")]
+    # After the valuation, so what it lacked or assumed is reported with the rest.
+    issues = _write_issues(df, checks, filed, valuation_issues)
 
     # Insider trades were fetched alongside the 10-Ks; report what came back.
     _report_insiders(insiders)
