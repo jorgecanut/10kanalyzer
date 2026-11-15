@@ -931,7 +931,8 @@ def _start_session(uid: str) -> None:
 
 @app.get("/")
 def index():
-    return render_template("index.html", version=app_version(),
+    # ``asset`` changes with the code, so a browser never keeps an old app.js after a deploy.
+    return render_template("index.html", version=app_version(), asset=code_sha1()[:10],
                            commit=(git_commit()["commit"] or "")[:7], admin=_is_admin(g.user))
 
 
@@ -1067,12 +1068,19 @@ def git_commit() -> dict:
         return {"commit": None, "dirty": None}
 
 
+def code_files() -> list[Path]:
+    """The app's own code: every root module, the templates and the page's script and styles."""
+    static = BASE_DIR / "static"
+    return sorted([*BASE_DIR.glob("*.py"), *(BASE_DIR / "templates").glob("*.html"),
+                   *static.glob("*.js"), *static.glob("*.css")])
+
+
 @lru_cache(maxsize=1)
 def code_sha1() -> str:
-    """One hash over every root module and template, to match a build to a commit
-    even when the commit is unknown (a deploy without the build arg)."""
+    """One hash over ``code_files()``, to match a build to a commit even when the
+    commit is unknown (a deploy without the build arg)."""
     digest = hashlib.sha1()
-    for path in sorted([*BASE_DIR.glob("*.py"), *(BASE_DIR / "templates").glob("*.html")]):
+    for path in code_files():
         digest.update(path.name.encode() + b"\0")
         try:
             digest.update(path.read_bytes())
@@ -2565,8 +2573,8 @@ DEBUG_README = """\
 Made by Home's download so a bug can be fixed without re-running anything.
 `build.json` names the exact code: `version` (VERSION file, major.minor.patch)
 and `commit` (git SHA; `dirty: true` means uncommitted local edits). When
-`commit` is null, `code_sha1` is a SHA-1 over every root `*.py` and
-`templates/*.html` (sorted by name, each as name + NUL + bytes) to match against
+`commit` is null, `code_sha1` is a SHA-1 over every root `*.py`,
+`templates/*.html`, `static/*.js` and `static/*.css` (sorted by path, each as name + NUL + bytes) to match against
 a checkout.
 
 - `build.json`: version, commit, Python and package versions, the options used.

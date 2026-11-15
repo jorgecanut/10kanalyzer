@@ -630,6 +630,26 @@ class RouteTests(AppTestCase):
         self.assertIn('id="options-btn"', page)
         self.assertNotIn('id="pane-run"', page)
 
+    def test_the_page_loads_its_script_and_styles_as_files(self):
+        # 250 KB of inline script and styles were sent again on every page load.
+        page = self.client.get("/").get_data(as_text=True)
+        asset = app.code_sha1()[:10]
+        self.assertIn(f"/static/app.js?v={asset}", page)
+        self.assertIn(f"/static/app.css?v={asset}", page)
+        self.assertNotIn("function showTab", page)
+        self.assertLess(len(page), 80_000)
+        script = app.app.test_client().get("/static/app.js")
+        self.assertIn("function showTab", script.get_data(as_text=True))
+        script.close()
+        styles = app.app.test_client().get("/static/app.css")
+        self.assertIn("fonts/UbuntuMono-Regular.ttf", styles.get_data(as_text=True))
+        styles.close()
+
+    def test_the_code_hash_covers_the_page_script_and_styles(self):
+        names = {path.name for path in app.code_files()}
+        self.assertLessEqual({"app.py", "index.html", "app.js", "app.css"}, names)
+        self.assertNotIn("echarts.min.js", names)
+
     def test_rejects_path_traversal_ticker(self):
         res = self.client.post("/api/run", json={"ticker": "../../x"})
         self.assertEqual(res.status_code, 400)
