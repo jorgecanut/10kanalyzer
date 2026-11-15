@@ -1,0 +1,4176 @@
+// The page's script (templates/index.html), loaded after ECharts.
+const $ = s => document.querySelector(s);
+
+// Browser errors and failed fetches go to the server's diagnostics log, which
+// Home's download includes. Capped per page load so a loop cannot flood it.
+const DIAG = { left: 50 };
+function reportDiag(message, detail = '') {
+  if (DIAG.left-- <= 0) return;
+  try {
+    const body = JSON.stringify({ message: String(message).slice(0, 2000), detail: String(detail).slice(0, 4000),
+                                  page: location.pathname + location.hash, viewport: `${innerWidth}x${innerHeight}` });
+    navigator.sendBeacon('/api/diag', new Blob([body], { type: 'application/json' }));
+  } catch {}
+}
+window.addEventListener('error', e =>
+  reportDiag(e.message, `${e.filename}:${e.lineno}:${e.colno}\n${e.error?.stack || ''}`));
+window.addEventListener('unhandledrejection', e =>
+  reportDiag(`Unhandled rejection: ${e.reason?.message || e.reason}`, e.reason?.stack || ''));
+{
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = async (url, options = {}) => {
+    try {
+      return await nativeFetch(url, options);
+    } catch (err) {
+      if (err.name !== 'AbortError') reportDiag(`fetch failed: ${options.method || 'GET'} ${url}`, err.message);
+      throw err;
+    }
+  };
+}
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// Hover descriptions for the numbers in the Screener and Simulation tabs.
+const HELP = {
+  ticker: 'Stock symbol.',
+  fiscal_year: 'Fiscal year of the latest 10-K the values below come from.',
+  f_score: 'Piotroski F-score, 0–9: nine yes/no checks on profitability, debt, liquidity and efficiency. 7+ is strong (green), 3 or less is weak (red).',
+  z_score: 'Altman Z-score: bankruptcy-risk estimate from working capital, retained earnings, EBIT, market value and sales. Above 2.99 is safe (green), below 1.81 is distress (red).',
+  pe: 'Price / earnings: share price divided by earnings per share. Lower means cheaper per dollar of profit.',
+  ev_ebit: 'Enterprise value / EBIT: what the whole business (market cap + debt − cash) costs per dollar of operating profit. Lower is cheaper.',
+  earnings_yield: 'Greenblatt earnings yield: EBIT / enterprise value. Higher is cheaper.',
+  return_on_capital: 'Greenblatt return on capital: EBIT / (total assets − current liabilities). Higher means a better business.',
+  greenblatt_rank: 'Greenblatt Magic Formula rank among your screened tickers: earnings-yield rank + return-on-capital rank. Lower is better.',
+  fcf_yield: 'Free cash flow / enterprise value: cash the business generates per dollar of its value. Higher is cheaper.',
+  pe_percentile: "Where this year's P/E sits in the company's own P/E history: 0% is its cheapest year, 100% its most expensive.",
+  modified: 'When this ticker was last run.',
+  sim_price: 'Latest share price from Yahoo Finance.',
+  sim_change: 'Price change from the start of the selected period to now.',
+  sim_high: 'Highest daily close in the selected period.',
+  sim_low: 'Lowest daily close in the selected period.',
+  sim_pe: 'Trailing P/E: price / earnings per share over the last 12 months (Yahoo Finance).',
+  sim_dividend: 'Dividends per share paid over a year at the current rate.',
+  sim_yield: 'Annual dividend / current price.',
+};
+// Scrolling jumps instead of gliding when the viewer asks for reduced motion.
+const SMOOTH = matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+const tip = key => HELP[key] ? ` title="${esc(HELP[key])}"` : '';
+let timer = null;
+let ACCOUNT = null;
+let ACTIVE_TICKER = '';
+const POLL_TIMERS = {};
+const TICKER_RE = /^[A-Z][A-Z0-9.\-]{0,9}$/;
+
+// The Charts tab shows one pinned ticker. It survives reloads and cancel, and
+// changes only when a single ticker is run or opened, or it is removed.
+const GRAPH = { ticker: '', state: '', results: null };
+// The calculation check shown under the Charts index (see renderChecks).
+const CHECKS = { key: '', data: null };
+try {
+  const saved = localStorage.getItem('stocky-graph') || '';
+  if (TICKER_RE.test(saved)) GRAPH.ticker = saved;
+} catch {}
+const LIVE = {};
+
+/* Preferences ---------------------------------------------------------------- */
+
+// Per-browser settings from Options. One JSON blob; bad values fall back.
+const TAB_NAMES = { home: 'Home', graph: 'Charts', insiders: 'Insiders', screener: 'Screener',
+                    simulation: 'Simulation', news: 'News', market: 'Market', logs: 'Logs' };
+// The market scan and the Admin tab are the admin's alone (the server enforces it too).
+const IS_ADMIN = window.STOCKY.admin;
+const ADMIN_TABS = ['market', 'admin'];
+const PREF_DEFAULTS = {
+  tab: 'home', tabOrder: ['home', 'graph', 'insiders', 'screener', 'simulation', 'news', 'market', 'logs'],
+  filings: 'max', textSize: '1', date: 'dmy', number: 'en-US',
+  insiderMonths: 12, simAmount: 1000, simYears: 4, simMode: 'cash', simRange: '1y',
+  newsLimit: 20, newsDays: 14,
+};
+const PREF_CHOICES = {
+  tab: Object.keys(TAB_NAMES), filings: ['3', '5', '10', '20', 'max'], textSize: ['0.88', '1', '1.12', '1.25'],
+  date: ['dmy', 'mdy', 'ymd'], number: ['en-US', 'de-DE', 'fr-FR'], insiderMonths: [1, 3, 6, 12, 24, 36],
+  simMode: ['cash', 'reinvest'], simRange: ['1mo', '4mo', '6mo', '1y', '3y', '5y', '10y', 'max'],
+  newsLimit: [20, 30, 40, 50], newsDays: [1, 7, 14, 30],
+};
+const PREFS = { ...PREF_DEFAULTS };
+try {
+  const saved = JSON.parse(localStorage.getItem('stocky-prefs') || '{}');
+  for (const [key, value] of Object.entries(saved)) {
+    if (!(key in PREF_DEFAULTS)) continue;
+    // Orders saved before the Logs tab existed get it at the end.
+    if (key === 'tabOrder' && Array.isArray(value) && !value.includes('logs')) value.push('logs');
+    // ... and Market before Logs.
+    if (key === 'tabOrder' && Array.isArray(value) && !value.includes('market')) value.splice(value.indexOf('logs'), 0, 'market');
+    if (PREF_CHOICES[key] && !PREF_CHOICES[key].includes(value)) continue;
+    if (key === 'tabOrder' && !(Array.isArray(value) && value.length === PREF_DEFAULTS.tabOrder.length
+        && PREF_DEFAULTS.tabOrder.every(tab => value.includes(tab)))) continue;
+    if ((key === 'simAmount' || key === 'simYears') && !(Number(value) >= 0)) continue;
+    PREFS[key] = value;
+  }
+} catch {}
+
+function setPref(key, value) {
+  PREFS[key] = value;
+  try { localStorage.setItem('stocky-prefs', JSON.stringify(PREFS)); } catch {}
+  applyPrefs(key);
+}
+
+// Push the preferences into the page. `changed` limits the work to one key.
+function applyPrefs(changed = '') {
+  const all = !changed;
+  if (all || changed === 'textSize') {
+    document.documentElement.style.setProperty('--fs', textScale().toFixed(3) + 'px');
+    if (SIM.data) renderSimulation();
+  }
+  if (all || changed === 'tabOrder') {
+    const strip = $('.tabs');
+    for (const tab of stripTabs()) strip.appendChild($(`#tab-${tab}`));
+    syncTabFades();
+  }
+  if (all || changed === 'filings') $('#filings').value = PREFS.filings;
+  if (changed === 'insiderMonths') {
+    INSIDER.months = PREFS.insiderMonths;
+    $('#insider-months').value = String(INSIDER.months);
+    renderInsiders();
+  }
+  if (changed === 'date' || changed === 'number') rerenderAll();
+  if (all || changed.startsWith('news')) {
+    $('#news-limit').value = String(PREFS.newsLimit);
+    $('#news-days').value = String(PREFS.newsDays);
+    if (changed && $('#news-run').value) loadNews();
+  }
+  if (changed.startsWith('sim') && !SIM.backtest) {
+    // Takes effect now unless a backtest is open, and on every reset.
+    applySimPrefs();
+    if (changed === 'simRange' && SIM.ticker) loadSimulation(true);
+    else renderSimulation();
+  }
+  syncPrefControls();
+}
+
+function syncPrefControls() {
+  $('#pref-tab').innerHTML = PREFS.tabOrder.filter(tab => IS_ADMIN || !ADMIN_TABS.includes(tab)).map(tab =>
+    `<option value="${tab}">${TAB_NAMES[tab]}</option>`).join('');
+  $('#pref-tab').value = PREFS.tab;
+  $('#pref-order').innerHTML = stripTabs().map((tab, i, order) => `<li${!IS_ADMIN && ADMIN_TABS.includes(tab) ? ' hidden' : ''}><span>${TAB_NAMES[tab]}</span>
+      <button onclick="moveTab(${i}, -1)" ${i ? '' : 'disabled'} title="Move up" aria-label="Move ${TAB_NAMES[tab]} earlier">↑</button>
+      <button onclick="moveTab(${i}, 1)" ${i < order.length - 1 ? '' : 'disabled'} title="Move down" aria-label="Move ${TAB_NAMES[tab]} later">↓</button></li>`).join('');
+  $('#pref-filings').value = PREFS.filings;
+  document.querySelectorAll('#pref-size button').forEach(button =>
+    button.classList.toggle('active', button.dataset.value === PREFS.textSize));
+  $('#pref-date').value = PREFS.date;
+  $('#pref-number').value = PREFS.number;
+  $('#pref-insider').value = String(PREFS.insiderMonths);
+  $('#pref-sim-amount').value = PREFS.simAmount;
+  $('#pref-sim-years').value = PREFS.simYears;
+  document.querySelectorAll('#pref-sim-mode button').forEach(button =>
+    button.classList.toggle('active', button.dataset.value === PREFS.simMode));
+  $('#pref-sim-range').value = PREFS.simRange;
+  $('#pref-news-limit').value = String(PREFS.newsLimit);
+  $('#pref-news-days').value = String(PREFS.newsDays);
+}
+
+// The chosen text size times the screen's own scale (see the head script).
+const textScale = () => Number(PREFS.textSize || 1) * screenScale();
+let TEXT_SCALE = 0;
+window.addEventListener('resize', () => {
+  if (Math.abs(textScale() - TEXT_SCALE) < 0.005) return;
+  TEXT_SCALE = textScale();
+  document.documentElement.style.setProperty('--fs', TEXT_SCALE.toFixed(3) + 'px');
+});
+
+// Logs sits beside Recent, outside the strip: it can be the start tab but has no place in the order.
+const stripTabs = () => PREFS.tabOrder.filter(tab => tab !== 'logs');
+
+function moveTab(index, step) {
+  const order = stripTabs();
+  const to = index + step;
+  if (to < 0 || to >= order.length) return;
+  [order[index], order[to]] = [order[to], order[index]];
+  setPref('tabOrder', [...order, 'logs']);
+}
+
+// Dates and numbers are formatted at render time: redraw whatever is showing.
+function rerenderAll() {
+  renderScreener();
+  renderHome();
+  renderInsiders();
+  if (SIM.data) { renderStats(); renderSimulation(); }
+  if (!$('#pane-recent').classList.contains('hidden')) loadRecent();
+  // Drop-down labels carry dates too.
+  document.querySelectorAll('#insider-run option, #news-run option, #sim-run option').forEach(option => {
+    if (option.dataset.modified) option.textContent = `${option.value} (${fmtDate(option.dataset.modified)})`;
+  });
+}
+
+// All requests go through this wrapper so "cancel" can abort every in-flight
+// call at once. Aborted calls never settle: a detached handler must not write
+// stale results into the freshly reset interface.
+const rawFetch = window.fetch.bind(window);
+const INFLIGHT = new Set();
+window.fetch = (url, options = {}) => {
+  const controller = new AbortController();
+  INFLIGHT.add(controller);
+  return new Promise((resolve, reject) => {
+    rawFetch(url, { ...options, signal: controller.signal }).then(
+      response => {
+        INFLIGHT.delete(controller);
+        // Session gone (signed out elsewhere, account deleted): back to sign-in.
+        if (response.status === 401) { location.href = '/login'; return; }
+        const json = response.json.bind(response);
+        response.json = () => json().catch(err =>
+          err && err.name === 'AbortError' ? new Promise(() => {}) : Promise.reject(err)
+        );
+        resolve(response);
+      },
+      error => {
+        INFLIGHT.delete(controller);
+        if (error && error.name === 'AbortError') return;
+        reject(error);
+      },
+    );
+  });
+};
+
+function pickActive() {
+  const running = Object.keys(LIVE).find(t => LIVE[t] === 'running');
+  const queued = Object.keys(LIVE).find(t => LIVE[t] === 'queued');
+  if (running || queued) ACTIVE_TICKER = running || queued;
+  syncCancel();
+}
+
+// Cancel shows only while a chart run or a screener batch is queued or running.
+function syncCancel() {
+  const live = status => status === 'queued' || status === 'running';
+  $('#cancel-btn').hidden = !(Object.values(LIVE).some(live) || Object.values(SCREEN.status).some(live));
+}
+
+/* Cancel + full interface reset -------------------------------------------- */
+
+function cancelAll() {
+  // Fire-and-forget: the server stops every queued/running job and keeps all
+  // generated files. rawFetch keeps this request out of the abort set below.
+  rawFetch('/api/cancel', { method: 'POST' }).catch(() => {});
+  for (const controller of INFLIGHT) {
+    try { controller.abort(); } catch {}
+  }
+  INFLIGHT.clear();
+  resetUi();
+}
+
+function resetUi() {
+  for (const key of Object.keys(POLL_TIMERS)) {
+    clearTimeout(POLL_TIMERS[key]);
+    delete POLL_TIMERS[key];
+  }
+  clearTimeout(SCREEN.timer);
+  SCREEN.timer = null;
+  clearTimeout(timer);
+  timer = null;
+  for (const key of Object.keys(LIVE)) delete LIVE[key];
+  ACTIVE_TICKER = '';
+
+  $('#ticker').value = '';
+  updateMode();
+  $('#filings').value = PREFS.filings;
+  INSIDER.months = PREFS.insiderMonths;
+  $('#insider-months').value = String(INSIDER.months);
+  INSIDER.type = '';
+  $('#insider-type').value = '';
+  $('#run-btn').disabled = false;
+  setStatus('idle', 'idle');
+  $('#insider-status').textContent = '';
+  $('#insider-body').innerHTML = '';
+  const insiderSelect = $('#insider-run');
+  insiderSelect.innerHTML = '';
+  delete insiderSelect.dataset.loaded;
+  $('#recent').innerHTML = '';
+  $('#screen-progress').textContent = '';
+  $('#screen-notes').innerHTML = '';
+  SCREEN.items = [];
+  SCREEN.status = {};
+  SCREEN.total = 0;
+  SCREEN.mode = 'run';
+  SCREEN.sort = { key: 'greenblatt_rank', dir: 1 };
+  SCREEN.pipeline = null;
+  renderScreener();
+  resetSimulation();
+  closeDropbar();
+  suggestTickers();
+  showTab(PREFS.tab, { history: 'replace' });
+  // The pinned graph is kept; re-read its state now that the jobs are gone.
+  renderGraph();
+  refreshGraph();
+  window.scrollTo({ top: 0, behavior: 'auto' });
+}
+
+function resetSimulation() {
+  SIM.ticker = '';
+  SIM.data = null;
+  SIM.backtest = null;
+  SIM.seq = (SIM.seq || 0) + 1;
+  const select = $('#sim-run');
+  select.innerHTML = '';
+  delete select.dataset.loaded;
+  $('#sim-status').textContent = 'Select a ticker to simulate.';
+  $('#sim-svg').replaceChildren();
+  $('#sim-result').innerHTML = '';
+  $('#sim-target').value = '';
+  $('#sim-target').disabled = false;
+  $('#sim-years').disabled = false;
+  $('#sim-cash').disabled = false;
+  $('#sim-reinvest').disabled = false;
+  $('#sim-clear').hidden = true;
+  $('#sim-form-title').textContent = 'Your projection';
+  $('#sim-hint').textContent = 'Click the chart to backtest an investment at a past date.';
+  $('#sim-note').textContent = 'Future dividends hold the trailing yield, so they grow with the projected price. Estimates only; no taxes or fees.';
+  applySimPrefs();
+}
+
+/* Theme ------------------------------------------------------------------- */
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  const btn = $('#theme-btn');
+  if (btn) {
+    const label = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+    btn.setAttribute('title', label);
+    btn.setAttribute('aria-label', label);
+  }
+  $('#opt-dark').classList.toggle('active', theme === 'dark');
+  $('#opt-light').classList.toggle('active', theme === 'light');
+  // Redraw the charts in this theme's colours.
+  if (GRAPH.results) renderResults(GRAPH.results, '#results-graph');
+}
+
+function setTheme(theme) {
+  try { localStorage.setItem('stocky-theme', theme); } catch {}
+  applyTheme(theme);
+}
+
+function toggleTheme() {
+  setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+}
+
+/* Account ----------------------------------------------------------------- */
+
+function setAccount(user) {
+  ACCOUNT = user;
+  $('#user-name').textContent = user.name;
+  $('#user-id').textContent = user.email;
+  $('#acc-identity').textContent = user.identity;
+  // A fresh query string after every change so the browser never shows the old picture.
+  const photo = user.avatar ? `/api/account/avatar?v=${Date.now()}` : '';
+  for (const el of [$('#user-avatar'), $('#acc-avatar')]) {
+    el.classList.toggle('has-photo', !!photo);
+    el.innerHTML = photo ? `<img src="${photo}" alt="">` : esc(user.name.trim()[0] || '?');
+  }
+  $('#acc-photo-remove').disabled = !user.avatar;
+  applyProfileColor(user.color);
+  try { localStorage.setItem('stocky-color', user.color); } catch {}
+  renderUsage(user.usage);
+  $('#acc-colors').innerHTML = Object.entries(PROFILE_COLORS).map(([name, [dark, light]]) =>
+    `<button role="radio" aria-checked="${name === user.color}" title="${name}" aria-label="${name}"
+       style="--sw-dark:${dark}; --sw-light:${light}"
+       onclick="setProfileColor('${name}')"></button>`).join('');
+}
+
+async function accountRequest(method, url, body, headers = {}) {
+  const res = await fetch(url, { method, headers, body });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Could not save.');
+  setAccount(data.user);
+}
+
+async function setProfileColor(name) {
+  applyProfileColor(name);   // show it at once; the server confirms
+  try {
+    await accountRequest('PATCH', '/api/account', JSON.stringify({ color: name }),
+                         { 'Content-Type': 'application/json' });
+  } catch (err) {
+    setAccount(ACCOUNT);
+    setOptMsg('#acc-photo-msg', err.message, true);
+  }
+}
+
+async function uploadAvatar(file) {
+  if (!file) return;
+  setOptMsg('#acc-photo-msg', 'Uploading…');
+  try {
+    await accountRequest('PUT', '/api/account/avatar', file, { 'Content-Type': 'application/octet-stream' });
+    setOptMsg('#acc-photo-msg', '');
+  } catch (err) { setOptMsg('#acc-photo-msg', err.message, true); }
+}
+
+async function removeAvatar() {
+  try {
+    await accountRequest('DELETE', '/api/account/avatar');
+    setOptMsg('#acc-photo-msg', '');
+  } catch (err) { setOptMsg('#acc-photo-msg', err.message, true); }
+}
+
+async function loadAccount() {
+  try {
+    const { user } = await (await fetch('/api/account')).json();
+    setAccount(user);
+  } catch { $('#user-name').textContent = 'unavailable'; }
+}
+
+function fillAccountForm() {
+  if (!ACCOUNT) return;
+  $('#acc-name').value = ACCOUNT.name;
+  $('#acc-email').value = ACCOUNT.email;
+  $('#acc-new').value = '';
+  $('#acc-current').value = '';
+}
+
+function setOptMsg(target, text, isError = false) {
+  const el = $(target);
+  el.textContent = text;
+  el.classList.toggle('is-error', isError);
+}
+
+async function saveAccount() {
+  const body = {
+    name: $('#acc-name').value.trim(),
+    email: $('#acc-email').value.trim(),
+    current_password: $('#acc-current').value,
+  };
+  if ($('#acc-new').value) body.new_password = $('#acc-new').value;
+  setOptMsg('#acc-msg', 'Saving…');
+  try {
+    const res = await fetch('/api/account', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Could not save.');
+    setAccount(data.user);
+    fillAccountForm();
+    setOptMsg('#acc-msg', 'Saved.');
+  } catch (err) {
+    setOptMsg('#acc-msg', err.message, true);
+  }
+}
+
+/* Limits: runs today and asking the admin for more ---------------------------- */
+
+function renderUsage(usage) {
+  $('#acc-usage-row').hidden = !usage;    // the admin has no limit
+  if (!usage) return;
+  const last = usage.last_request;
+  let state = '';
+  if (usage.pending_request) state = ' Your request for more is waiting for the admin.';
+  else if (last && last.status === 'accepted' && (last.decided || '').slice(0, 10) === new Date().toISOString().slice(0, 10))
+    state = ` The admin granted you ${last.granted} more today.`;
+  else if (last && last.status === 'declined') state = ' The admin declined your last request.';
+  $('#acc-usage').textContent = `${usage.runs} of ${usage.allowance} used, ${usage.remaining} left until midnight UTC. `
+    + `Up to ${usage.limits.active_runs} chart runs at once and ${usage.limits.screener_tickers} tickers per screen.${state}`;
+  $('#acc-usage-btn').disabled = usage.pending_request;
+  $('#acc-usage-note').hidden = usage.pending_request;
+}
+
+async function requestMoreRuns() {
+  setOptMsg('#acc-usage-msg', 'Sending…');
+  try {
+    const res = await fetch('/api/usage/request', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note: $('#acc-usage-note').value }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not send.');
+    $('#acc-usage-note').value = '';
+    setAccount(data.user);
+    setOptMsg('#acc-usage-msg', 'Sent.');
+  } catch (err) { setOptMsg('#acc-usage-msg', err.message, true); }
+}
+
+/* Admin tab -------------------------------------------------------------------- */
+
+const ADMIN = { data: null, confirm: '' };
+
+async function adminJSON(url, options = {}) {
+  const res = await fetch(url, options);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
+
+async function loadAdmin() {
+  if (!IS_ADMIN) return;
+  try {
+    ADMIN.data = await adminJSON('/api/admin/users');
+    renderAdmin();
+  } catch (err) { setOptMsg('#adm-msg', err.message, true); }
+}
+
+function renderAdmin() {
+  const { users, requests, limits, grant_default: grant } = ADMIN.data;
+  const byId = Object.fromEntries(users.map(user => [user.id, user]));
+  $('#adm-limits').textContent = `Each user: ${limits.runs_per_day} runs a day, ${limits.active_runs} chart runs at once, `
+    + `${limits.screener_tickers} tickers per screen`;
+  $('#adm-requests').innerHTML = requests.length ? requests.map(req => {
+    const usage = byId[req.user_id]?.usage;
+    return `<tr><td>${esc(req.name)}<br><span class="muted">${esc(req.email)}</span></td>
+      <td class="adm-note">${req.note ? esc(req.note) : '<span class="muted">No note</span>'}</td>
+      <td>${fmtDate(req.created)}</td>
+      <td>${usage ? `${usage.runs} / ${usage.allowance}` : ''}</td>
+      <td><input class="adm-grant" id="adm-grant-${req.id}" type="number" min="1" max="1000" value="${grant}"
+                 aria-label="Extra runs for ${esc(req.name)}"></td>
+      <td><span class="adm-actions">
+        <button class="primary" onclick="answerRequest(${req.id}, 'accept')">Accept</button>
+        <button class="panel-btn" onclick="answerRequest(${req.id}, 'decline')">Decline</button></span></td></tr>`;
+  }).join('') : '<tr><td colspan="6" class="muted">No open requests.</td></tr>';
+  $('#adm-users').innerHTML = users.map(user => {
+    const usage = user.usage;
+    const actions = user.admin ? '<span class="muted">Admin</span>' : `<span class="adm-actions">
+        <button class="panel-btn" onclick="grantRuns('${user.id}')" title="Give ${grant} more runs for today">+${grant} today</button>
+        <button class="panel-btn" onclick="setDisabled('${user.id}', ${!user.disabled})">${user.disabled ? 'Turn on' : 'Turn off'}</button>
+        <button class="danger-btn" onclick="deleteUser('${user.id}')">${ADMIN.confirm === user.id ? 'Confirm delete' : 'Delete'}</button>
+      </span>`;
+    return `<tr><td>${esc(user.name)}</td><td class="mk-left">${esc(user.email)}</td><td>${fmtDate(user.created)}</td>
+      <td>${usage ? `${usage.runs} / ${usage.allowance}` : 'No limit'}</td><td>${user.active_jobs || ''}</td>
+      <td class="mk-left">${user.disabled ? '<span class="adm-off">Off</span>' : 'Active'}</td><td>${actions}</td></tr>`;
+  }).join('');
+}
+
+async function adminAction(url, body, done, method = 'POST') {
+  try {
+    await adminJSON(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    setOptMsg('#adm-msg', done);
+  } catch (err) { setOptMsg('#adm-msg', err.message, true); }
+  loadAdmin();
+}
+
+function answerRequest(id, action) {
+  const grant = Number($(`#adm-grant-${id}`).value);
+  adminAction(`/api/admin/requests/${id}`, { action, grant },
+              action === 'accept' ? `Granted ${grant} more runs for today.` : 'Request declined.');
+}
+
+function grantRuns(uid) {
+  adminAction(`/api/admin/users/${uid}`, { grant: ADMIN.data.grant_default },
+              `Granted ${ADMIN.data.grant_default} more runs for today.`);
+}
+
+function setDisabled(uid, disabled) {
+  adminAction(`/api/admin/users/${uid}`, { disabled }, disabled ? 'Account turned off.' : 'Account turned on.');
+}
+
+// First click arms the button for a few seconds; the second deletes.
+function deleteUser(uid) {
+  if (ADMIN.confirm !== uid) {
+    ADMIN.confirm = uid;
+    renderAdmin();
+    setTimeout(() => { if (ADMIN.confirm === uid) { ADMIN.confirm = ''; renderAdmin(); } }, 4000);
+    return;
+  }
+  ADMIN.confirm = '';
+  adminAction(`/api/admin/users/${uid}`, { confirm: 'DELETE' }, 'Account and its data deleted.', 'DELETE');
+}
+
+async function signOut() {
+  await rawFetch('/api/logout', { method: 'POST' }).catch(() => {});
+  location.href = '/login';
+}
+
+/* Options ------------------------------------------------------------------- */
+
+const OPT = { tab: 'account', opener: null, confirm: null };
+
+function openOptions(tab = OPT.tab) {
+  OPT.opener = document.activeElement;
+  loadAccount();      // fresh runs-today count
+  closeConfirm();
+  fillAccountForm();
+  setOptMsg('#acc-msg', '');
+  $('#opt-search').value = '';
+  $('#opt-backdrop').classList.remove('hidden');
+  showOptTab(tab);
+  $('#opt-search').focus();
+}
+
+function closeOptions() {
+  $('#opt-backdrop').classList.add('hidden');
+  if (OPT.opener && OPT.opener.focus) OPT.opener.focus();
+}
+
+function showOptTab(tab) {
+  OPT.tab = tab;
+  $('#opt-search').value = '';
+  searchOptions();
+  if (tab === 'data') loadDataSummary();
+}
+
+// An empty query shows the selected tab; a query shows every matching row
+// across all sections, with the tab highlight cleared.
+function searchOptions() {
+  const query = $('#opt-search').value.trim().toLowerCase();
+  let matches = 0;
+  document.querySelectorAll('.opt-pane').forEach(pane => {
+    let visible = 0;
+    pane.querySelectorAll('.opt-row').forEach(row => {
+      const text = (row.textContent + ' ' + (row.dataset.search || '')).toLowerCase();
+      const show = !query || text.includes(query);
+      row.classList.toggle('hidden', !show);
+      if (show) visible += 1;
+    });
+    const shown = query ? visible > 0 : pane.dataset.pane === OPT.tab;
+    pane.classList.toggle('hidden', !shown);
+    if (shown) matches += visible;
+  });
+  document.querySelectorAll('.opt-tabs button').forEach(button =>
+    button.classList.toggle('active', !query && button.dataset.tab === OPT.tab));
+  $('#opt-empty').classList.toggle('hidden', !query || matches > 0);
+  if (query && !$('.opt-pane[data-pane="data"]').classList.contains('hidden')) loadDataSummary();
+}
+
+async function loadDataSummary() {
+  try {
+    const { items } = await (await fetch('/api/recent')).json();
+    const charts = items.reduce((sum, item) => sum + item.charts.length, 0);
+    $('#data-summary').textContent = items.length
+      ? `${items.length} ticker(s), ${charts} chart(s), stored only on this machine.`
+      : 'Nothing stored yet.';
+    return items;
+  } catch {
+    $('#data-summary').textContent = 'Could not read stored results.';
+    return [];
+  }
+}
+
+const CONFIRMS = {
+  data: {
+    title: 'Remove all data?',
+    button: 'Remove all data',
+    text: 'This permanently deletes everything Stocky stored for you on this machine:',
+    list: count => [
+      `${count} ticker(s): charts, CSVs, valuation, insider trades and logs`,
+      'any queued or running job (it is stopped first)',
+      'Your account and settings stay. This cannot be undone.',
+    ],
+  },
+  account: {
+    title: 'Delete your account?',
+    button: 'Delete account',
+    password: true,
+    text: 'This permanently deletes, from this machine:',
+    list: count => [
+      `your account (${ACCOUNT ? ACCOUNT.name + ', ' + ACCOUNT.email : 'name and email'})`,
+      `all of your data: ${count} ticker(s) and every queued or running job`,
+      'You will be signed out. This cannot be undone.',
+    ],
+  },
+};
+
+async function openConfirm(kind) {
+  const config = CONFIRMS[kind];
+  OPT.confirm = kind;
+  $('#opt-top').classList.add('hidden');
+  $('#opt-main').classList.add('hidden');
+  $('#opt-confirm').classList.remove('hidden');
+  $('#confirm-title').textContent = config.title;
+  $('#confirm-text').textContent = config.text;
+  $('#confirm-btn').textContent = config.button;
+  $('#confirm-pass-row').classList.toggle('hidden', !config.password);
+  $('#confirm-pass').value = '';
+  $('#confirm-input').value = '';
+  $('#confirm-msg').textContent = '';
+  $('#confirm-list').innerHTML = config.list('…').map(item => `<li>${esc(item)}</li>`).join('');
+  syncConfirm();
+  (config.password ? $('#confirm-pass') : $('#confirm-input')).focus();
+  const items = await loadDataSummary();
+  if (OPT.confirm === kind) {
+    $('#confirm-list').innerHTML = config.list(items.length).map(item => `<li>${esc(item)}</li>`).join('');
+  }
+}
+
+function closeConfirm() {
+  OPT.confirm = null;
+  $('#opt-confirm').classList.add('hidden');
+  $('#opt-top').classList.remove('hidden');
+  $('#opt-main').classList.remove('hidden');
+}
+
+function syncConfirm() {
+  const config = CONFIRMS[OPT.confirm];
+  const typed = $('#confirm-input').value.trim() === 'DELETE';
+  $('#confirm-btn').disabled = !typed || (config && config.password && !$('#confirm-pass').value);
+}
+
+async function runConfirm() {
+  const kind = OPT.confirm;
+  if (!kind) return;
+  $('#confirm-btn').disabled = true;
+  $('#confirm-msg').textContent = '';
+  const body = { confirm: 'DELETE' };
+  if (kind === 'account') body.password = $('#confirm-pass').value;
+  try {
+    const res = await rawFetch(kind === 'account' ? '/api/account' : '/api/data', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not delete.');
+    if (kind === 'account') { location.href = '/login'; return; }
+    // Everything is gone server-side: drop it from the page too.
+    setGraph('');
+    resetUi();
+    closeConfirm();
+    showOptTab('data');
+  } catch (err) {
+    $('#confirm-msg').textContent = err.message;
+    syncConfirm();
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !$('#dl-backdrop').classList.contains('hidden')) { closeDownload(); return; }
+  const maxed = $('.chart-fig.is-max .fig-max');
+  if (e.key === 'Escape' && maxed && $('#opt-backdrop').classList.contains('hidden')) { toggleChartMax(maxed, false); return; }
+  if (e.key !== 'Escape' || $('#opt-backdrop').classList.contains('hidden')) return;
+  if (OPT.confirm) closeConfirm();
+  else closeOptions();
+});
+
+/* Cached-charts bar ---------------------------------------------------------- */
+
+const DROPBAR = { timer: null };
+
+function showCachedBar(ticker, generated) {
+  const bar = $('#dropbar');
+  clearInterval(DROPBAR.timer);
+  const time = new Date(generated);
+  const at = Number.isNaN(time.getTime()) ? 'earlier today'
+    : `today at ${time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  $('#dropbar-text').innerHTML = `<b>${esc(ticker)}</b> charts were generated ${esc(at)}. Showing the cached copy.`;
+  $('#dropbar-fresh').onclick = () => { closeDropbar(); runTicker(ticker, { fresh: true }); };
+  let left = 3;
+  $('#dropbar-count').textContent = `closes in ${left}s`;
+  bar.classList.remove('open');
+  void bar.offsetWidth;  // restart the progress animation
+  bar.classList.add('open');
+  DROPBAR.timer = setInterval(() => {
+    left -= 1;
+    if (left <= 0) closeDropbar();
+    else $('#dropbar-count').textContent = `closes in ${left}s`;
+  }, 1000);
+}
+
+function closeDropbar() {
+  clearInterval(DROPBAR.timer);
+  DROPBAR.timer = null;
+  $('#dropbar').classList.remove('open');
+}
+
+/* Ticker suggestions ---------------------------------------------------------- */
+
+const SUGGESTIONS = [
+  'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOG', 'META', 'TSLA', 'BRK.B', 'JPM', 'V', 'MA', 'KO', 'PEP',
+  'COST', 'WMT', 'HD', 'MCD', 'NKE', 'DIS', 'NFLX', 'ADBE', 'CRM', 'ORCL', 'INTC', 'AMD', 'QCOM',
+  'TXN', 'IBM', 'CSCO', 'PG', 'JNJ', 'PFE', 'MRK', 'ABBV', 'LLY', 'UNH', 'CVX', 'XOM', 'CAT', 'DE',
+  'BA', 'GE', 'HON', 'UPS', 'LMT', 'T', 'VZ', 'SBUX', 'TGT', 'LOW', 'BKNG', 'PYPL', 'UBER', 'GS',
+  'MS', 'BAC', 'BLK', 'MMM', 'F', 'GM',
+];
+// Foreign filers (20-F / 40-F): every placeholder names one of them too.
+const FOREIGN_SUGGESTIONS = [
+  'TSM', 'SAP', 'ASML', 'TM', 'SONY', 'NVO', 'SHEL', 'BABA', 'AZN', 'NVS', 'UL', 'HSBC', 'BP',
+  'RY', 'TD', 'INFY', 'BHP', 'TTE', 'SNY', 'DEO',
+];
+
+function shuffled(list) {
+  const pool = list.slice();
+  for (let i = pool.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool;
+}
+
+function suggestTickers() {
+  const picks = [...shuffled(SUGGESTIONS).slice(0, 3), shuffled(FOREIGN_SUGGESTIONS)[0]];
+  $('#ticker').placeholder = `Try ${shuffled(picks).join(', ')}`;
+}
+
+/* Logs tab ------------------------------------------------------------------ */
+// The terminal icon in the tab row (/#logs; the live status badges open it
+// too): the whole log of one run, timestamped and polled while it runs.
+const LOGS = { ticker: '', timer: null, text: '' };
+const logsTicker = () => LOGS.ticker || ACTIVE_TICKER || GRAPH.ticker;
+
+// The run log, coloured: the time dim, successes green, warnings red. The
+// view follows the end unless you scrolled up to read.
+function setTermLog(text, ticker = GRAPH.ticker) {
+  if (ticker !== logsTicker() || text === LOGS.text) return;
+  LOGS.text = text;
+  const body = $('#term-body');
+  const atEnd = body.scrollTop + body.clientHeight >= body.scrollHeight - 40;
+  $('#term-log').innerHTML = String(text).split('\n').map(line => {
+    const match = line.match(/^(\d\d:\d\d:\d\d )?(.*)$/);
+    const rest = match[2];
+    const cls = /\[!\]|error|Traceback|failed/i.test(rest) ? 'term-warn' : /\[\+\]/.test(rest) ? 'term-ok' : '';
+    return (match[1] ? `<span class="term-dim">${match[1]}</span>` : '') + (cls ? `<span class="${cls}">${esc(rest)}</span>` : esc(rest));
+  }).join('\n');
+  if (atEnd) body.scrollTop = body.scrollHeight;
+}
+
+function openLogs(ticker = '') {
+  if (ticker) LOGS.ticker = ticker;
+  showTab('logs');
+  window.scrollTo({ top: 0, behavior: 'auto' });
+}
+
+async function initLogs() {
+  if (!LOGS.ticker) LOGS.ticker = ACTIVE_TICKER || GRAPH.ticker;
+  try {
+    const res = await fetch('/api/recent');
+    const items = res.ok ? (await res.json()).items || [] : [];
+    const tickers = [...new Set([LOGS.ticker, ACTIVE_TICKER, GRAPH.ticker, ...items.map(item => item.ticker)].filter(Boolean))];
+    $('#logs-run').innerHTML = tickers.length
+      ? tickers.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('') : '<option value="">No runs yet</option>';
+    $('#logs-run').value = LOGS.ticker || '';
+  } catch { /* the log still loads */ }
+  loadLogs();
+}
+
+function setLogsTicker(ticker) {
+  LOGS.ticker = ticker;
+  LOGS.text = '';
+  $('#term-log').textContent = '';
+  loadLogs();
+}
+
+async function loadLogs() {
+  clearTimeout(LOGS.timer);
+  const ticker = logsTicker();
+  if (!ticker) {
+    $('#logs-meta').textContent = 'No run yet. Run a ticker and its log shows here.';
+    $('#logs-state').innerHTML = '';
+    return;
+  }
+  try {
+    const res = await fetch(`/api/status/${encodeURIComponent(ticker)}?full=1`);
+    const job = await res.json();
+    if (ticker !== logsTicker()) return;
+    const live = job.status === 'queued' || job.status === 'running';
+    const cls = job.status === 'cancelled' ? 'idle' : job.status;
+    $('#logs-state').innerHTML = `<span class="badge ${esc(cls)}">${esc(job.status)}</span>`;
+    $('#logs-meta').textContent = live ? `${ticker}: the log updates as the run goes.`
+      : job.status === 'idle' ? `${ticker} has not been run yet.` : `${ticker}: the last run's log.`;
+    setTermLog(job.log || (job.status === 'queued' ? 'Waiting for the run before it to finish…'
+      : 'No log saved for this run.'), ticker);
+    if (job.error) setTermLog(`${job.log || ''}\nerror: ${job.error}`, ticker);
+    // Poll while it runs and the tab is open.
+    if (live && !$('#pane-logs').classList.contains('hidden')) LOGS.timer = setTimeout(loadLogs, 1500);
+  } catch {
+    $('#logs-meta').textContent = 'Could not reach the server.';
+  }
+}
+
+function downloadLog() {
+  const ticker = logsTicker();
+  if (ticker) location.href = `/download/${encodeURIComponent(ticker)}/run.log`;
+}
+
+/* Charts tab --------------------------------------------------------------- */
+
+function setGraph(ticker) {
+  GRAPH.ticker = ticker;
+  GRAPH.state = '';
+  try {
+    if (ticker) localStorage.setItem('stocky-graph', ticker);
+    else localStorage.removeItem('stocky-graph');
+  } catch {}
+  $('#results-graph').innerHTML = '';
+  $('#chart-index').innerHTML = chartIndex([]);
+  $('#calc-checks').innerHTML = '';
+  CHECKS.key = '';
+  GRAPH.results = null;
+  setGraphProgress('');
+  setTermLog('');
+  renderGraph();
+  if (!ticker) syncHash('replace');
+  if (!$('#pane-home').classList.contains('hidden')) initHome();
+}
+
+function renderGraph() {
+  const { ticker, state } = GRAPH;
+  // The log lives in the Logs tab; the progress line under the header shows
+  // its latest line (or the error) and links there.
+  $('#graph-empty').classList.toggle('hidden', !!ticker);
+  for (const id of ['#graph-download-btn', '#graph-refresh-btn']) $(id).hidden = !ticker;
+  // A new run makes the shown calculation check stale: drop it until the run is done.
+  if (state === 'queued' || state === 'running') {
+    CHECKS.key = '';
+    $('#calc-checks').innerHTML = '';
+  }
+  const cls = state === 'cancelled' ? 'idle' : state;
+  const live = state === 'queued' || state === 'running';
+  // A live badge opens the run's log, like the one in the header.
+  $('#graph-state').innerHTML = ticker && state && state !== 'done'
+    ? (live ? `<a class="badge ${esc(cls)} badge-link" href="#logs" title="Open the log"
+         onclick="openLogs('${esc(ticker)}');return false">${esc(state)}</a>`
+      : `<span class="badge ${esc(cls)}">${esc(state)}</span>`) : '';
+  renderHome();
+}
+
+function setGraphProgress(text, isError = false) {
+  const line = $('#graph-progress');
+  const link = text && GRAPH.ticker
+    ? ` <a href="#logs" onclick="openLogs('${esc(GRAPH.ticker)}');return false">Open the log</a>` : '';
+  line.innerHTML = text ? esc(text) + link : '';
+  line.classList.toggle('is-error', isError);
+}
+
+function downloadGraph() {
+  openDownload('graph');
+}
+
+function openGraph(ticker) {
+  if (ticker !== GRAPH.ticker) setGraph(ticker);
+  showTab('graph');
+  refreshGraph();
+  window.scrollTo({ top: 0, behavior: SMOOTH });
+}
+
+function showGraphJob(job) {
+  GRAPH.state = job.status;
+  renderGraph();
+  if (job.log) setTermLog(job.log);
+  const live = job.status === 'queued' || job.status === 'running';
+  if (live) {
+    const lines = String(job.log || '').split('\n').map(line => line.trim()).filter(Boolean);
+    setGraphProgress(lines.length ? lines[lines.length - 1] : `${job.status}…`);
+  } else if (job.status === 'error') {
+    setGraphProgress(`error: ${job.error || 'the pipeline failed; open the log for details'}`, true);
+  } else if (job.status === 'idle') {
+    setGraphProgress(`No results for ${job.ticker || GRAPH.ticker} yet. Press Run to generate them.`);
+  } else {
+    setGraphProgress('');
+  }
+}
+
+async function refreshGraph() {
+  const ticker = GRAPH.ticker;
+  if (!ticker) return;
+  try {
+    const job = await (await fetch(`/api/status/${encodeURIComponent(ticker)}`)).json();
+    if (ticker !== GRAPH.ticker) return;
+    showGraphJob(job);
+    if (job.status === 'queued' || job.status === 'running') {
+      LIVE[ticker] = job.status;
+      pickActive();
+      if (ticker === ACTIVE_TICKER) setStatus(job.status, job.status);
+      poll(ticker);
+    } else if (job.status !== 'idle') {
+      loadGraph(ticker);
+    }
+  } catch {
+    if (ticker !== GRAPH.ticker) return;
+    GRAPH.state = 'error';
+    renderGraph();
+    setGraphProgress('Could not reach the server.', true);
+  }
+}
+
+async function loadGraph(ticker) {
+  if (ticker === GRAPH.ticker) loadHomeInsiders(ticker);
+  await Promise.all([loadResults(ticker), loadScreenerData()]);
+}
+
+// Every graph run produces screener data too; keep the Screener tab current.
+async function loadScreenerData() {
+  try {
+    const res = await fetch('/api/screener');
+    const data = await res.json();
+    if (!res.ok) return;
+    SCREEN.items = Array.isArray(data.items) ? data.items : [];
+    SCREEN.pipeline = data.pipeline || null;
+    renderScreener();
+    renderHome();
+  } catch { /* the charts still render without it */ }
+}
+
+/* Home -------------------------------------------------------------------- */
+
+// Overview of the pinned ticker: its numbers, where it sits in the screener
+// ranking, every chart as a thumbnail, then a few headlines and insider trades.
+const NEWS_TOPICS = { stock: 'Stock', sector: 'Sector', market: 'Market' };
+const HOME = { news: null, newsTicker: '', newsError: '', insiders: null, insiderTicker: '' };
+
+function initHome(force = false) {
+  const ticker = GRAPH.ticker;
+  renderHome();
+  if (!ticker) return;
+  if (force) refreshGraph();
+  else if (!SCREEN.items.length) loadScreenerData();
+  if (force || HOME.newsTicker !== ticker) loadHomeNews(ticker, force);
+  if (force || HOME.insiderTicker !== ticker) loadHomeInsiders(ticker);
+}
+
+// The five most recent insider trades; '' data means none collected yet.
+// Home and the run's results both ask on page load: a second call for the
+// same ticker while one is in flight shares it instead of fetching again.
+function loadHomeInsiders(ticker) {
+  if (HOME.insiderLoading && HOME.insiderLoading.ticker === ticker) return HOME.insiderLoading.done;
+  HOME.insiderTicker = ticker;
+  HOME.insiders = null;
+  renderHome();
+  const done = (async () => {
+    try {
+      const res = await fetch(`/api/insiders/${encodeURIComponent(ticker)}`);
+      const data = res.ok ? await res.json() : { transactions: [], missing: true };
+      if (ticker !== HOME.insiderTicker) return;
+      HOME.insiders = data;
+    } catch {
+      if (ticker !== HOME.insiderTicker) return;
+      HOME.insiders = { transactions: [], failed: true };
+    } finally {
+      if (HOME.insiderLoading && HOME.insiderLoading.done === done) HOME.insiderLoading = null;
+    }
+    renderHome();
+  })();
+  HOME.insiderLoading = { ticker, done };
+  return done;
+}
+
+async function loadHomeNews(ticker, fresh = false) {
+  HOME.newsTicker = ticker;
+  HOME.news = null;
+  HOME.newsError = '';
+  renderHome();
+  try {
+    const res = await fetch(`/api/news/${encodeURIComponent(ticker)}?${newsQuery()}&scope=market${fresh ? '&fresh=1' : ''}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || data.message || 'News unavailable.');
+    if (ticker !== HOME.newsTicker) return;
+    HOME.news = data;
+  } catch (err) {
+    if (ticker !== HOME.newsTicker) return;
+    HOME.newsError = err.message;
+  }
+  renderHome();
+}
+
+function renderHome() {
+  const ticker = GRAPH.ticker;
+  $('#home-empty').classList.toggle('hidden', !!ticker);
+  $('#home-main').classList.toggle('hidden', !ticker);
+  if (!ticker) {
+    $('#home-ticker').textContent = '';
+    $('#home-company').textContent = '';
+    return;
+  }
+  const news = HOME.newsTicker === ticker ? HOME.news : null;
+  $('#home-ticker').textContent = ticker;
+  const row = SCREEN.items.find(item => item.ticker === ticker);
+  const name = news ? (news.name || news.company) : '';
+  $('#home-company').innerHTML = parts([name && name !== ticker ? name : '',
+    row && row.modified ? `last run ${fmtDate(row.modified)}` : '']);
+
+  // Key numbers: this company only.
+  const stat = (label, value, key) => `<div class="stat"${tip(key)}><span>${label}</span><b>${value}</b></div>`;
+  const ranked = SCREEN.items.filter(item => item.greenblatt_rank).sort((a, b) => a.greenblatt_rank - b.greenblatt_rank);
+  if (!row) {
+    $('#home-stats').innerHTML = '<p class="muted">No numbers yet; they appear when the run finishes.</p>';
+  } else if (row.has_evaluation === false) {
+    $('#home-stats').innerHTML = `<p class="muted">No valuation data for ${esc(ticker)}: usually Yahoo prices were
+      unreachable. Open its log in the Logs tab and look for <code>[!] valuation skipped</code>.</p>`;
+  } else {
+    $('#home-stats').innerHTML = `<div class="home-stats">
+      ${stat('FY', esc(row.fiscal_year ?? '—'), 'fiscal_year')}
+      ${stat('F-score', scoreCell(row.f_score, 7, 3), 'f_score')}
+      ${stat('Z-score', scoreCell(row.z_score, 2.99, 1.81), 'z_score')}
+      ${stat('P/E', fmtNum(row.pe, 1), 'pe')}
+      ${stat('EV/EBIT', fmtNum(row.ev_ebit, 1), 'ev_ebit')}
+      ${stat('Earnings yield', fmtRatio(row.earnings_yield), 'earnings_yield')}
+      ${stat('Return on capital', fmtRatio(row.return_on_capital), 'return_on_capital')}
+      ${stat('Magic rank', row.greenblatt_rank ? `#${row.greenblatt_rank} of ${ranked.length}` : '—', 'greenblatt_rank')}
+      ${stat('FCF yield', fmtRatio(row.fcf_yield), 'fcf_yield')}
+      ${stat('P/E pct', fmtPctPoints(row.pe_percentile), 'pe_percentile')}
+    </div>`;
+  }
+
+  // Ranking: two above, the company, two below. Names only, no numbers.
+  const at = ranked.findIndex(item => item.ticker === ticker);
+  $('#home-rank').innerHTML = at < 0
+    ? '<li class="muted">Not ranked yet: the Magic Formula rank needs valuation data.</li>'
+    : ranked.slice(Math.max(0, at - 2), at + 3).map(item => item.ticker === ticker
+      ? `<li class="me"><span class="r">#${item.greenblatt_rank}</span><span>${esc(item.ticker)}</span></li>`
+      : `<li><span class="r">#${item.greenblatt_rank}</span><a href="#" onclick="openHome('${esc(item.ticker)}');return false">${esc(item.ticker)}</a></li>`
+    ).join('');
+
+  // News: the top five about the stock, its sector and the market (company
+  // news such as products stays in the News tab).
+  const articles = news && Array.isArray(news.articles) ? news.articles.slice(0, 5) : [];
+  $('#home-news-status').textContent = HOME.newsTicker !== ticker || (!news && !HOME.newsError)
+    ? 'Looking for articles…'
+    : HOME.newsError || (articles.length ? '' : `No articles in the last ${news.days} days.`);
+  $('#home-news').innerHTML = articles.map(a => `<li>
+      <a href="${esc(a.link)}" target="_blank" rel="noopener noreferrer">${esc(a.title)}</a>
+      <div class="news-meta parts">${parts([NEWS_TOPICS[a.topic], a.source, fmtAgo(a.published)])}</div>
+    </li>`).join('');
+
+  // Insider trades: the latest five, newest first.
+  const ins = HOME.insiderTicker === ticker ? HOME.insiders : null;
+  const trades = ins && Array.isArray(ins.transactions) ? ins.transactions.slice(0, 5) : [];
+  $('#home-insider-status').textContent = !ins ? 'Loading insider trades…'
+    : ins.failed ? 'Could not load insider trades.'
+    : ins.missing ? 'No insider data yet; it is collected when the run finishes.'
+    : ins.error ? `Insider trades could not be collected (${ins.error}); run ${ticker} again.`
+    : ins.skipped ? `${ins.skipped} Form 4 filing${ins.skipped === 1 ? '' : 's'} could not be read; trades may be missing.`
+    : trades.length ? '' : 'No open-market insider trades in the collected period.';
+  $('#home-insiders').innerHTML = trades.map(insiderRow).join('');
+
+  // Charts: one small thumbnail per chart (its last five years); a click
+  // opens that chart in the Charts tab. Redrawn only when the run or the
+  // theme changes, not on every Home update.
+  const data = GRAPH.results && GRAPH.results.ticker === ticker ? GRAPH.results : null;
+  const live = GRAPH.state === 'queued' || GRAPH.state === 'running';
+  const spec = data && EC.spec && EC.key === `${data.ticker}|${data.modified}` ? EC.spec : null;
+  const home = $('#home-charts');
+  const key = spec ? `${EC.key}|${document.documentElement.dataset.theme}` : `none|${live}|${data ? data.charts.length : -1}`;
+  if (home.dataset.key !== key) {
+    home.dataset.key = key;
+    disposeCharts(home);
+    home.innerHTML = spec
+      ? spec.charts.map(chart => `<figure onclick="openChart('${esc(chartId(chart.id))}')" title="Open in the Charts tab">
+          <div class="ec-mini" data-chart="${esc(chart.id)}" data-panel="0"></div>
+          <figcaption><span>${esc(chart.name)}</span>${chartIssueCount(chart) ? `<span class="ec-warn-mini" title="${esc(chartIssueLine(chart))}">${chartIssueCount(chart)} data ${chartIssueCount(chart) === 1 ? 'issue' : 'issues'}</span>` : ''}</figcaption>
+        </figure>`).join('')
+      : `<p class="muted">${data && data.charts.length ? 'Loading charts…' : live ? 'Charts appear when the run finishes.' : 'No charts for this ticker yet.'}</p>`;
+    if (spec) mountCharts(home, spec.charts, { mini: true });
+  }
+}
+
+function openHome(ticker) {
+  if (ticker !== GRAPH.ticker) setGraph(ticker);
+  showTab('home');
+  refreshGraph();
+}
+
+function openChart(id) {
+  showTab('graph');
+  scrollToChart(id);
+}
+
+// Centre a chart in the space under the sticky header, or, when it is taller
+// than that space, line its top up just below the header. Once its image has
+// loaded (its height may change) it is placed again.
+function scrollToChart(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const place = behavior => {
+    const header = $('.topbar').getBoundingClientRect().bottom;
+    const room = window.innerHeight - header;
+    const box = el.getBoundingClientRect();
+    const gap = Math.max(12, (room - box.height) / 2);
+    window.scrollTo({ top: window.scrollY + box.top - header - gap, behavior });
+  };
+  place(SMOOTH);
+  const img = el.querySelector('img');
+  if (img && !img.complete) img.addEventListener('load', () => place(SMOOTH), { once: true });
+}
+
+/* ------------------------------------------------------------------------ */
+
+// Edge fades on the tab strip, only where more tabs are hidden.
+function syncTabFades() {
+  const tabs = $('.tabs');
+  const max = tabs.scrollWidth - tabs.clientWidth;
+  tabs.classList.toggle('more-left', tabs.scrollLeft > 2);
+  tabs.classList.toggle('more-right', tabs.scrollLeft < max - 2);
+}
+
+// The URL names the open tab and the pinned ticker (#charts/AAPL), so Back,
+// Forward, reload and bookmarks land where you were. The pane ids stay internal.
+const TAB_SLUGS = { home: 'home', graph: 'charts', insiders: 'insiders', recent: 'recent',
+                    screener: 'screener', simulation: 'simulation', news: 'news', market: 'market', logs: 'logs',
+                    admin: 'admin' };
+
+function parseHash() {
+  const [slug = '', raw = ''] = decodeURIComponent(location.hash.slice(1)).split('/');
+  const tab = Object.keys(TAB_SLUGS).find(key => TAB_SLUGS[key] === slug.toLowerCase()) || '';
+  const ticker = raw.toUpperCase();
+  return { tab, ticker: TICKER_RE.test(ticker) ? ticker : '' };
+}
+
+function currentTab() {
+  return Object.keys(TAB_SLUGS).find(tab => !$(`#pane-${tab}`).classList.contains('hidden')) || 'home';
+}
+
+// 'push' adds a history entry, 'replace' rewrites the current one.
+function syncHash(mode, name = currentTab()) {
+  const hash = `#${TAB_SLUGS[name]}${GRAPH.ticker ? `/${GRAPH.ticker}` : ''}`;
+  if (location.hash === hash) return;
+  history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', hash);
+}
+
+// Back and Forward: reopen the tab and re-pin the ticker the entry names.
+window.addEventListener('popstate', () => {
+  const { tab, ticker } = parseHash();
+  if (ticker && ticker !== GRAPH.ticker) { setGraph(ticker); refreshGraph(); }
+  showTab(tab || PREFS.tab, { history: 'replace' });
+});
+
+function showTab(name, { history: mode = 'push' } = {}) {
+  if (!IS_ADMIN && ADMIN_TABS.includes(name)) name = 'home';
+  for (const tab of ['home', 'graph', 'insiders', 'recent', 'screener', 'simulation', 'news', 'market', 'logs', 'admin']) {
+    const active = tab === name;
+    $(`#pane-${tab}`).classList.toggle('hidden', !active);
+    $(`#tab-${tab}`)?.classList.toggle('active', active);
+  }
+  // Slide the strip (horizontally only) so the selected tab is visible.
+  const tabs = $('.tabs');
+  const button = $(`#tab-${name}`);
+  if (tabs.contains(button) && (button.offsetLeft < tabs.scrollLeft
+      || button.offsetLeft + button.offsetWidth > tabs.scrollLeft + tabs.clientWidth)) {
+    tabs.scrollTo({ left: button.offsetLeft - 8, behavior: SMOOTH });
+  }
+  if (name === 'home') initHome();
+  if (name === 'recent') loadRecent();
+  if (name === 'insiders') initInsiders();
+  if (name === 'screener') loadScreener();
+  if (name === 'simulation') initSimulation();
+  if (name === 'news') initNews();
+  if (name === 'market') loadMarket();
+  else clearTimeout(MARKET.timer);
+  if (name === 'logs') initLogs();
+  else clearTimeout(LOGS.timer);
+  if (name === 'admin') loadAdmin();
+  syncHash(mode, name);
+}
+
+// "done" shows for 10 s, then the badge settles back to idle.
+let STATUS_TIMER = null;
+
+function setStatus(text, cls) {
+  clearTimeout(STATUS_TIMER);
+  if (cls === 'done') STATUS_TIMER = setTimeout(() => setStatus('idle', 'idle'), 10000);
+  const live = cls === 'queued' || cls === 'running';
+  const badge = live
+    ? `<span class="badge ${cls} badge-link" role="button" tabindex="0" title="Open the log of this run" onclick="gotoActive()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();gotoActive();}">${text}</span>`
+    : `<span class="badge ${cls}">${text}</span>`;
+  const status = $('#status');
+  status.innerHTML = badge;
+  status.dataset.ticker = live ? ACTIVE_TICKER : '';
+}
+
+// A live badge opens the log of that run in the Logs tab, shown or not.
+function gotoActive() {
+  const ticker = $('#status').dataset.ticker || ACTIVE_TICKER;
+  if (!ticker) return;
+  ACTIVE_TICKER = ticker;
+  openLogs(ticker);
+}
+
+// The run form's filings: a number, or 'max' for every annual filing.
+function runFilings() {
+  const value = $('#filings').value;
+  return value === 'max' ? value : Number(value);
+}
+
+async function runTicker(rawTicker, { fresh = false } = {}) {
+  const ticker = String(rawTicker || $('#ticker').value).trim().toUpperCase();
+  if (!ticker) return;
+  $('#ticker').value = ticker;
+  LIVE[ticker] = 'queued';
+  ACTIVE_TICKER = ticker;
+  // The Logs tab follows the new run.
+  LOGS.ticker = ticker;
+  LOGS.text = '';
+  const filings = runFilings();
+  $('#run-btn').disabled = true;
+  setGraph(ticker);
+  GRAPH.state = 'queued';
+  renderGraph();
+  setStatus('queued', 'queued');
+  showTab('home');
+  setGraphProgress('starting pipeline…');
+  setTermLog(`$ stocky run ${ticker} --filings ${filings}\nstarting pipeline…`);
+  try {
+    const res = await fetch('/api/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker, filings, fresh }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || data.message || 'Request failed');
+    $('#run-btn').disabled = false;
+    if (data.status === 'cached') {
+      // Generated today with the same filings: show those, offer a fresh run.
+      delete LIVE[ticker];
+      pickActive();
+      setStatus('idle', 'idle');
+      refreshGraph();
+      showCachedBar(ticker, data.generated);
+      return;
+    }
+    poll(ticker);
+  } catch (err) {
+    setStatus('error', 'error');
+    $('#run-btn').disabled = false;
+    if (ticker !== GRAPH.ticker) return;
+    GRAPH.state = 'error';
+    renderGraph();
+    setGraphProgress(`error: ${err.message}`, true);
+    setTermLog(`$ stocky run ${ticker} --filings ${filings}\nerror: ${err.message}`);
+  }
+}
+
+function poll(ticker) {
+  LIVE[ticker] = LIVE[ticker] || 'queued';
+  pickActive();
+  clearTimeout(POLL_TIMERS[ticker]);
+  POLL_TIMERS[ticker] = setTimeout(async () => {
+    try {
+      const job = await (await fetch(`/api/status/${ticker}`)).json();
+      LIVE[ticker] = job.status;
+      pickActive();
+      if (ticker === ACTIVE_TICKER) setStatus(job.status, job.status);
+      const pinned = ticker === GRAPH.ticker;
+      if (pinned) showGraphJob(job);
+      if (job.status === 'done') {
+        delete LIVE[ticker];
+        pickActive();
+        $('#run-btn').disabled = false;
+        if (pinned) loadGraph(ticker);
+      } else if (job.status === 'error' || job.status === 'cancelled') {
+        delete LIVE[ticker];
+        pickActive();
+        $('#run-btn').disabled = false;
+        if (job.status === 'cancelled') {
+          setStatus('cancelled', 'idle');
+        }
+        if (pinned && job.error) setTermLog((job.log ? job.log + '\n' : '') + `error: ${job.error}`);
+        if (pinned) loadGraph(ticker);
+      } else {
+        poll(ticker);
+      }
+    } catch (err) {
+      delete LIVE[ticker];
+      pickActive();
+      if (ticker === ACTIVE_TICKER) setStatus('error', 'error');
+      $('#run-btn').disabled = false;
+    }
+  }, 2000);
+}
+
+async function loadResults(ticker, target = '#results-graph') {
+  const res = await fetch(`/api/files/${encodeURIComponent(ticker)}`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    if (ticker === GRAPH.ticker) renderResultsError(ticker, data, target);
+    return;
+  }
+  const data = await res.json();
+  if (ticker === GRAPH.ticker) renderResults(data, target);
+}
+
+function renderResultsError(ticker, data, target) {
+  GRAPH.results = null;
+  const d = data.diagnostics || {};
+  const detail = [
+    d.graph_dir ? `reads: ${esc(d.graph_dir)}` : '',
+    d.exists === false ? 'the results directory does not exist' : '',
+    d.writable === false ? `not writable by uid ${esc(d.uid)}: the bind-mounted financial_graphs is probably root-owned; run: sudo chown -R 10001:10001 <host financial_graphs>` : '',
+    Array.isArray(d.tickers) && d.tickers.length ? `visible tickers: ${esc(d.tickers.join(', '))}` : 'no ticker folders visible',
+    data.ticker_dir ? `expected: ${esc(data.ticker_dir)}` : '',
+  ].filter(Boolean).join('; ');
+  $(target).innerHTML = `
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <strong>${esc(ticker)}: no results the app can see</strong>
+      </div>
+      <p class="muted">${esc(data.error || 'The run may have finished but its files are not visible to the app.')}</p>
+      ${detail ? `<p class="muted">${detail}</p>` : ''}
+      <p class="muted">Check <a href="/healthz" target="_blank">/healthz</a> for the same diagnostics.</p>
+    </div>`;
+}
+
+// The charts of the pinned run, drawn from its charts.json. A render that a
+// newer one overtook (a theme switch while loading) stops before drawing.
+let RENDER_TOKEN = 0;
+async function renderResults(data, target) {
+  const token = ++RENDER_TOKEN;
+  GRAPH.results = null;
+  $('#chart-index').innerHTML = chartIndex([]);
+  $('#calc-checks').innerHTML = '';
+  if (!data.charts.length) {
+    disposeCharts($(target));
+    $('#chart-search').hidden = true;
+    // A screener run writes the data but no charts.
+    $(target).innerHTML = `
+      <div class="card">
+        <div class="row" style="justify-content:space-between">
+          <strong>${esc(data.ticker)}: no charts yet</strong>
+          <button class="primary" onclick="runTicker('${esc(data.ticker)}')">Generate charts</button>
+        </div>
+        <p class="muted">Screener runs collect the data only. Generate charts runs the full pipeline.</p>
+      </div>`;
+    return;
+  }
+  GRAPH.results = data;
+  const [spec] = await Promise.all([loadSpec(data).catch(() => null), FONT_READY]);
+  if (token !== RENDER_TOKEN) return;
+  disposeCharts($(target));
+  if (!spec || !window.echarts) {
+    $(target).innerHTML = `<div class="card"><p class="muted">Could not load the charts of ${esc(data.ticker)}.
+      Refresh to try again.</p></div>`;
+    return;
+  }
+  const custom = EC.custom.filter(c => c.ticker === data.ticker);
+  $(target).innerHTML = `<div class="charts-full">${custom.map(c => figureHtml(c, true)).join('')}${spec.charts.map(c => figureHtml(c)).join('')}</div>`;
+  mountCharts($(target), [...custom, ...spec.charts]);
+  $('#chart-index').innerHTML = chartIndex();
+  watchIndex();
+  $('#chart-search').hidden = false;
+  loadChecks(data);
+  fillSearchYears(spec);
+  renderHome();
+}
+
+// One index line per chart; searched facts drawn as charts come first.
+// With no charts drawn the usual names stand in, greyed, so the rail keeps its shape.
+const CHART_NAMES = ['Income statement', 'Margins', 'Balance sheet', 'Debt and cash', 'Operating cash flow',
+                     'Financing cash flow', 'Returns', 'Valuation'];
+function chartIndex(charts = [...EC.custom.filter(c => c.ticker === GRAPH.ticker), ...(EC.spec?.charts || [])]) {
+  if (!charts.length) return `<ol aria-label="No charts yet">${CHART_NAMES.map(name => `<li><span class="is-off">${esc(name)}</span></li>`).join('')}</ol>`;
+  return `<ol>${charts.map(c => `<li><a href="#${chartId(c.id)}" onclick="jumpToChart(event, '${esc(chartId(c.id))}')">${esc(c.name)}</a></li>`).join('')}</ol>`;
+}
+
+// The index marks the chart crossing the middle of the screen.
+let INDEX_SPY = null;
+function watchIndex() {
+  if (INDEX_SPY) INDEX_SPY.disconnect();
+  INDEX_SPY = new IntersectionObserver(items => {
+    for (const item of items) {
+      if (!item.isIntersecting) continue;
+      for (const link of $('#chart-index').querySelectorAll('a')) {
+        link.setAttribute('aria-current', String(link.getAttribute('href') === '#' + item.target.id));
+      }
+    }
+  }, { rootMargin: '-45% 0px -50% 0px' });
+  for (const figure of $('#results-graph').querySelectorAll('.chart-fig')) INDEX_SPY.observe(figure);
+}
+
+// The sticky header's height, for the rail and the scroll offsets under it.
+new ResizeObserver(([entry]) => document.documentElement.style.setProperty(
+  '--topbar-h', `${Math.round(entry.borderBoxSize?.[0]?.blockSize || entry.target.offsetHeight)}px`,
+)).observe(document.querySelector('.topbar'));
+
+$('#chart-index').innerHTML = chartIndex([]);
+
+function jumpToChart(event, id) {
+  event.preventDefault();
+  scrollToChart(id);
+}
+
+/* Charts: ECharts ------------------------------------------------------------ */
+// The run's charts.json drawn in the page, to look like the matplotlib PNGs:
+// same colours, number formats, rounded bars with a surface-coloured gap,
+// faint horizontal grid, a zero line, value labels with a halo. One ECharts
+// instance per panel, made once its box has a width (a hidden tab has none).
+// The years slider under a chart scrolls through the whole history.
+const EC = { spec: null, key: '', entries: [], custom: [], facts: null, factsKey: '', observer: null };
+const FONT_READY = document.fonts ? document.fonts.load('12px "Stocky Mono"').catch(() => {}) : Promise.resolve();
+
+// $29,70B / −$765,62M: decimal comma and a true minus, as in the PNGs.
+function compact(value, prefix = '', decimals = 2, strip = false) {
+  const magnitude = Math.abs(value);
+  const [number, unit] = magnitude >= 1e6 ? [magnitude / 1e6, 'T'] : magnitude >= 1000 ? [magnitude / 1000, 'B'] : [magnitude, 'M'];
+  let text = number.toFixed(decimals);
+  if (strip && text.includes('.')) text = text.replace(/0+$/, '').replace(/\.$/, '');
+  return (value < 0 ? '−' : '') + prefix + text.replace('.', ',') + unit;
+}
+const comma = text => text.replace('.', ',').replace('-', '−');
+// Money is in the run's reporting currency (charts.json ``currency``): USD for
+// a 10-K, EUR, TWD, JPY... for most foreign filers. Same symbols as charts.py.
+const CURRENCY_SYMBOLS = {
+  USD: '$', EUR: '€', GBP: '£', JPY: '¥', CNY: 'CN¥', TWD: 'NT$', KRW: '₩', INR: '₹', CAD: 'C$', AUD: 'A$',
+  HKD: 'HK$', BRL: 'R$', MXN: 'MX$', ILS: '₪', SGD: 'S$', NZD: 'NZ$', DKK: 'kr ', SEK: 'kr ', NOK: 'kr ',
+  CHF: 'CHF ', ZAR: 'R ',
+};
+const CUR = { code: 'USD', symbol: '$' };
+function setCurrency(code) {
+  CUR.code = String(code || 'USD').toUpperCase();
+  CUR.symbol = CURRENCY_SYMBOLS[CUR.code] || `${CUR.code} `;
+}
+const VALUE_FMT = {
+  mm: v => compact(v, CUR.symbol),
+  shares: v => compact(v),
+  pct: v => comma((v * 100).toFixed(2)) + '%',
+  x: v => comma(v.toFixed(1)) + 'x',
+  int: v => v.toFixed(0),
+  dec1: v => comma(v.toFixed(1)),
+  moneyps: v => (v < 0 ? '−' : '') + CUR.symbol + Math.abs(v).toFixed(2).replace('.', ','),
+};
+const AXIS_FMT = {
+  money: v => v === 0 ? '0' : compact(v, CUR.symbol, 1, true),
+  shares: v => v === 0 ? '0' : compact(v, '', 2, true),
+  pct: v => comma((v * 100).toFixed(0)) + '%',
+  x: v => v.toFixed(0) + 'x',
+  moneyps: v => VALUE_FMT.moneyps(v),
+  plain: v => comma(String(+v.toFixed(2))),
+};
+const fmtValue = (format, v) => (VALUE_FMT[format] || String)(v);
+const yearSpan = years => years.length ? `${years[0]}–${years[years.length - 1]}` : '';
+
+function chartTheme() {
+  const css = getComputedStyle(document.documentElement);
+  const v = name => css.getPropertyValue(name).trim();
+  return { surface: v('--surface'), surface2: v('--surface-2'), text: v('--text'), muted: v('--muted'),
+           line: v('--line'), lineStrong: v('--line-strong'), grid: v('--chart-grid'), ink: v('--chart-ink'),
+           soft: v('--accent-soft'), font: getComputedStyle(document.body).fontFamily,
+           fs: parseFloat(v('--fs')) || 1 };
+}
+const inkColor = (color, t) => color === 'strong' ? t.text : color;
+
+// Axis limits like matplotlib's margins, rounded out to a tidy step so the
+// top and bottom lines carry clean numbers. Bars stick to zero; the first
+// axis, and any axis with bars, always shows zero (as in the PNGs).
+function niceStep(raw) {
+  if (!(raw > 0)) return 1;
+  const power = 10 ** Math.floor(Math.log10(raw));
+  const f = raw / power;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * power;
+}
+function axisBounds(lo, hi, margin, zero, sticky) {
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) { lo = 0; hi = 1; }
+  if (zero) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
+  // A nearly flat series (a share count that moves 0,01%) gets at least ±2%
+  // of room, so the line is not blown up and the labels do not repeat.
+  const floor = 0.04 * Math.max(Math.abs(lo), Math.abs(hi));
+  if (!zero && hi - lo < floor) { const mid = (lo + hi) / 2; lo = mid - floor / 2; hi = mid + floor / 2; }
+  const span = (hi - lo) || Math.abs(hi) || 1;
+  const top = sticky && hi === 0 ? 0 : hi + span * margin;
+  const bottom = sticky && lo === 0 ? 0 : lo - span * margin;
+  const step = niceStep((top - bottom) / 5);
+  return { min: Math.floor(bottom / step + 1e-9) * step, max: Math.ceil(top / step - 1e-9) * step, interval: step };
+}
+
+// Each axis's limits for the years ``from``..``to`` (the slider's window),
+// so a window of small early years is not flattened by later big ones.
+function yBounds(panel, from, to) {
+  const barAxes = new Set(panel.series.filter(s => s.kind === 'bar').map(s => s.axis));
+  return panel.axes.map((axis, k) => {
+    if (axis.min != null || axis.max != null) return { min: axis.min, max: axis.max, interval: axis.interval };
+    const values = panel.series.filter(s => s.axis === k)
+      .flatMap(s => s.values.slice(from, to + 1)).filter(v => v != null);
+    if (k === 0 && panel.reference) values.push(panel.reference.value);
+    const margin = k === 0 ? panel.margin : (axis.margin ?? 0.2);
+    return axisBounds(values.length ? Math.min(...values) : 0, values.length ? Math.max(...values) : 1,
+                      margin, k === 0 || barAxes.has(k), barAxes.has(k));
+  });
+}
+
+// How many years fit at once: grouped bars need room per bar.
+function visibleYears(panel, width) {
+  const bars = panel.series.filter(s => s.kind === 'bar').length;
+  const per = bars ? Math.max(84, bars * 22) : 60;
+  return Math.max(3, Math.min(panel.years.length, Math.floor(width / per) || 3));
+}
+
+// The ECharts option for one panel, plus each series' index by name.
+// The page shows the last six years at most (the slider reaches the rest);
+// the full view shows every year that fits. The − / + under a chart sets the
+// number of years by hand (``span``): fewer and wider, or more and squished.
+const NORMAL_YEARS = 6;
+const MIN_YEARS = 2;
+
+function panelOption(panel, t, { mini = false, width = 800, full = false, span = null, end = null } = {}) {
+  const fs = t.fs;
+  const text = (size, color = t.muted) => ({ fontFamily: t.font, fontSize: size * fs, color });
+  const years = panel.years.map(String);
+  const barAxes = new Set(panel.series.filter(s => s.kind === 'bar').map(s => s.axis));
+  const hasBars = barAxes.size > 0;
+  const byName = {};
+  const index = {};
+  const series = [];
+  const label = (s, color) => ({
+    show: !mini, ...text(12, color), textBorderColor: t.surface, textBorderWidth: 3,
+    formatter: p => p.value == null ? '' : fmtValue(s.format, p.value),
+  });
+  for (const s of panel.series) {
+    const color = inkColor(s.color, t);
+    byName[s.label] = s;
+    index[s.label] = series.length;
+    if (s.kind === 'bar') {
+      series.push({
+        type: 'bar', name: s.label, yAxisIndex: s.axis, z: 2,
+        data: s.values.map(v => v == null ? null : { value: v, label: { position: v < 0 ? 'bottom' : 'top' } }),
+        itemStyle: { color, borderColor: t.surface, borderWidth: 1, borderRadius: 4 },
+        emphasis: { itemStyle: { borderColor: t.text, borderWidth: 2 } },
+        barGap: '0%', barCategoryGap: `${Math.round((1 - panel.group_width) * 100)}%`,
+        label: label(s, t.text), labelLayout: { hideOverlap: true },
+      });
+      continue;
+    }
+    // A line on the second axis of a bar chart (shares outstanding) runs
+    // behind the bars; its dots and numbers are drawn again in front.
+    const behind = s.axis === 1 && hasBars;
+    series.push({
+      type: 'line', name: s.label, yAxisIndex: s.axis, z: behind ? 1 : 3, data: s.values,
+      symbol: 'circle', symbolSize: 8, showSymbol: !behind,
+      lineStyle: { width: 2, color }, itemStyle: { color, borderColor: t.surface, borderWidth: 1.5 },
+      label: behind ? { show: false } : { ...label(s, t.text), position: 'top' }, labelLayout: { hideOverlap: true },
+    });
+    if (behind) {
+      series.push({
+        type: 'scatter', name: s.label, yAxisIndex: s.axis, z: 4, data: s.values, symbolSize: 8,
+        itemStyle: { color, borderColor: t.surface, borderWidth: 1.5 },
+        label: { ...label(s, color), position: 'top' }, labelLayout: { hideOverlap: true },
+      });
+    }
+  }
+  const ref = panel.reference;
+  if (ref) {
+    const color = inkColor(ref.color, t);
+    byName[ref.legend] = null;
+    series.push({
+      type: 'line', name: ref.legend, data: years.map(() => null), symbol: 'none', z: 3,
+      lineStyle: { type: 'dashed', width: 1.5, color }, itemStyle: { color },
+      markLine: {
+        silent: true, symbol: 'none', lineStyle: { type: 'dashed', width: 1.5, color },
+        label: { show: !mini, position: 'insideEndTop', formatter: ref.label, ...text(12, t.text),
+                 textBorderColor: t.surface, textBorderWidth: 3 },
+        data: [{ yAxis: ref.value }],
+      },
+    });
+  }
+  // The zero line: a rule at 0 like matplotlib's axhline, not part of the legend.
+  series.push({ type: 'line', name: '', data: [], silent: true, z: 1,
+                markLine: { silent: true, symbol: 'none', label: { show: false },
+                            lineStyle: { type: 'solid', width: 1, color: t.ink }, data: [{ yAxis: 0 }] } });
+
+  const visible = mini ? years.length
+    : span ? Math.max(Math.min(MIN_YEARS, years.length), Math.min(span, years.length))
+    : Math.min(full ? Infinity : NORMAL_YEARS, visibleYears(panel, width));
+  const zoom = !mini && visible < years.length;
+  // The window ends on ``end`` (kept across redraws), else on the latest year.
+  const last = end == null ? years.length - 1 : Math.max(visible - 1, Math.min(years.length - 1, end));
+  const first = last - visible + 1;
+  const bounds = yBounds(panel, first, last);
+  const yAxis = panel.axes.map((axis, k) => {
+    const fixed = axis.min != null || axis.max != null;
+    return {
+      type: 'value', position: k ? 'right' : 'left', ...bounds[k],
+      name: mini ? '' : (axis.name || ''), nameLocation: 'middle', nameGap: 42, nameRotate: k ? -90 : 90,
+      nameTextStyle: text(13),
+      axisLabel: { show: !mini, ...text(13), formatter: AXIS_FMT[axis.format] || AXIS_FMT.plain,
+                   showMaxLabel: fixed ? false : null },
+      axisLine: { show: false }, axisTick: { show: false },
+      splitLine: { show: k === 0 && !mini, lineStyle: { color: t.grid, width: 1 } },
+    };
+  });
+
+  const option = {
+    animationDuration: 250, animationDurationUpdate: 0,
+    textStyle: { fontFamily: t.font },
+    grid: mini ? { left: 2, right: 2, top: 6, bottom: 4, containLabel: false }
+               : { left: 6, right: 6, top: 14, bottom: 6, containLabel: true },
+    legend: { show: false, data: panel.series.map(s => s.label).concat(ref ? [ref.legend] : []) },
+    xAxis: { type: 'category', data: years, axisTick: { show: false }, axisLine: { show: false },
+             axisLabel: { show: !mini, ...text(13), hideOverlap: true }, splitLine: { show: false } },
+    yAxis,
+    series,
+    tooltip: {
+      show: !mini, trigger: 'axis', confine: true, axisPointer: { type: 'shadow', shadowStyle: { color: t.soft } },
+      backgroundColor: t.surface2, borderColor: t.line, borderWidth: 1, padding: [8, 12],
+      textStyle: text(14, t.text), extraCssText: 'border-radius:8px; box-shadow:var(--shadow-drop);',
+      formatter: params => tooltipHtml(params, byName),
+    },
+  };
+  if (zoom) {
+    option.dataZoom = [{
+      type: 'inside', xAxisIndex: 0, startValue: first, endValue: last,
+      // Years off the window are dropped: a line starts and ends at the
+      // window's first and last years, with no run to the plot's edge.
+      filterMode: 'filter',
+      // No dragging or wheel: the window moves only in whole years.
+      zoomLock: true, zoomOnMouseWheel: false, moveOnMouseWheel: false, moveOnMouseMove: false,
+      preventDefaultMouseMove: false,
+    }];
+  }
+  return { option, index };
+}
+
+function tooltipHtml(params, byName) {
+  const list = (Array.isArray(params) ? params : [params]).filter(p => p.seriesName);
+  if (!list.length) return '';
+  const seen = new Set();
+  const rows = list.map(p => {
+    const s = byName[p.seriesName];
+    if (!s || seen.has(p.seriesName) || p.value == null) return '';
+    seen.add(p.seriesName);
+    return `<div class="ec-tip-row">${p.marker}<span>${esc(s.label)}${s.derived ? ' *' : ''}</span>`
+      + `<b>${esc(fmtValue(s.format, p.value))}</b></div>`;
+  }).join('');
+  return `<div class="ec-tip"><div class="ec-tip-head">${esc(list[0].axisValue)}</div>`
+    + (rows || '<div class="ec-tip-row muted">No values this year</div>') + '</div>';
+}
+
+// The legend is HTML: it wraps like text and each key toggles its series.
+function legendHtml(panel) {
+  const key = (name, color, kind, derived) => `<button class="ec-key" data-name="${esc(name)}" aria-pressed="true"
+      onclick="toggleSeries(this)"><span class="ec-swatch ${kind}" style="--c:${esc(color)}"></span>${esc(name)}${derived ? ' *' : ''}</button>`;
+  const t = chartTheme();
+  const keys = panel.series.map(s => key(s.label, inkColor(s.color, t), s.kind, s.derived));
+  if (panel.reference) keys.push(key(panel.reference.legend, inkColor(panel.reference.color, t), 'dash', false));
+  return keys.join('');
+}
+
+const chartId = id => 'chart-' + String(id).replace(/[^\w-]/g, '_');
+
+function figureHtml(chart, custom = false) {
+  const panels = chart.panels.map((panel, i) => {
+    const bars = panel.series.filter(s => s.kind === 'bar').length;
+    const height = Math.round(Math.min(440, 330 + bars * 12));
+    return `<div class="ec-panel">
+        <div class="ec-head">
+          <div class="ec-title">${esc(panel.title)}</div>
+          ${panel.subtitle ? `<div class="ec-sub" data-sub="${esc(panel.subtitle)}">${esc(panel.subtitle.replace('{span}', yearSpan(panel.years)))}</div>` : ''}
+          ${panel.series.length || panel.reference ? `<div class="ec-legend">${legendHtml(panel)}</div>` : ''}
+        </div>
+        ${panel.series.length ? `<div class="ec-wrap">
+            <div class="ec-canvas" style="--h:${height}px" data-chart="${esc(chart.id)}" data-panel="${i}"></div>
+            <div class="ec-years" hidden>
+              <button class="ec-step prev" onclick="stepYears(this, -1)" title="One year back" aria-label="One year back">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+              <input class="ec-range" type="range" min="0" step="1" value="0" oninput="slideYears(this)"
+                     aria-label="Years shown" title="Years shown: one step per year">
+              <button class="ec-step next" onclick="stepYears(this, 1)" title="One year forward" aria-label="One year forward">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+              <span class="ec-zoom" role="group" aria-label="Years on show">
+                <button class="ec-step fewer" onclick="zoomYears(this, -1)" title="One year fewer: wider bars" aria-label="Show one year fewer">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg></button>
+                <span class="ec-count" aria-live="polite"></span>
+                <button class="ec-step more" onclick="zoomYears(this, 1)" title="One year more: narrower bars" aria-label="Show one year more">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12M12 6v12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg></button>
+              </span>
+            </div>
+          </div>`
+          : `<p class="ec-empty">${esc(panel.empty)}</p>`}
+        ${panel.note ? `<p class="ec-note">${esc(panel.note)}</p>` : ''}
+      </div>`;
+  }).join('');
+  const action = custom
+    ? `<button class="fig-dl" onclick="removeCustomChart('${esc(chart.id)}')" title="Remove this chart" aria-label="Remove ${esc(chart.name)}">
+         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8" /></svg></button>`
+    : `<button class="fig-dl" onclick="openDownload('chart', '${esc(chart.id)}')" title="Download ${esc(chart.name)} as PNG"
+         aria-label="Download ${esc(chart.name)} as PNG"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download" /></svg></button>`;
+  const max = `<button class="fig-dl fig-max" onclick="toggleChartMax(this)" aria-pressed="false"
+       title="Fill the window with this chart (Esc to close)" aria-label="Fill the window with ${esc(chart.name)}">
+       <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-expand" /></svg></button>`;
+  return `<figure id="${chartId(chart.id)}" class="chart-fig ec-fig">
+      <div class="ec-panels${chart.panels.length > 1 ? ' two' : ''}">${panels}</div>
+      ${custom ? '' : chartWarningsHtml(chart)}
+      <div class="fig-actions">${max}${action}</div></figure>`;
+}
+
+// The data issues behind a chart (charts.json ``warnings``, data_issues.py):
+// a metric missing, a total that does not add up, a value that looks wrong.
+// Hiding is not fixing, so every one is listed under the chart it touches.
+const ISSUE_METRICS = { Revenues: 'Revenue', CostOfRevenue: 'Cost of revenue', GrossProfit: 'Gross profit',
+  OperatingIncomeLoss: 'Operating income', NetIncomeLoss: 'Net income', OperatingCashFlow: 'Operating cash flow',
+  StockholdersEquity: 'Equity', CapEx: 'Capital expenditure' };
+const chartIssueCount = chart => (chart.warnings || []).reduce((sum, w) => sum + w.years.length, 0);
+const issueWhat = w => w.label || ISSUE_METRICS[w.concept] || w.concept;
+const issueYears = years => years.map(y => `FY${y}`).join(', ');
+const chartIssueLine = chart => (chart.warnings || []).map(w => `${w.title}: ${issueWhat(w)} (${issueYears(w.years)})`).join('; ');
+function chartWarningsHtml(chart) {
+  if (chart.warnings === undefined) {
+    return `<p class="ec-warn-none">This run was made before data issues were checked: generate the charts again to check them.</p>`;
+  }
+  const count = chartIssueCount(chart);
+  if (!count) return '';
+  const items = chart.warnings.map(w => `<li class="${w.severity === 'warning' ? '' : 'is-note'}">
+      <b>${esc(w.title)}</b>: ${esc(issueWhat(w))}, ${esc(issueYears(w.years))}
+      <ul>${w.details.map(d => `<li>FY${d.year}: ${esc(d.detail)}</li>`).join('')}</ul></li>`).join('');
+  return `<details class="ec-warn">
+      <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4l9 16H3z M12 10v4 M12 17v.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        Something in this chart does not add up: ${fmtInt(count)} data ${count === 1 ? 'issue' : 'issues'}</summary>
+      <ul>${items}</ul></details>`;
+}
+
+// Full view for one chart: the figure fills the window and its panels are
+// drawn again, so the number of years follows the new width.
+function toggleChartMax(button, open = !button.closest('.chart-fig').classList.contains('is-max')) {
+  const figure = button.closest('.chart-fig');
+  if (open) for (const other of document.querySelectorAll('.chart-fig.is-max')) if (other !== figure) toggleChartMax(other.querySelector('.fig-max'), false);
+  figure.classList.toggle('is-max', open);
+  document.documentElement.classList.toggle('has-max-chart', open);
+  button.setAttribute('aria-pressed', String(open));
+  button.title = open ? 'Back to the page (Esc)' : 'Fill the window with this chart (Esc to close)';
+  button.querySelector('use').setAttribute('href', open ? '#i-shrink' : '#i-expand');
+  for (const entry of EC.entries) {
+    if (!figure.contains(entry.el) || !entry.inst) continue;
+    entry.inst.dispose();
+    entry.inst = null;
+    drawEntry(entry);
+  }
+  if (!open) scrollToChart(figure.id);
+}
+
+function disposeCharts(root = null) {
+  EC.entries = EC.entries.filter(entry => {
+    if (root && !root.contains(entry.el)) return true;
+    if (EC.observer) EC.observer.unobserve(entry.el);
+    if (entry.inst) entry.inst.dispose();
+    return false;
+  });
+}
+
+// Each canvas is drawn once it has a width, and redrawn to fit when resized.
+function mountCharts(root, charts, { mini = false } = {}) {
+  if (!window.echarts) return;
+  if (!EC.observer) {
+    EC.observer = new ResizeObserver(items => {
+      for (const item of items) {
+        const entry = EC.entries.find(e => e.el === item.target);
+        if (!entry || !item.contentRect.width) continue;
+        if (!entry.inst) drawEntry(entry);
+        else { entry.inst.resize(); if (!entry.mini) syncSteps(entry); }
+      }
+    });
+  }
+  for (const el of root.querySelectorAll(mini ? '.ec-mini' : '.ec-canvas')) {
+    const chart = charts.find(c => c.id === el.dataset.chart);
+    if (!chart) continue;
+    const panel = chart.panels[Number(el.dataset.panel) || 0];
+    const entry = { chart, panel, el, mini, inst: null, index: {},
+                    head: el.closest('.ec-panel')?.querySelector('.ec-head') || null };
+    EC.entries.push(entry);
+    EC.observer.observe(el);
+  }
+}
+
+function drawEntry(entry) {
+  const panel = entry.mini ? lastYears(entry.panel, 5) : entry.panel;
+  const full = !!entry.el.closest('.chart-fig.is-max');
+  const { option, index } = panelOption(panel, chartTheme(), { mini: entry.mini, width: entry.el.clientWidth, full,
+                                                               span: entry.span, end: entry.end });
+  entry.inst = echarts.init(entry.el, null, { renderer: 'canvas' });
+  entry.inst.setOption(option);
+  entry.index = index;
+  if (entry.mini) return;
+  // A tap opens a year's tooltip; tapping the same year again closes it, and
+  // so does a tap anywhere else (see the pointerdown listener below).
+  const zr = entry.inst.getZr();
+  zr.on('mousemove', () => { entry.tipLive = true; });
+  zr.on('click', event => {
+    const at = entry.inst.convertFromPixel({ gridIndex: 0 }, [event.offsetX, event.offsetY])?.[0];
+    if (at != null && entry.tipLive && at === entry.tipAt) {
+      // After ECharts' own click handler, which would open it again.
+      setTimeout(() => hideChartTip(entry), 0);
+    } else {
+      entry.tipAt = at;
+      entry.tipLive = true;
+    }
+  });
+  entry.inst.on('globalout', () => { entry.tipLive = false; entry.tipAt = null; });
+  // Every move is a whole year: the subtitle, slider and axis follow at once.
+  entry.inst.on('datazoom', () => {
+    entry.end = zoomRange(entry)[1];
+    updateSpan(entry);
+    syncSteps(entry);
+    rescale(entry);
+  });
+  entry.inst.on('legendselectchanged', event => {
+    for (const key of entry.head.querySelectorAll('.ec-key')) {
+      key.setAttribute('aria-pressed', String(event.selected[key.dataset.name] !== false));
+    }
+  });
+  updateSpan(entry);
+  syncSteps(entry);
+}
+
+function hideChartTip(entry) {
+  if (!entry.inst || entry.inst.isDisposed()) return;
+  entry.inst.dispatchAction({ type: 'hideTip' });
+  entry.inst.dispatchAction({ type: 'updateAxisPointer', currTrigger: 'leave' });
+  entry.inst.dispatchAction({ type: 'downplay' });
+  entry.tipLive = false;
+  entry.tipAt = null;
+}
+
+// Touch screens never send "mouse left": close open tooltips on a tap outside their chart.
+document.addEventListener('pointerdown', event => {
+  for (const entry of EC.entries) {
+    if (entry.tipLive && !entry.el.contains(event.target)) hideChartTip(entry);
+  }
+  if (SIM.hideTip && !event.target.closest?.('.sim-chart svg')) SIM.hideTip();
+}, true);
+
+function rescale(entry) {
+  if (!entry.inst) return;
+  const [from, to] = zoomRange(entry);
+  entry.inst.setOption({ yAxis: yBounds(entry.panel, from, to) });
+}
+
+// The years slider under a chart that scrolls: one step per year, its handle
+// as wide as the window, a tick per position; the arrows either side step one
+// year and turn off at either end.
+function syncSteps(entry) {
+  const row = entry.el.closest('.ec-wrap')?.querySelector('.ec-years');
+  if (!row) return;
+  const n = entry.panel.years.length;
+  const [from, to] = zoomRange(entry);
+  const span = to - from + 1;
+  // The year count stays while every year is on show, so it can go back down.
+  row.hidden = n <= MIN_YEARS;
+  if (row.hidden) return;
+  row.querySelector('.ec-count').textContent = `${span} years`;
+  row.querySelector('.fewer').disabled = span <= MIN_YEARS;
+  row.querySelector('.more').disabled = span >= n;
+  row.classList.toggle('is-all', span >= n);
+  if (span >= n) return;
+  const range = row.querySelector('.ec-range');
+  const positions = n - span;
+  range.max = String(positions);
+  range.value = String(from);
+  const track = range.clientWidth - 2;
+  const thumb = Math.max(28, Math.round(track * span / n));
+  range.style.setProperty('--thumb-w', `${thumb}px`);
+  range.style.setProperty('--tick-gap', `${(track - thumb) / Math.max(positions, 1)}px`);
+  range.style.setProperty('--tick-start', `${thumb / 2}px`);
+  range.setAttribute('aria-valuetext', yearSpan(entry.panel.years.slice(from, to + 1)));
+  row.querySelector('.prev').disabled = from <= 0;
+  row.querySelector('.next').disabled = to >= n - 1;
+}
+
+const entryOf = control => EC.entries.find(e => e.el.closest('.ec-wrap') === control.closest('.ec-wrap'));
+
+function moveWindow(entry, start) {
+  const [from, to] = zoomRange(entry);
+  const last = entry.panel.years.length - 1;
+  const next = Math.max(0, Math.min(last - (to - from), start));
+  if (next !== from) entry.inst.dispatchAction({ type: 'dataZoom', startValue: next, endValue: next + (to - from) });
+}
+
+function slideYears(range) {
+  const entry = entryOf(range);
+  if (entry && entry.inst) moveWindow(entry, Number(range.value));
+}
+
+function stepYears(button, step) {
+  const entry = entryOf(button);
+  if (entry && entry.inst) moveWindow(entry, zoomRange(entry)[0] + step);
+}
+
+// − / +: one year fewer (wider bars) or more (squished), keeping the window's
+// last year; the chart is drawn again for the new count.
+function zoomYears(button, step) {
+  const entry = entryOf(button);
+  if (!entry || !entry.inst) return;
+  const n = entry.panel.years.length;
+  const [from, to] = zoomRange(entry);
+  const span = Math.max(MIN_YEARS, Math.min(n, to - from + 1 + step));
+  if (span === to - from + 1) return;
+  entry.span = span;
+  entry.end = Math.max(span - 1, to);
+  entry.inst.dispose();
+  entry.inst = null;
+  drawEntry(entry);
+}
+
+// A panel cut to its last ``n`` years (Home's thumbnails).
+function lastYears(panel, n) {
+  const from = Math.max(0, panel.years.length - n);
+  return { ...panel, years: panel.years.slice(from),
+           series: panel.series.map(s => ({ ...s, values: s.values.slice(from) })) };
+}
+
+// Years on show, from the slider; the subtitle names them like a PNG's window.
+function zoomRange(entry) {
+  const n = entry.panel.years.length;
+  const zoom = entry.inst && entry.inst.getOption().dataZoom;
+  if (!zoom || !zoom.length) return [0, n - 1];
+  // The slider's own window (category indices); its percentages drift after
+  // a programmatic move, so they are only the fallback.
+  try {
+    const range = entry.inst.getModel().getComponent('dataZoom', 0).getValueRange();
+    if (range && Number.isFinite(range[0]) && Number.isFinite(range[1])) {
+      return [Math.max(0, Math.round(range[0])), Math.min(n - 1, Math.round(range[1]))];
+    }
+  } catch { /* fall back below */ }
+  const z = zoom[0];
+  return [Math.round((z.start / 100) * (n - 1)), Math.round((z.end / 100) * (n - 1))];
+}
+
+function updateSpan(entry) {
+  const sub = entry.head && entry.head.querySelector('.ec-sub');
+  if (!sub) return;
+  const [from, to] = zoomRange(entry);
+  sub.textContent = sub.dataset.sub.replace('{span}', yearSpan(entry.panel.years.slice(from, to + 1)));
+}
+
+function toggleSeries(button) {
+  const entry = EC.entries.find(e => e.head && e.head.contains(button));
+  if (entry && entry.inst) entry.inst.dispatchAction({ type: 'legendToggleSelect', name: button.dataset.name });
+}
+
+async function loadSpec(data) {
+  const key = `${data.ticker}|${data.modified}`;
+  if (EC.key === key && EC.spec) return EC.spec;
+  const res = await fetch(`/api/charts/${encodeURIComponent(data.ticker)}`);
+  if (!res.ok) return null;
+  const spec = await res.json();
+  EC.spec = spec;
+  EC.key = key;
+  setCurrency(spec.currency);
+  return spec;
+}
+
+/* Search: a fact and a year ---------------------------------------------------- */
+// Looks through the charted series and every statement line and fact of the
+// filings. A charted one scrolls to its chart, moves the slider to the year
+// and opens its tooltip; any other shows its values, and can be charted.
+const STATEMENT_NAMES = {
+  income: 'Income statement', balance: 'Balance sheet', cashflow: 'Cash flow', equity: 'Equity',
+  comprehensive: 'Comprehensive income', IncomeStatement: 'Income statement', BalanceSheet: 'Balance sheet',
+  CashFlowStatement: 'Cash flow', StatementOfEquity: 'Equity', CoverPage: 'Cover page',
+  Disclosures: 'Notes', NoteTable: 'Notes', Notes: 'Notes', AccountingPolicies: 'Notes',
+  ComprehensiveIncome: 'Comprehensive income',
+};
+// A fact's unit -> [value format, divisor, name]; money is in the run's currency.
+function unitFormat(unit) {
+  if (unit === 'shares') return ['shares', 1e6, 'shares'];
+  if (unit === 'money/share') return ['moneyps', 1, `${CUR.code} per share`];
+  if (unit === 'pure') return ['pct', 1, 'ratio'];
+  return ['mm', 1e6, CUR.code];
+}
+const SEARCH = { results: [], active: -1, fact: null };
+const words = concept => String(concept).replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
+
+async function loadFacts() {
+  const ticker = GRAPH.ticker;
+  const key = `${ticker}|${GRAPH.results?.modified || ''}`;
+  if (EC.factsKey === key && EC.facts) return EC.facts;
+  EC.factsKey = key;
+  EC.facts = [];
+  try {
+    const res = await fetch(`/api/facts/${encodeURIComponent(ticker)}`);
+    if (res.ok && EC.factsKey === key) EC.facts = (await res.json()).facts || [];
+  } catch { /* charted series still search */ }
+  return EC.facts;
+}
+
+function searchEntries() {
+  const entries = [];
+  for (const chart of [...EC.custom.filter(c => c.ticker === GRAPH.ticker), ...(EC.spec?.charts || [])]) {
+    chart.panels.forEach((panel, p) => panel.series.forEach(s => entries.push({
+      kind: 'chart', label: s.label, where: chart.name, chart: chart.id, panel: p, series: s,
+      years: panel.years, text: `${s.label} ${chart.name} ${s.concepts.map(words).join(' ')}`.toLowerCase(),
+    })));
+  }
+  const charted = new Set((EC.spec?.charts || []).flatMap(c => c.panels.flatMap(p => p.series.flatMap(s => s.concepts))));
+  for (const fact of EC.facts || []) {
+    if (charted.has(fact.concept)) continue;
+    entries.push({ kind: 'fact', label: fact.label, where: STATEMENT_NAMES[fact.statement] || fact.statement,
+                   fact, text: `${fact.label} ${words(fact.concept)}`.toLowerCase() });
+  }
+  return entries;
+}
+
+async function searchFacts() {
+  const input = $('#cs-input');
+  let query = input.value.toLowerCase().trim();
+  // "goodwill 2019" picks the year too.
+  const year = query.match(/\b(19|20)\d{2}\b/);
+  if (year && [...$('#cs-year').options].some(o => o.value === year[0])) {
+    $('#cs-year').value = year[0];
+    query = query.replace(year[0], '').trim();
+  }
+  if (!query) { closeSearch(); return; }
+  await loadFacts();
+  if (input.value.toLowerCase().trim().replace(/\b(19|20)\d{2}\b/, '').trim() !== query) return;
+  const tokens = query.split(/\s+/);
+  const scored = searchEntries()
+    .filter(e => tokens.every(token => e.text.includes(token)))
+    .map(e => {
+      const label = e.label.toLowerCase();
+      return { e, score: (label === query ? 0 : label.startsWith(query) ? 1 : label.includes(query) ? 2 : 3)
+                         + (e.kind === 'chart' ? 0 : 4) + Math.min(label.length, 80) / 1000 };
+    })
+    .sort((a, b) => a.score - b.score)
+    .slice(0, 12);
+  SEARCH.results = scored.map(item => item.e);
+  SEARCH.active = SEARCH.results.length ? 0 : -1;
+  renderSearch();
+}
+
+function renderSearch() {
+  const list = $('#cs-results');
+  list.hidden = false;
+  $('#cs-input').setAttribute('aria-expanded', 'true');
+  list.innerHTML = SEARCH.results.length ? SEARCH.results.map((e, i) => `
+      <li role="option" id="cs-opt-${i}" aria-selected="${i === SEARCH.active}" onmousedown="event.preventDefault()" onclick="pickSearch(${i})">
+        <span class="cs-label">${esc(e.label)}</span><span class="cs-where">${esc(e.where)}</span>
+        <span class="cs-tag">${e.kind === 'chart' ? 'chart' : 'values'}</span></li>`).join('')
+    : '<li class="cs-none" aria-disabled="true">Nothing in this ticker’s filings matches.</li>';
+  if (SEARCH.active >= 0) $('#cs-input').setAttribute('aria-activedescendant', `cs-opt-${SEARCH.active}`);
+}
+
+function closeSearch() {
+  $('#cs-results').hidden = true;
+  $('#cs-input').setAttribute('aria-expanded', 'false');
+  $('#cs-input').removeAttribute('aria-activedescendant');
+}
+
+function searchKey(event) {
+  const list = $('#cs-results');
+  if (event.key === 'Escape') { closeSearch(); return; }
+  if (list.hidden || !SEARCH.results.length) return;
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    const step = event.key === 'ArrowDown' ? 1 : -1;
+    SEARCH.active = (SEARCH.active + step + SEARCH.results.length) % SEARCH.results.length;
+    renderSearch();
+    $(`#cs-opt-${SEARCH.active}`)?.scrollIntoView({ block: 'nearest' });
+  } else if (event.key === 'Enter') {
+    event.preventDefault();
+    pickSearch(Math.max(SEARCH.active, 0));
+  }
+}
+
+// The year to show: the one picked, else the latest with a value.
+function pickYear(years, values) {
+  const chosen = Number($('#cs-year').value);
+  if (chosen && years.includes(chosen)) return chosen;
+  for (let i = years.length - 1; i >= 0; i--) if (values[i] != null) return years[i];
+  return years[years.length - 1];
+}
+
+function pickSearch(i) {
+  const e = SEARCH.results[i];
+  if (!e) return;
+  closeSearch();
+  $('#cs-input').value = e.label;
+  if (e.kind === 'chart') {
+    SEARCH.fact = null;
+    $('#fact-card').innerHTML = '';
+    const year = pickYear(e.years, e.series.values);
+    const value = e.series.values[e.years.indexOf(year)];
+    $('#cs-status').textContent = `${e.label}, ${year}: `
+      + (value == null ? 'no value this year' : fmtValue(e.series.format, value)) + ` · ${e.where}`;
+    focusSeries(e.chart, e.panel, e.series.label, year);
+  } else {
+    showFact(e.fact);
+  }
+}
+
+// Scroll to the chart, slide the year into view and point at the value.
+function focusSeries(id, panelIndex, name, year) {
+  const figure = document.getElementById(chartId(id));
+  if (!figure) return;
+  scrollToChart(chartId(id));
+  const entry = EC.entries.find(en => !en.mini && en.chart.id === id && en.chart.panels.indexOf(en.panel) === panelIndex);
+  if (!entry) return;
+  const key = [...entry.head.querySelectorAll('.ec-key')].find(k => k.dataset.name === name);
+  if (key) {
+    key.classList.remove('is-found');
+    void key.offsetWidth;   // restart the flash
+    key.classList.add('is-found');
+  }
+  const run = () => {
+    if (!entry.inst) { if (entry.el.clientWidth) drawEntry(entry); else return; }
+    const n = entry.panel.years.length;
+    const at = entry.panel.years.indexOf(year);
+    if (at < 0) return;
+    const [from, to] = zoomRange(entry);
+    if (at < from || at > to) {
+      const span = to - from;
+      const start = Math.max(0, Math.min(n - 1 - span, at - Math.floor(span / 2)));
+      entry.inst.dispatchAction({ type: 'dataZoom', startValue: start, endValue: start + span });
+    }
+    entry.inst.dispatchAction({ type: 'legendSelect', name });
+    const seriesIndex = entry.index[name];
+    entry.inst.dispatchAction({ type: 'downplay' });
+    entry.inst.dispatchAction({ type: 'highlight', seriesIndex, dataIndex: at });
+    entry.inst.dispatchAction({ type: 'showTip', seriesIndex, dataIndex: at });
+    entry.tipLive = true;
+    entry.tipAt = at;
+  };
+  // After the scroll settles, so the tooltip opens where the chart stops.
+  setTimeout(run, SMOOTH === 'smooth' ? 450 : 0);
+}
+
+function showFact(fact) {
+  SEARCH.fact = fact;
+  const years = Object.keys(fact.values).map(Number).sort((a, b) => a - b);
+  const values = years.map(y => fact.values[y]);
+  const year = pickYear(years, values);
+  const [format, divisor, unitName] = unitFormat(fact.unit);
+  const cell = v => v == null ? '–' : fmtValue(format, v / divisor);
+  const asked = Number($('#cs-year').value);
+  $('#cs-status').textContent = asked && asked !== year
+    ? `${fact.label} has no value for ${asked}; latest, ${year}: ${cell(fact.values[year])}`
+    : `${fact.label}, ${year}: ${cell(fact.values[year])}`;
+  $('#fact-card').innerHTML = `
+    <div class="fact-card">
+      <div class="fact-head">
+        <div class="fact-name"><b>${esc(fact.label)}</b>
+          <span class="muted">${esc(STATEMENT_NAMES[fact.statement] || fact.statement)} · ${esc(fact.concept)} · ${esc(unitName)} · not in a chart</span></div>
+        <span class="panel-actions">
+          <button class="panel-btn" onclick="chartFact()">Draw as a chart</button>
+          <button class="panel-btn icon-btn" onclick="closeFact()" title="Close" aria-label="Close these values">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8" /></svg></button>
+        </span>
+      </div>
+      <div class="table-wrap"><table class="data fact-table">
+        <thead><tr>${years.map(y => `<th class="${y === year ? 'is-year' : ''}">${y}</th>`).join('')}</tr></thead>
+        <tbody><tr>${years.map(y => `<td class="${y === year ? 'is-year' : ''}">${esc(cell(fact.values[y]))}</td>`).join('')}</tr></tbody>
+      </table></div>
+    </div>`;
+  const wrap = $('#fact-card .table-wrap');
+  const picked = $('#fact-card th.is-year');
+  if (wrap && picked) wrap.scrollLeft = picked.offsetLeft - wrap.clientWidth / 2 + picked.offsetWidth / 2;
+}
+
+function closeFact() {
+  SEARCH.fact = null;
+  $('#fact-card').innerHTML = '';
+  $('#cs-status').textContent = '';
+}
+
+// A searched fact as its own chart, above the others until the page reloads.
+function chartFact() {
+  const fact = SEARCH.fact;
+  if (!fact || !EC.spec) return;
+  const id = 'fact_' + fact.concept;
+  if (!EC.custom.some(c => c.id === id && c.ticker === GRAPH.ticker)) {
+    const years = EC.spec.years.length ? EC.spec.years : Object.keys(fact.values).map(Number).sort((a, b) => a - b);
+    const [format, divisor, unitName] = unitFormat(fact.unit);
+    const axis = { mm: 'money', shares: 'shares', moneyps: 'moneyps', pct: 'pct' }[format];
+    EC.custom.unshift({
+      id, ticker: GRAPH.ticker, name: fact.label, panels: [{
+        title: `${GRAPH.ticker} · ${fact.label}`, subtitle: `Fiscal years {span} · ${unitName}`, years,
+        series: [{ label: fact.label, kind: 'bar', format, axis: 0, derived: false, color: '#4c72b0',
+                   concepts: [fact.concept], values: years.map(y => fact.values[y] == null ? null : fact.values[y] / divisor) }],
+        axes: [{ format: axis }], margin: 0.14, note: null, reference: null, empty: 'No data', group_width: 0.6,
+      }],
+    });
+  }
+  closeFact();
+  renderResults(GRAPH.results, '#results-graph').then(() => {
+    const chart = EC.custom.find(c => c.id === id);
+    if (!chart) return;
+    const panel = chart.panels[0];
+    focusSeries(id, 0, fact.label, pickYear(panel.years, panel.series[0].values));
+  });
+}
+
+function removeCustomChart(id) {
+  EC.custom = EC.custom.filter(c => !(c.id === id && c.ticker === GRAPH.ticker));
+  const figure = document.getElementById(chartId(id));
+  if (figure) { disposeCharts(figure); figure.remove(); }
+  $('#chart-index').innerHTML = chartIndex();
+  watchIndex();
+}
+
+function fillSearchYears(spec) {
+  const select = $('#cs-year');
+  const current = select.value;
+  const years = [...spec.years].sort((a, b) => b - a);
+  select.innerHTML = '<option value="">Latest year</option>' + years.map(y => `<option value="${y}">${y}</option>`).join('');
+  if (years.includes(Number(current))) select.value = current;
+}
+
+// Picking another year re-runs the last pick.
+function searchYearChanged() {
+  if (SEARCH.fact) { showFact(SEARCH.fact); return; }
+  const label = $('#cs-input').value.trim();
+  const hit = label && searchEntries().find(e => e.kind === 'chart' && e.label === label);
+  if (hit) {
+    SEARCH.results = [hit];
+    pickSearch(0);
+  }
+}
+
+/* Calculation check ----------------------------------------------------------- */
+// Each total in the filings' calculation linkbase against the sum of its
+// parts (calc_check.py). Statement totals that do not add up come first: they
+// name the line a filer reports in an unexpected way. Notes are folded away.
+
+async function loadChecks(data) {
+  const key = `${data.ticker}|${data.modified}`;
+  if (CHECKS.key !== key) {
+    CHECKS.key = key;
+    CHECKS.data = null;
+    try {
+      const res = await fetch(`/api/checks/${encodeURIComponent(data.ticker)}`);
+      if (CHECKS.key !== key) return;
+      CHECKS.data = res.ok ? await res.json() : null;
+    } catch { CHECKS.data = null; }
+  }
+  if (CHECKS.key === key) renderChecks();
+}
+
+function checkIssue(item) {
+  const money = v => v == null ? '–' : VALUE_FMT.mm(v / 1e6);
+  const verdict = item.status === 'mismatch'
+    ? `<span class="ck-badge mismatch">off by ${esc(money(item.difference))}</span>`
+    : '<span class="ck-badge incomplete">untagged parts</span>';
+  const parts = (item.parts || []).map(part => `<tr class="${part.value == null ? 'muted' : ''}">
+      <td>${part.weight < 0 ? '−' : '+'}</td><td>${esc(part.label)}</td>
+      <td>${part.value == null ? 'no plain value' : esc(money(part.value))}</td></tr>`).join('');
+  return `<li><details>
+      <summary><span class="ck-year">${esc(Number(item.fiscal_year) || '')}</span>
+        <span class="ck-label">${esc(item.label)}</span><span class="ck-where">${esc(item.statement)}</span>${verdict}</summary>
+      ${item.hint ? `<p class="ck-why">${esc(item.hint)}</p>` : ''}
+      <div class="table-wrap"><table class="data ck-table">
+        <tbody>${parts}
+          <tr class="ck-sum"><td>=</td><td>Sum of the parts</td><td>${esc(money(item.computed))}</td></tr>
+          <tr class="ck-sum"><td></td><td>Reported total <span class="muted">${esc(item.concept)}</span></td><td>${esc(money(item.reported))}</td></tr>
+        </tbody></table></div>
+    </details></li>`;
+}
+
+function renderChecks() {
+  const box = $('#calc-checks');
+  const data = CHECKS.data;
+  // A run in progress replaces the check: show none until it is done.
+  const live = GRAPH.state === 'queued' || GRAPH.state === 'running';
+  if (!data || live) { box.innerHTML = ''; return; }
+  setCurrency(data.currency);
+  const { statement: st, note } = data.counts;
+  const issues = kind => data.issues.filter(item => item.kind === kind);
+  const list = (items, limit = 150) => items.length
+    ? `<ul class="ck-list">${items.slice(0, limit).map(checkIssue).join('')}</ul>`
+      + (items.length > limit ? `<p class="muted">…and ${items.length - limit} more in calc_check.csv.</p>` : '')
+    : '<p class="muted">Every one adds up.</p>';
+  const parts = [`${st.ok} of ${st.totals} statement totals add up`];
+  if (st.mismatch) parts.push(`${st.mismatch} don't`);
+  if (st.incomplete) parts.push(`${st.incomplete} with untagged parts`);
+  box.innerHTML = `
+    <details class="checks">
+      <summary><span class="checks-title">Calculation check</span>
+        <span class="checks-sum ${st.mismatch ? 'has-issues' : ''}">${esc(parts.join(' · '))}</span></summary>
+      <p class="ck-hint">Each total in the ${esc(data.filings)} filings' calculation linkbase against the sum of
+        its parts. <b>Off by</b>: the parts all have values and still differ. <b>Untagged parts</b>: some are
+        only tagged per segment, so the sum cannot close.</p>
+      ${list(issues('statement'))}
+      <details class="ck-notes"><summary>Notes: ${note.ok} of ${note.totals} totals add up</summary>
+        ${list(issues('note'))}</details>
+    </details>`;
+}
+
+/* Download dialog ---------------------------------------------------------------- */
+// Ticks what goes in the zip: charts (PNGs drawn by the server only now, in
+// windows of 5 or 10 years or one wide image), the run's data files, and
+// extras. The Charts tab's choices are remembered; Home starts with
+// everything, a chart's own button with just that chart.
+const DL = { ticker: '', mode: 'graph', opener: null, years: 5, theme: 'light', spec: null, busy: false };
+const FILE_INFO = {
+  'financial_data.csv': 'Key figures and ratios per year',
+  'statements.csv': 'Every line of the three statements',
+  'facts.csv': 'Every XBRL fact in the filings',
+  'notes.csv': 'Note schedules: debt, leases and more',
+  'evaluation.csv': 'Valuation: price, P/E, F- and Z-score',
+  'data_quality.csv': 'Which chart values are reported, derived or missing',
+  'charts.json': 'The charts as data',
+  'calc_check.csv': 'Calculation check: each total against its parts',
+  'insider.json': 'Insider trades as collected',
+  'run.log': 'Log of the last run',
+};
+const EXTRAS = [
+  ['insiders', 'insiders.csv', () => `Insider trades of the last ${INSIDER.months} month(s)`],
+  ['news', 'news.csv', () => 'Headlines, with the News tab’s options'],
+  ['screener', 'screener.csv', () => 'This ticker’s screener row'],
+  ['debug', '_debug folder', () => 'Version, run logs and diagnostics, for bug reports'],
+];
+
+function dlPrefs() {
+  try { return JSON.parse(localStorage.getItem('stocky-download') || '{}') || {}; } catch { return {}; }
+}
+
+async function openDownload(mode = 'graph', only = '') {
+  const ticker = GRAPH.ticker;
+  if (!ticker) return;
+  let data = GRAPH.results && GRAPH.results.ticker === ticker ? GRAPH.results : null;
+  if (!data) {
+    const res = await fetch(`/api/files/${encodeURIComponent(ticker)}`).catch(() => null);
+    if (!res || !res.ok) { alert('Nothing to download yet.'); return; }
+    data = await res.json();
+  }
+  const spec = data.charts.length ? await loadSpec(data) : null;
+  const prefs = dlPrefs();
+  const saved = mode === 'graph' ? prefs.graph : null;
+  Object.assign(DL, { ticker, mode, spec, opener: document.activeElement, busy: false,
+                      years: [5, 10, 0].includes(prefs.years) ? prefs.years : 5,
+                      theme: prefs.theme || document.documentElement.dataset.theme || 'light' });
+  const charts = spec ? spec.charts : [];
+  const ticked = (kind, value, fallback) => mode === 'chart' ? kind === 'charts' && value === only
+    : mode === 'home' ? true : saved && saved[kind] ? saved[kind].includes(value) : fallback;
+  $('#dl-title').textContent = `Download ${ticker}`;
+  $('#dl-charts').innerHTML = charts.length ? charts.map(chart => `
+      <label class="dl-item"><input type="checkbox" name="dl-chart" value="${esc(chart.id)}" onchange="syncDownload()"
+        ${ticked('charts', chart.id, true) ? 'checked' : ''}><span class="dl-name">${esc(chart.name)}</span>
+        <span class="dl-meta" data-images="${esc(chart.id)}"></span></label>`).join('')
+    : '<p class="muted">No charts for this run: a screener run collects the data only.</p>';
+  $('#dl-files').innerHTML = (data.files || []).map(name => `
+      <label class="dl-item"><input type="checkbox" name="dl-file" value="${esc(name)}" onchange="syncDownload()"
+        ${ticked('files', name, true) ? 'checked' : ''}><span class="dl-name">${esc(name)}</span>
+        <span class="dl-meta">${esc(FILE_INFO[name] || '')}</span></label>`).join('');
+  $('#dl-extras').innerHTML = EXTRAS.map(([key, name, info]) => `
+      <label class="dl-item"><input type="checkbox" name="dl-extra" value="${key}" onchange="syncDownload()"
+        ${ticked('extras', key, false) ? 'checked' : ''}><span class="dl-name">${esc(name)}</span>
+        <span class="dl-meta">${esc(info())}</span></label>`).join('');
+  $('#dl-backdrop').classList.remove('hidden');
+  syncDownload();
+  $('#dl-go').focus();
+}
+
+function closeDownload() {
+  if (DL.busy) return;
+  $('#dl-backdrop').classList.add('hidden');
+  if (DL.opener && DL.opener.focus) DL.opener.focus();
+}
+
+const dlChecked = name => [...document.querySelectorAll(`input[name="${name}"]:checked`)].map(input => input.value);
+
+function dlGroup(box) {
+  for (const input of document.querySelectorAll(`input[name="${box.dataset.group}"]`)) input.checked = box.checked;
+  syncDownload();
+}
+
+function setDlOption(key, value) {
+  DL[key] = value;
+  syncDownload();
+}
+
+function syncDownload() {
+  for (const box of document.querySelectorAll('.dl-group input')) {
+    const all = document.querySelectorAll(`input[name="${box.dataset.group}"]`);
+    const on = dlChecked(box.dataset.group).length;
+    box.checked = all.length > 0 && on === all.length;
+    box.indeterminate = on > 0 && on < all.length;
+    box.disabled = all.length === 0;
+  }
+  let images = 0;
+  for (const chart of DL.spec ? DL.spec.charts : []) {
+    const years = new Set(chart.panels.flatMap(p => p.years)).size;
+    const count = DL.years ? Math.ceil(years / DL.years) : 1;
+    const meta = document.querySelector(`[data-images="${CSS.escape(chart.id)}"]`);
+    if (meta) meta.textContent = `${count} image${count === 1 ? '' : 's'}`;
+    if (dlChecked('dl-chart').includes(chart.id)) images += count;
+  }
+  for (const button of document.querySelectorAll('#dl-years button')) {
+    button.classList.toggle('active', Number(button.dataset.value) === DL.years);
+  }
+  for (const button of document.querySelectorAll('#dl-theme button')) {
+    button.classList.toggle('active', button.dataset.value === DL.theme);
+  }
+  $('#dl-png-opts').classList.toggle('is-off', !dlChecked('dl-chart').length);
+  const files = dlChecked('dl-file').length + dlChecked('dl-extra').length;
+  const parts = [images ? `${images} image${images === 1 ? '' : 's'}` : '', files ? `${files} file${files === 1 ? '' : 's'}` : ''].filter(Boolean);
+  const summary = $('#dl-summary');
+  summary.classList.remove('is-error');
+  summary.textContent = parts.length ? parts.join(' and ') : 'Tick something to download.';
+  $('#dl-go').disabled = !parts.length || DL.busy;
+}
+
+async function runDownload() {
+  const charts = dlChecked('dl-chart'), files = dlChecked('dl-file'), extras = dlChecked('dl-extra');
+  if (!charts.length && !files.length && !extras.length) return;
+  const prefs = dlPrefs();
+  prefs.years = DL.years;
+  prefs.theme = DL.theme;
+  if (DL.mode === 'graph') prefs.graph = { charts, files, extras };
+  try { localStorage.setItem('stocky-download', JSON.stringify(prefs)); } catch {}
+  const query = new URLSearchParams({
+    charts: charts.join(','), files: files.join(','), extras: extras.join(','),
+    years: String(DL.years), theme: DL.theme, months: String(INSIDER.months),
+    news_limit: String($('#news-limit').value || PREFS.newsLimit), news_days: String($('#news-days').value || PREFS.newsDays),
+  });
+  DL.busy = true;
+  syncDownload();
+  const summary = $('#dl-summary');
+  summary.textContent = charts.length ? 'Drawing the charts… the first download of a run takes a few seconds.' : 'Packing…';
+  try {
+    const res = await fetch(`/download/${encodeURIComponent(DL.ticker)}/all?${query}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const name = (disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i) || [])[1] || `${DL.ticker}.zip`;
+    saveBlob(await res.blob(), decodeURIComponent(name));
+    DL.busy = false;
+    closeDownload();
+  } catch (err) {
+    DL.busy = false;
+    syncDownload();
+    summary.textContent = `Download failed: ${err.message}`;
+    summary.classList.add('is-error');
+  }
+}
+
+// Every ticker drop-down reads "TICKER · last run date".
+const runOption = item =>
+  `<option value="${esc(item.ticker)}" data-modified="${esc(item.modified || '')}">${esc(item.ticker)} (${fmtDate(item.modified)})</option>`;
+
+// Run selectors follow the pinned Charts ticker whenever the pin changes (or the
+// viewer's own pick is gone); otherwise they keep the viewer's pick.
+function pickRun(select, runs, current) {
+  const has = ticker => runs.some(item => item.ticker === ticker);
+  const pinChanged = select.dataset.pin !== GRAPH.ticker;
+  select.dataset.pin = GRAPH.ticker;
+  if ((pinChanged || !has(current)) && has(GRAPH.ticker)) return GRAPH.ticker;
+  return has(current) ? current : runs[0].ticker;
+}
+
+/* News -------------------------------------------------------------------- */
+
+const fmtAgo = iso => {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return '';
+  const hours = Math.max(0, (Date.now() - then) / 3600000);
+  if (hours < 1) return 'just now';
+  if (hours < 24) return `${Math.floor(hours)} h ago`;
+  const days = Math.floor(hours / 24);
+  return days === 1 ? 'yesterday' : `${days} days ago`;
+};
+
+async function initNews() {
+  if (!SAVED.loaded) loadSaved();
+  if (SAVED.mode) { renderSavedNews(); return; }
+  const select = $('#news-run');
+  try {
+    const { items } = await (await fetch('/api/recent')).json();
+    if (!items.length) {
+      select.innerHTML = '';
+      $('#news-status').textContent = 'No tickers yet. Run a ticker first.';
+      $('#news-list').innerHTML = '';
+      return;
+    }
+    const current = NEWS.ticker || select.value;
+    select.innerHTML = items.map(runOption).join('');
+    select.value = pickRun(select, items, current);
+  } catch {
+    $('#news-status').textContent = 'Could not load runs.';
+    return;
+  }
+  if (select.value) await loadNews();
+}
+
+// The News tab's choices for this visit; Options → Defaults sets where they start.
+const newsQuery = () => `limit=${$('#news-limit').value || PREFS.newsLimit}&days=${$('#news-days').value || PREFS.newsDays}`;
+const NEWS = { articles: [], ticker: '' };
+
+function setNewsOption() {
+  if ($('#news-run').value) loadNews();
+}
+
+// The company menu picks whose news to load, or in Saved whose saved articles to show.
+function newsRunChanged() {
+  if (SAVED.mode) renderSavedNews();
+  else loadNews();
+}
+
+async function loadNews(fresh = false) {
+  if (SAVED.mode) { loadSaved(); return; }
+  const ticker = $('#news-run').value;
+  const list = $('#news-list');
+  list.innerHTML = '';
+  NEWS.articles = [];
+  NEWS.ticker = ticker;
+  if (!ticker) { $('#news-status').textContent = ''; return; }
+  $('#news-status').textContent = `Looking for ${ticker} articles…`;
+  try {
+    const res = await fetch(`/api/news/${encodeURIComponent(ticker)}?${newsQuery()}${fresh ? '&fresh=1' : ''}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || data.message || 'News unavailable.');
+    if (ticker !== $('#news-run').value || SAVED.mode) return;
+    const articles = Array.isArray(data.articles) ? data.articles : [];
+    NEWS.articles = articles;
+    $('#news-status').textContent = articles.length
+      ? `Top articles about ${data.company} from the last ${data.days} days (Google News and Yahoo Finance).`
+      : `No articles about ${data.company} in the last ${data.days} days.`;
+    list.innerHTML = articles.map((a, i) => newsRow(a, saveButton(i, a))).join('');
+  } catch (err) {
+    if (ticker === $('#news-run').value && !SAVED.mode) $('#news-status').textContent = err.message;
+  }
+}
+
+// One article row: the headline, its opening lines when the outlet gives
+// them, outlet and age, then one action button.
+function newsRow(a, action, showTicker = false) {
+  return `<li>
+      <div>
+        <a href="${esc(a.link)}" target="_blank" rel="noopener noreferrer">${esc(a.title)}</a>
+        ${a.summary ? `<p class="news-sum">${esc(a.summary)}</p>` : ''}
+        <div class="news-meta parts">${parts([a.source, showTicker ? a.ticker : '', fmtAgo(a.published)])}</div>
+      </div>
+      ${action}
+    </li>`;
+}
+
+// Saved articles live on the account (/api/saved-news), so they follow you
+// to every device. The Saved button swaps the list for them; the company
+// menu then filters them (All companies by default) and a search box narrows them.
+const SAVED = { articles: [], shown: [], links: new Set(), loaded: false, mode: false };
+
+function setSaved(articles) {
+  SAVED.articles = articles;
+  SAVED.links = new Set(articles.map(a => a.link));
+  SAVED.loaded = true;
+  $('#news-saved-count').textContent = articles.length || '';
+  if (SAVED.mode) { savedCompanies(); renderSavedNews(); return; }
+  for (const button of $('#news-list').querySelectorAll('.news-act')) {
+    const article = NEWS.articles[Number(button.dataset.i)];
+    if (article) button.setAttribute('aria-pressed', String(SAVED.links.has(article.link)));
+  }
+}
+
+async function loadSaved() {
+  try {
+    const res = await fetch('/api/saved-news');
+    if (res.ok) setSaved((await res.json()).articles || []);
+  } catch { /* the feed still works */ }
+}
+
+async function savedRequest(method, url, body) {
+  const res = await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : {},
+                                 body: body ? JSON.stringify(body) : undefined });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Could not save.');
+  setSaved(data.articles || []);
+}
+
+function saveButton(i, a) {
+  return `<button class="news-act" aria-pressed="${SAVED.links.has(a.link)}" data-i="${i}"
+      onclick="toggleSave(this)" title="Save this article" aria-label="Save: ${esc(a.title)}">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-bookmark" /></svg></button>`;
+}
+
+async function toggleSave(button) {
+  const a = NEWS.articles[Number(button.dataset.i)];
+  if (!a) return;
+  const saved = SAVED.links.has(a.link);
+  button.setAttribute('aria-pressed', String(!saved));
+  try {
+    if (saved) await savedRequest('DELETE', `/api/saved-news?link=${encodeURIComponent(a.link)}`);
+    else await savedRequest('POST', '/api/saved-news', { ...a, ticker: NEWS.ticker });
+  } catch (err) {
+    button.setAttribute('aria-pressed', String(saved));
+    $('#news-status').textContent = err.message;
+  }
+}
+
+async function removeSaved(index) {
+  const a = SAVED.shown[index];
+  if (!a) return;
+  try { await savedRequest('DELETE', `/api/saved-news?link=${encodeURIComponent(a.link)}`); }
+  catch (err) { $('#news-status').textContent = err.message; }
+}
+
+// The company menu in Saved: All companies, then each ticker that has saved articles.
+function savedCompanies() {
+  const select = $('#news-run');
+  const pick = select.value;
+  const tickers = [...new Set(SAVED.articles.map(a => a.ticker).filter(Boolean))].sort();
+  select.innerHTML = `<option value="">All companies</option>`
+    + tickers.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+  select.value = tickers.includes(pick) ? pick : '';
+}
+
+function toggleSavedNews(open = !SAVED.mode) {
+  SAVED.mode = open;
+  $('#news-saved-btn').setAttribute('aria-pressed', String(open));
+  $('#news-title').textContent = open ? 'Saved articles' : 'Company news';
+  $('#news-saved-search').hidden = !open;
+  for (const id of ['#news-limit', '#news-days']) $(id).hidden = open;
+  $('#news-list').innerHTML = '';
+  if (open) {
+    savedCompanies();
+    renderSavedNews();
+    if (!SAVED.loaded) loadSaved();
+    $('#saved-search').focus();
+  } else {
+    initNews();
+  }
+}
+
+function renderSavedNews() {
+  if (!SAVED.mode) return;
+  const ticker = $('#news-run').value;
+  const words = $('#saved-search').value.toLowerCase().split(/\s+/).filter(Boolean);
+  SAVED.shown = SAVED.articles.filter(a => {
+    const text = `${a.title} ${a.summary || ''} ${a.source} ${a.ticker || ''}`.toLowerCase();
+    return (!ticker || a.ticker === ticker) && words.every(word => text.includes(word));
+  });
+  const pool = ticker ? SAVED.articles.filter(a => a.ticker === ticker).length : SAVED.articles.length;
+  $('#news-status').textContent = !SAVED.articles.length
+    ? 'No saved articles yet. Press the bookmark beside an article to keep it here.'
+    : words.length ? `${SAVED.shown.length} of ${pool} saved articles match.`
+      : `${pool} saved article${pool === 1 ? '' : 's'}${ticker ? ` about ${ticker}` : ''}, newest first.`;
+  $('#news-list').innerHTML = SAVED.shown.map((a, i) => newsRow(a, `<button class="news-act remove"
+      onclick="removeSaved(${i})" title="Remove from saved" aria-label="Remove from saved: ${esc(a.title)}">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-cross" /></svg></button>`, !ticker)).join('');
+}
+
+/* Insiders ----------------------------------------------------------------- */
+
+async function initInsiders() {
+  const select = $('#insider-run');
+  try {
+    const { items } = await (await fetch('/api/recent')).json();
+    const runs = items.filter(item => item.has_insider);
+    if (!runs.length) {
+      select.innerHTML = '';
+      $('#insider-status').textContent = 'No insider data yet. Run a ticker first.';
+      $('#insider-body').innerHTML = '';
+      return;
+    }
+    const current = select.value;
+    select.innerHTML = runs.map(runOption).join('');
+    select.value = pickRun(select, runs, current);
+  } catch {
+    $('#insider-status').textContent = 'Could not load runs.';
+    return;
+  }
+  if (!select.value) return;
+  await loadInsiderTicker();
+}
+
+// How far back the Insiders tab looks: the Options default (1 year) unless
+// changed for this visit (runs collect up to 3 years).
+const INSIDER = { ticker: '', data: null, months: PREFS.insiderMonths, type: '' };
+$('#insider-months').value = String(INSIDER.months);
+
+function setInsiderMonths() {
+  INSIDER.months = Number($('#insider-months').value) || PREFS.insiderMonths;
+  renderInsiders();
+}
+
+// '' shows both; 'buy' or 'sell' keeps one side (the download follows it).
+function setInsiderType() {
+  INSIDER.type = $('#insider-type').value;
+  renderInsiders();
+}
+
+async function loadInsiderTicker() {
+  const ticker = $('#insider-run').value;
+  INSIDER.ticker = ticker;
+  INSIDER.data = null;
+  $('#insider-body').innerHTML = '';
+  if (!ticker) { $('#insider-status').textContent = ''; return; }
+  $('#insider-status').textContent = `Loading ${ticker} insider trades…`;
+  try {
+    const res = await fetch(`/api/insiders/${encodeURIComponent(ticker)}`);
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail.error || 'No insider data.');
+    }
+    const data = await res.json();
+    if (ticker !== INSIDER.ticker) return;
+    INSIDER.data = data;
+    renderInsiders();
+  } catch (err) {
+    if (ticker === INSIDER.ticker) $('#insider-status').textContent = `${ticker}: ${err.message}`;
+  }
+}
+
+// One trade per row, in columns: who, role, date, side, shares, value (whole dollars).
+const insiderRow = it => `<div class="stat ins-row">
+    <b class="ins-name">${esc(it.name || '—')}</b>
+    <span class="ins-role">${esc(it.title || '')}</span>
+    <span class="ins-date">${it.date ? esc(fmtDate(it.date)) : '—'}</span>
+    <span class="badge ${it.type === 'buy' ? 'done' : 'error'}">${esc(it.type || '—')}</span>
+    <span class="ins-num">${fmtInt(it.shares)} sh</span>
+    <b class="ins-num">${it.value_estimated && it.value != null
+      ? `<span title="Estimated: the filing gives a price range in a footnote; this uses its midpoint">≈${fmtMoney(it.value, 'USD', 0)}</span>`
+      : fmtMoney(it.value, 'USD', 0)}</b>
+  </div>`;
+
+function renderInsiders() {
+  const { ticker, data, months } = INSIDER;
+  if (!ticker || !data) return;
+  const now = new Date();
+  const cutoff = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - months, now.getUTCDate()))
+    .toISOString().slice(0, 10);
+  const rows = (Array.isArray(data.transactions) ? data.transactions : [])
+    .filter(it => !it.date || it.date >= cutoff)
+    .filter(it => !INSIDER.type || it.type === INSIDER.type);
+  const period = $('#insider-months').selectedOptions[0].textContent;
+  const kind = { buy: 'buy(s)', sell: 'sell(s)' }[INSIDER.type] || 'trade(s)';
+  // Runs made before the 3-year window collected 6 months only.
+  const since = data.since || '';
+  const short = since > cutoff || (!since && (data.months || 6) < months)
+    ? `; this run only ${since ? `goes back to ${fmtDate(since)}` : `covers ${data.months || 6} months`}; run ${ticker} again for up to 3 years`
+    : '';
+  const collected = data.generated ? `${ticker}, collected ${fmtDate(data.generated)}` : ticker;
+  // A failed collection or unread Form 4s: the list may be short, and "no trades" would be a guess.
+  const problem = data.error ? `; the collection failed (${data.error}), so trades are missing: run ${ticker} again`
+    : data.skipped ? `; ${data.skipped} Form 4 filing${data.skipped === 1 ? '' : 's'} could not be read, so trades may be missing`
+    : '';
+  if (!rows.length) {
+    INSIDER.rows = [];
+    $('#insider-body').innerHTML = '';
+    const none = { buy: 'buys', sell: 'sells' }[INSIDER.type] || 'trades';
+    $('#insider-status').textContent = `${collected}: no open-market insider ${none} in the last ${period}${short}${problem}`;
+    return;
+  }
+  INSIDER.rows = rows;
+  $('#insider-body').innerHTML = rows.map(insiderRow).join('');
+  $('#insider-status').textContent = `${collected}: ${rows.length} ${kind} in the last ${period}, newest first${short}${problem}`;
+}
+
+async function loadRecent() {
+  const res = await fetch('/api/recent');
+  const { items } = await res.json();
+  const list = $('#recent');
+  if (!items.length) { list.innerHTML = '<li class="muted">No runs yet.</li>'; return; }
+  list.innerHTML = items.map(it => `
+    <li>
+      <span class="t" onclick="openGraph('${esc(it.ticker)}')">${esc(it.ticker)}</span>
+      <span class="muted recent-meta">${it.charts.length} charts, ${fmtDate(it.modified)}
+        <a class="icon-link" href="/download/${esc(it.ticker)}" title="Download ${esc(it.ticker)} (.zip)"
+           aria-label="Download ${esc(it.ticker)} (.zip)"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download" /></svg></a>
+        <a class="icon-link danger" href="#" onclick="removeRecent('${esc(it.ticker)}');return false"
+           title="Delete ${esc(it.ticker)}'s results" aria-label="Delete ${esc(it.ticker)}'s results"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-trash" /></svg></a></span>
+    </li>`).join('');
+}
+
+async function removeRecent(ticker) {
+  if (!confirm(`Remove ${ticker}? This deletes financial_graphs/${ticker}.`)) return;
+  const res = await fetch(`/api/recent/${ticker}`, { method: 'DELETE' });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Could not remove run.');
+    return;
+  }
+  if (SIM.ticker === ticker) {
+    SIM.ticker = '';
+    SIM.data = null;
+    $('#sim-svg').replaceChildren();
+    $('#sim-result').innerHTML = '';
+    $('#sim-status').textContent = `${ticker} removed.`;
+  }
+  $('#sim-run').dataset.loaded = '';
+  if (GRAPH.ticker === ticker) setGraph('');
+  loadRecent();
+}
+
+/* Screener ----------------------------------------------------------------- */
+
+const SCREEN = {
+  items: [], sort: { key: 'greenblatt_rank', dir: 1 }, timer: null,
+  status: {}, total: 0, mode: 'run',
+};
+
+function parseTickers(raw) {
+  return String(raw || '').split(/[\s,]+/).map(t => t.trim().toUpperCase()).filter(Boolean);
+}
+
+function updateMode() {
+  const tickers = parseTickers($('#ticker').value);
+  const mode = tickers.length > 1 ? 'screen' : 'run';
+  SCREEN.mode = mode;
+  const btn = $('#run-btn');
+  btn.textContent = mode === 'screen' ? 'Screen' : 'Run';
+  btn.title = mode === 'screen'
+    ? `Screen ${tickers.length} tickers`
+    : 'Full 10-K analysis for one ticker';
+  return tickers;
+}
+
+function handlePrimary() {
+  const tickers = updateMode();
+  if (!tickers.length) return;
+  if (tickers.length > 1) submitScreen(tickers);
+  else runTicker(tickers[0]);
+}
+
+function submitScreen(tickers) {
+  tickers = tickers || parseTickers($('#ticker').value);
+  if (tickers.length < 2) return;
+  showTab('screener');
+  clearTimeout(SCREEN.timer);
+  $('#run-btn').disabled = true;
+  $('#screen-progress').textContent = 'queuing…';
+  SCREEN.status = Object.fromEntries(tickers.map(t => [t, 'queued']));
+  SCREEN.total = tickers.length;
+  screenProgress();
+  fetch('/api/screener', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tickers, filings: runFilings() }),
+  })
+    .then(async res => {
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Request failed');
+      const queued = Array.isArray(data.queued) ? data.queued : [];
+      for (const item of (Array.isArray(data.items) ? data.items : [])) {
+        if (item && item.ticker) SCREEN.status[item.ticker] = item.status;
+      }
+      screenProgress();
+      if (queued.length) screenPoll(queued);
+      else {
+        $('#screen-progress').textContent = `${tickers.length}/${tickers.length} done`;
+        loadScreener();
+      }
+    })
+    .catch(err => {
+      SCREEN.status = {};
+      syncCancel();
+      $('#screen-progress').textContent = `Screen failed: ${err.message}`;
+    })
+    .finally(() => { $('#run-btn').disabled = false; });
+}
+
+function screenProgress() {
+  const finished = ['done', 'error', 'cancelled', 'cached', 'idle'];
+  const done = Object.values(SCREEN.status).filter(status => finished.includes(status)).length;
+  $('#screen-progress').textContent = SCREEN.total ? `${done}/${SCREEN.total} done` : '';
+  syncCancel();
+}
+
+function screenPoll(queue) {
+  const pending = new Set(queue);
+  screenProgress();
+  const tick = async () => {
+    await Promise.all(Array.from(pending).map(async ticker => {
+      try {
+        const job = await (await fetch(`/api/status/${encodeURIComponent(ticker)}`)).json();
+        if (job.status) SCREEN.status[ticker] = job.status;
+      } catch { /* keep polling */ }
+    }));
+    for (const ticker of Array.from(pending)) {
+      const status = SCREEN.status[ticker];
+      if (['done', 'error', 'cancelled', 'idle'].includes(status)) pending.delete(ticker);
+    }
+    screenProgress();
+    if (pending.size) SCREEN.timer = setTimeout(tick, 3000);
+    else { SCREEN.timer = null; loadScreener(); }
+  };
+  SCREEN.timer = setTimeout(tick, 3000);
+}
+
+async function loadScreener() {
+  try {
+    const res = await fetch('/api/screener');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Request failed');
+    SCREEN.items = Array.isArray(data.items) ? data.items : [];
+    SCREEN.pipeline = data.pipeline || null;
+    renderScreener();
+    renderHome();
+  } catch {
+    $('#screen-notes').innerHTML = '';
+    $('#screen-body').innerHTML = '<tr><td colspan="12" class="muted">Could not load screened tickers.</td></tr>';
+  }
+}
+
+function sortScreen(key) {
+  const sort = SCREEN.sort;
+  if (sort.key === key) sort.dir = -sort.dir;
+  else { sort.key = key; sort.dir = 1; }
+  renderScreener();
+}
+
+// Open the ticker's charts; run the pipeline only when none exist yet
+// (screener runs skip charts).
+async function generateGraphs(ticker) {
+  try {
+    const res = await fetch(`/api/files/${encodeURIComponent(ticker)}`);
+    const data = res.ok ? await res.json() : null;
+    if (data && Array.isArray(data.charts) && data.charts.length) { openGraph(ticker); return; }
+  } catch { /* fall through to a run */ }
+  $('#ticker').value = ticker;
+  updateMode();
+  runTicker(ticker);
+}
+
+const scoreCell = (v, hi, lo) => {
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return '—';
+  const n = Number(v);
+  const shown = String(Math.round(n));
+  if (n >= hi) return `<span class="badge done">${shown}</span>`;
+  if (n <= lo) return `<span class="badge error">${shown}</span>`;
+  return shown;
+};
+
+// Filters: a lower or upper limit per column, in the units the table shows
+// (percent for the yields and returns). A ticker missing a limited value is left out.
+const SCREEN_FILTERS = [
+  { key: 'f_score', label: 'Min F-score', op: 'min', step: 1 },
+  { key: 'z_score', label: 'Min Z-score', op: 'min', step: 0.1 },
+  { key: 'pe', label: 'Max P/E', op: 'max', step: 1 },
+  { key: 'ev_ebit', label: 'Max EV/EBIT', op: 'max', step: 1 },
+  { key: 'earnings_yield', label: 'Min EY %', op: 'min', step: 1, pct: true },
+  { key: 'return_on_capital', label: 'Min ROC %', op: 'min', step: 1, pct: true },
+  { key: 'greenblatt_rank', label: 'Max Magic rank', op: 'max', step: 1 },
+  { key: 'fcf_yield', label: 'Min FCF yield %', op: 'min', step: 1, pct: true },
+  { key: 'pe_percentile', label: 'Max P/E pct', op: 'max', step: 5 },
+];
+// The usual cut-offs: Piotroski's strong F-score, Altman's safe zone,
+// Greenblatt's top of the ranking.
+const SCREEN_PRESETS = [
+  { id: 'all', label: 'All', filters: {} },
+  { id: 'quality', label: 'Quality', filters: { f_score: 7, z_score: 2.99 }, sort: ['f_score', -1],
+    title: 'Strong F-score (7 or more) and an Altman Z-score in the safe zone (2.99 or more)' },
+  { id: 'value', label: 'Value', filters: { pe: 15, ev_ebit: 10 }, sort: ['ev_ebit', 1],
+    title: 'P/E of 15 or less and EV/EBIT of 10 or less' },
+  { id: 'magic', label: 'Magic Formula top 10', filters: { greenblatt_rank: 10 }, sort: ['greenblatt_rank', 1],
+    title: "Greenblatt's ranking: high earnings yield and high return on capital together" },
+  { id: 'cash', label: 'Cash generators', filters: { fcf_yield: 5 }, sort: ['fcf_yield', -1],
+    title: 'Free cash flow yield of 5% or more' },
+  { id: 'cheap', label: 'Cheap for itself', filters: { pe_percentile: 25 }, sort: ['pe_percentile', 1],
+    title: 'P/E in the lowest quarter of its own history' },
+];
+SCREEN.filters = {};
+SCREEN.preset = 'all';
+try {
+  const saved = JSON.parse(localStorage.getItem('stocky-screen') || '{}');
+  if (saved.filters && typeof saved.filters === 'object') SCREEN.filters = saved.filters;
+  if (SCREEN_PRESETS.some(p => p.id === saved.preset) || saved.preset === 'custom') SCREEN.preset = saved.preset;
+} catch {}
+
+function saveScreenFilters() {
+  try { localStorage.setItem('stocky-screen', JSON.stringify({ filters: SCREEN.filters, preset: SCREEN.preset })); } catch {}
+}
+
+function renderScreenFilters() {
+  $('#screen-presets').innerHTML = SCREEN_PRESETS.map(p => `<button class="${SCREEN.preset === p.id ? 'active' : ''}"
+      aria-pressed="${SCREEN.preset === p.id}" ${p.title ? `title="${esc(p.title)}"` : ''}
+      onclick="applyScreenPreset('${p.id}')">${esc(p.label)}</button>`).join('');
+  $('#screen-form').innerHTML = SCREEN_FILTERS.map(f => `<div>
+        <label for="flt-${f.key}">${esc(f.label)}</label>
+        <input id="flt-${f.key}" type="number" step="${f.step}" value="${SCREEN.filters[f.key] ?? ''}"
+               placeholder="any" oninput="setScreenFilter('${f.key}', this.value)">
+      </div>`).join('') + `<button class="panel-btn flt-clear" onclick="applyScreenPreset('all')"
+        ${Object.keys(SCREEN.filters).length ? '' : 'disabled'}>Clear</button>`;
+}
+
+function applyScreenPreset(id) {
+  const preset = SCREEN_PRESETS.find(p => p.id === id) || SCREEN_PRESETS[0];
+  SCREEN.preset = preset.id;
+  SCREEN.filters = { ...preset.filters };
+  if (preset.sort) SCREEN.sort = { key: preset.sort[0], dir: preset.sort[1] };
+  saveScreenFilters();
+  renderScreenFilters();
+  renderScreener();
+}
+
+function setScreenFilter(key, raw) {
+  const value = raw === '' ? null : Number(raw);
+  if (value === null || Number.isNaN(value)) delete SCREEN.filters[key];
+  else SCREEN.filters[key] = value;
+  SCREEN.preset = Object.keys(SCREEN.filters).length ? 'custom' : 'all';
+  saveScreenFilters();
+  for (const button of $('#screen-presets').querySelectorAll('button')) {
+    const on = button.getAttribute('onclick').includes(`'${SCREEN.preset}'`);
+    button.classList.toggle('active', on);
+    button.setAttribute('aria-pressed', String(on));
+  }
+  $('#screen-form .flt-clear').disabled = !Object.keys(SCREEN.filters).length;
+  renderScreener();
+}
+
+function passesScreen(row) {
+  return SCREEN_FILTERS.every(f => {
+    const limit = SCREEN.filters[f.key];
+    if (limit === undefined) return true;
+    const raw = row[f.key];
+    if (raw === null || raw === undefined || raw === '' || Number.isNaN(Number(raw))) return false;
+    const value = Number(raw) * (f.pct ? 100 : 1);
+    return f.op === 'min' ? value >= limit : value <= limit;
+  });
+}
+
+function renderScreener() {
+  const body = $('#screen-body');
+  if (!$('#screen-presets').childElementCount) renderScreenFilters();
+  document.querySelectorAll('#screen-table th[data-key]').forEach(th => {
+    th.textContent = th.dataset.label + (th.dataset.key === SCREEN.sort.key ? (SCREEN.sort.dir > 0 ? ' ▲' : ' ▼') : '');
+    if (HELP[th.dataset.key]) th.title = HELP[th.dataset.key];
+  });
+  if (!SCREEN.items.length) {
+    body.innerHTML = '<tr><td colspan="12" class="muted">No screened tickers yet.</td></tr>';
+    return;
+  }
+  const stale = SCREEN.items.filter(row => row.has_evaluation === false).length;
+  const stalePipeline = SCREEN.pipeline && Array.isArray(SCREEN.pipeline.features)
+    && !SCREEN.pipeline.features.includes('valuation');
+  const pipelineNote = stalePipeline
+    ? `This deployment's pipeline has no <code>valuation.py</code> (version ${esc(SCREEN.pipeline.version || 'dev')}), so
+        the running container is older than the current repo. Redeploy, then re-run these tickers.`
+    : '';
+  const notes = [];
+  if (pipelineNote) notes.push(pipelineNote);
+  if (stale) notes.push(`${stale} ticker(s) have results but no <code>evaluation.csv</code>: the pipeline wrote no
+        valuation data. Open its log in the <a href="#logs" onclick="showTab('logs');return false">Logs tab</a>: <code>[!] valuation skipped</code> means Yahoo
+        price data was unreachable from the container (SEC works, Yahoo often does not). Re-run once it can reach it.`);
+  $('#screen-notes').innerHTML = notes.join('<br>');
+  const { key, dir } = SCREEN.sort;
+  const missing = v => v === null || v === undefined || v === ''
+    || (key !== 'ticker' && key !== 'modified' && Number.isNaN(Number(v)));
+  const rows = SCREEN.items.slice().sort((a, b) => {
+    const av = a[key], bv = b[key];
+    if (missing(av) && missing(bv)) return 0;
+    if (missing(av)) return 1;
+    if (missing(bv)) return -1;
+    if (key === 'ticker') return String(av).localeCompare(String(bv)) * dir;
+    if (key === 'modified') return (new Date(av) - new Date(bv)) * dir;
+    return (Number(av) - Number(bv)) * dir;
+  });
+  const shown = rows.filter(passesScreen);
+  SCREEN.sorted = shown;
+  const limited = Object.keys(SCREEN.filters).length;
+  $('#screen-count').textContent = limited
+    ? `${shown.length} of ${rows.length} tickers match.` : `${rows.length} tickers.`;
+  if (!shown.length) {
+    body.innerHTML = `<tr><td colspan="12" class="muted">No ticker matches these filters.
+      <a href="#" onclick="applyScreenPreset('all');return false">Clear them</a>.</td></tr>`;
+    return;
+  }
+  body.innerHTML = shown.map(row => `<tr>
+      <td><a href="#" class="ticker-link" onclick="openHome('${esc(row.ticker)}');return false"
+             title="Open ${esc(row.ticker)} in every tab"><strong>${esc(row.ticker)}</strong></a></td>
+      <td${tip('fiscal_year')}>${row.has_evaluation === false ? '—' : esc(row.fiscal_year ?? '—')}</td>
+      <td${tip('f_score')}>${row.has_evaluation === false ? '<span class="badge queued">no valuation</span>' : scoreCell(row.f_score, 7, 3)}</td>
+      <td${tip('z_score')}>${scoreCell(row.z_score, 2.99, 1.81)}</td>
+      <td${tip('pe')}>${fmtNum(row.pe, 1)}</td>
+      <td${tip('ev_ebit')}>${fmtNum(row.ev_ebit, 1)}</td>
+      <td${tip('earnings_yield')}>${fmtRatio(row.earnings_yield)}</td>
+      <td${tip('return_on_capital')}>${fmtRatio(row.return_on_capital)}</td>
+      <td${tip('greenblatt_rank')}>${row.greenblatt_rank ? '#' + row.greenblatt_rank : '—'}</td>
+      <td${tip('fcf_yield')}>${fmtRatio(row.fcf_yield)}</td>
+      <td${tip('pe_percentile')}>${fmtPctPoints(row.pe_percentile)}</td>
+      <td${tip('modified')}>${fmtDate(row.modified)}</td>
+    </tr>`).join('');
+}
+
+/* Downloads ---------------------------------------------------------------- */
+// Each tab downloads what it shows, with the options chosen there.
+
+function saveBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const link = Object.assign(document.createElement('a'), { href: url, download: name });
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// Rows as CSV: the `first` columns in that order, then every other key.
+function saveCsv(rows, name, first = []) {
+  if (!rows || !rows.length) { alert('Nothing to download yet.'); return; }
+  const columns = [...new Set([...first, ...rows.flatMap(row => Object.keys(row))])];
+  const cell = v => {
+    const text = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+    return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  };
+  const lines = [columns.join(','), ...rows.map(row => columns.map(c => cell(row[c])).join(','))];
+  saveBlob(new Blob([lines.join('\n') + '\n'], { type: 'text/csv' }), name);
+}
+
+const today = () => new Date().toISOString().slice(0, 10);
+
+function downloadHome() {
+  openDownload('home');
+}
+
+function downloadInsiders() {
+  const side = INSIDER.type ? `${INSIDER.type}s_` : '';
+  saveCsv(INSIDER.rows, `${INSIDER.ticker}_insiders_${side}${INSIDER.months}m_${today()}.csv`,
+          ['date', 'name', 'title', 'type', 'shares', 'value']);
+}
+
+function downloadScreener() {
+  // The table's columns first, in its order, then the fields it does not show.
+  const shown = [...document.querySelectorAll('#screen-table th[data-key]')].map(th => th.dataset.key);
+  saveCsv(SCREEN.sorted, `screener_${today()}.csv`, shown);
+}
+
+function downloadNews() {
+  if (SAVED.mode) {
+    saveCsv(SAVED.shown, `saved_news_${$('#news-run').value || 'all'}_${today()}.csv`,
+            ['ticker', 'title', 'summary', 'source', 'published', 'link', 'saved']);
+    return;
+  }
+  saveCsv(NEWS.articles, `${NEWS.ticker}_news_${$('#news-days').value}d_${today()}.csv`,
+          ['title', 'summary', 'source', 'published', 'link']);
+}
+
+// The price chart as drawn (current theme) with the projection under it.
+// The SVG uses CSS variables, which a standalone image cannot resolve, so
+// every colour and font is copied in from the live element first.
+async function downloadSimulation() {
+  const source = $('#sim-svg');
+  if (!SIM.data || !source.childElementCount) { alert('Nothing to download yet.'); return; }
+  const clone = source.cloneNode(true);
+  const live = [source, ...source.querySelectorAll('*')];
+  [clone, ...clone.querySelectorAll('*')].forEach((el, i) => {
+    const style = getComputedStyle(live[i]);
+    for (const prop of ['fill', 'stroke', 'opacity', 'stroke-width', 'stroke-dasharray', 'font-family', 'font-weight']) {
+      el.style.setProperty(prop, style.getPropertyValue(prop));
+    }
+  });
+  const box = source.viewBox.baseVal;
+  const scale = 2;
+  const page = getComputedStyle(document.body);
+  const font = page.fontFamily;
+  const lines = [[$('#sim-form-title').textContent, ''],
+    ...[...document.querySelectorAll('#sim-result .stat')].map(stat =>
+      [stat.firstElementChild?.textContent.trim() || '', stat.lastElementChild?.textContent.trim() || ''])];
+  const settings = `${SIM.ticker}, ${$('#sim-ranges button.active')?.textContent || SIM.range}`
+    + `, investment ${$('#sim-amount').value}, ${$('#sim-years').value} years`
+    + `, dividends ${SIM.mode === 'reinvest' ? 'reinvested' : 'cash'}`
+    + ($('#sim-target').value ? `, target ${$('#sim-target').value}` : '');
+  const rows = [...new Map(lines.map(row => [row.join('|'), row])).values()];
+  const lineH = 26, pad = 24;
+  const width = box.width, height = box.height + pad * 2 + lineH * (rows.length + 1);
+
+  clone.setAttribute('width', box.width);
+  clone.setAttribute('height', box.height);
+  const image = new Image();
+  await new Promise((resolve, reject) => {
+    image.onload = resolve;
+    image.onerror = () => reject(new Error('Could not draw the chart.'));
+    image.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(clone));
+  });
+
+  const canvas = Object.assign(document.createElement('canvas'), { width: width * scale, height: height * scale });
+  const ctx = canvas.getContext('2d');
+  ctx.scale(scale, scale);
+  ctx.fillStyle = page.backgroundColor;
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(image, 0, 0, box.width, box.height);
+  let y = box.height + pad;
+  ctx.font = `600 15px ${font}`;
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--heading').trim();
+  ctx.fillText(settings, pad, y);
+  for (const [label, value] of rows) {
+    y += lineH;
+    ctx.font = `14px ${font}`;
+    ctx.fillStyle = page.color;
+    ctx.fillText(label, pad, y);
+    if (value) ctx.fillText(value, pad + 320, y);
+  }
+  canvas.toBlob(blob => saveBlob(blob, `${SIM.ticker}_simulation_${SIM.range}_${today()}.png`), 'image/png');
+}
+
+/* Simulation --------------------------------------------------------------- */
+
+const SIM = { ticker: '', range: PREFS.simRange, mode: PREFS.simMode, data: null, backtest: null };
+
+function applySimPrefs() {
+  SIM.mode = PREFS.simMode;
+  SIM.range = PREFS.simRange;
+  $('#sim-amount').value = String(PREFS.simAmount);
+  $('#sim-years').value = String(PREFS.simYears);
+  $('#sim-cash').classList.toggle('active', SIM.mode === 'cash');
+  $('#sim-reinvest').classList.toggle('active', SIM.mode === 'reinvest');
+  document.querySelectorAll('#sim-ranges button')
+    .forEach(button => button.classList.toggle('active', button.dataset.range === SIM.range));
+}
+
+// Direction class for a signed result: gains green, losses red, zero plain.
+const tone = v => (Number(v) > 0 ? 'up' : Number(v) < 0 ? 'down' : '');
+
+// Money always shows the same number of decimals ($3,377,833.20, not .2).
+const fmtMoney = (v, currency = 'USD', digits = 2) => {
+  if (v === null || v === undefined || Number.isNaN(v)) return '—';
+  const symbol = currency === 'USD' ? '$' : esc(currency) + ' ';
+  return symbol + Number(v).toLocaleString(PREFS.number, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+};
+// Meta parts as spans; a .parts container spaces them.
+const parts = list => list.filter(Boolean).map(p => `<span>${esc(p)}</span>`).join('');
+const fmtNum = (v, digits = 2) =>
+  v === null || v === undefined || Number.isNaN(v) ? '—'
+    : Number(v).toLocaleString(PREFS.number, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+const fmtPct = (v, digits = 1) =>
+  v === null || v === undefined || Number.isNaN(v) ? '—'
+    : fmtNum(Math.abs(Number(v)) <= 1 ? Number(v) * 100 : Number(v), digits) + '%';
+const fmtRatio = (v, digits = 1) =>
+  v === null || v === undefined || Number.isNaN(Number(v)) ? '—'
+    : fmtNum(Number(v) * 100, digits) + '%';
+const fmtPctPoints = (v, digits = 1) =>
+  v === null || v === undefined || Number.isNaN(v) ? '—' : fmtNum(v, digits) + '%';
+const fmtInt = v =>
+  v === null || v === undefined || Number.isNaN(Number(v)) ? '—' : Number(v).toLocaleString(PREFS.number);
+const fmtDate = value => {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const year = d.getUTCFullYear();
+  if (PREFS.date === 'mdy') return `${month}/${day}/${year}`;
+  if (PREFS.date === 'ymd') return `${year}-${month}-${day}`;
+  return `${day}/${month}/${year}`;
+};
+
+/* Market ------------------------------------------------------------------ */
+
+// The global scan (scan.py): batches of companies in alphabetical order, each
+// filing dumped once. One batch at a time is open below the list: its issues,
+// its companies, one company's filings, or a run's log.
+const MARKET = { data: null, batch: null, view: 'issues', kind: '', detail: null, run: null, cik: null,
+                 company: null, timer: null, follow: false };
+const MK_KINDS = {
+  check_mismatch: 'Total does not add up', missing_metric: 'Metric not read', implausible_value: 'Value looks wrong', not_reported: 'Not in the filing', statement_missing: 'Statement not found', download_failed: 'Download failed',
+  analysis_failed: 'Filing unreadable', dump_part_failed: 'Part of a filing unread', company_failed: 'Company failed',
+  overdue_10k: '10-K overdue', statement_unread: 'Statement not read', valuation_input_missing: 'Valuation input missing',
+  valuation_assumed: 'Valuation uses an assumption', valuation_skipped: 'Valuation not computed',
+};
+const MK_RESULTS = { ok: 'OK', partial: 'Partial', failed: 'Failed', no_filings: 'No annual reports', no_xbrl: 'No XBRL' };
+const MK_VIEWS = { issues: 'Issues', companies: 'Companies', log: 'Log' };
+
+const mkNumber = v => (v === null || v === undefined || v === '' ? '—'
+  : Math.abs(Number(v)) >= 1000 ? fmtInt(Math.round(Number(v))) : fmtNum(Number(v), 3));
+const mkCount = v => (v ? fmtInt(v) : '<span class="mk-info">0</span>');
+// Kinds with their own column; every other kind adds up in "Other", so a new
+// or renamed kind can never drop out of the counts.
+const MK_COLUMN_KINDS = ['check_mismatch', 'missing_metric', 'statement_missing', 'not_reported', 'implausible_value',
+                         'download_failed', 'analysis_failed', 'company_failed'];
+const mkOther = (kinds, shown = MK_COLUMN_KINDS) =>
+  Object.entries(kinds || {}).reduce((sum, [kind, n]) => sum + (shown.includes(kind) ? 0 : n), 0);
+
+async function mkJSON(url, options) {
+  const res = await fetch(url, options);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+async function loadMarket() {
+  clearTimeout(MARKET.timer);
+  try {
+    MARKET.data = await mkJSON('/api/scan');
+  } catch (err) {
+    $('#mk-meta').textContent = `Could not load the scan: ${err.message}`;
+    return;
+  }
+  const active = MARKET.data.active;
+  // A batch just started: open its log.
+  if (active && MARKET.follow) {
+    MARKET.follow = false;
+    MARKET.batch = active.batch;
+    MARKET.view = 'log';
+    MARKET.run = active.id;
+  }
+  renderMarket();
+  if (MARKET.batch) await loadMarketBatch(MARKET.batch, { keep: true });
+  if ((active || MARKET.follow) && !$('#pane-market').classList.contains('hidden')) {
+    MARKET.timer = setTimeout(loadMarket, 4000);
+  }
+}
+
+function renderMarketStart() {
+  const count = Math.floor(Number($('#mk-count').value));
+  const valid = count >= 1 && count <= (MARKET.data?.max_count || 10000);
+  const busy = Boolean(MARKET.data?.active);
+  $('#mk-run').textContent = valid ? `Scan the next ${fmtInt(count)}` : 'Scan the next batch';
+  $('#mk-run').disabled = !valid || busy || MARKET.data?.next === null && MARKET.data?.universe > 0;
+}
+
+function renderMarket() {
+  const data = MARKET.data;
+  const active = data.active;
+  const scanned = data.batches.reduce((sum, b) => sum + b.companies, 0);
+  const meta = [
+    data.universe ? `${fmtInt(data.universe)} companies in SEC's list` : 'SEC’s company list is downloaded with the first batch',
+    `${fmtInt(scanned)} scanned in ${fmtInt(data.batches.length)} ${data.batches.length === 1 ? 'batch' : 'batches'}`,
+    data.next ? `next: ${data.next}` : '',
+  ].filter(Boolean).join(' · ');
+  const reader = data.reader.classified ? ''
+    : ` · dump reader ${data.reader.id} is not in readers.json yet`;
+  $('#mk-meta').textContent = meta + reader;
+  $('#mk-stop').hidden = !active;
+  $('#mk-active').hidden = !active;
+  if (active) {
+    const what = { next: 'Scanning', resume: 'Resuming', rerun: 'Rerunning from the dump' }[active.kind] || active.kind;
+    const done = active.done || 0;
+    $('#mk-active-text').textContent = `${what}: batch ${active.batch}, ${fmtInt(done)} of ${fmtInt(active.total)} companies`
+      + (active.current ? `, now ${active.current}` : '')
+      + (active.kind !== 'rerun' ? ` · ${fmtInt(active.downloaded)} filings downloaded, ${fmtInt(active.from_dump)} already kept` : '')
+      + (active.download_failed ? `, ${fmtInt(active.download_failed)} failed` : '');
+    const pct = active.total ? Math.round(100 * done / active.total) : 0;
+    $('#mk-bar span').style.width = `${pct}%`;
+    $('#mk-bar').setAttribute('aria-valuenow', String(pct));
+    $('#mk-progress').textContent = `run ${active.id}: ${pct}%`;
+  } else {
+    $('#mk-progress').textContent = '';
+  }
+  renderMarketStart();
+
+  const busy = Boolean(active);
+  $('#mk-batch-body').innerHTML = data.batches.length ? data.batches.map(b => {
+    const r = b.results;
+    const kinds = b.issue_kinds || {};
+    const errors = (kinds.download_failed || 0) + (kinds.analysis_failed || 0) + (kinds.company_failed || 0);
+    const other = mkOther(kinds);
+    const unfinished = b.companies < b.size;
+    const open = MARKET.batch === b.batch;
+    return `<tr>
+      <td><button class="mk-link" onclick="openMarketBatch(${b.batch})" aria-pressed="${open}">${b.batch}</button></td>
+      <td class="mk-left">${esc(b.first || '')}–${esc(b.last || '')}</td>
+      <td>${fmtInt(b.companies)}/${fmtInt(b.size)}</td>
+      <td>${mkCount(r.ok)}</td><td>${mkCount(r.partial)}</td>
+      <td class="${r.failed ? 'mk-error' : ''}">${mkCount(r.failed)}</td>
+      <td>${mkCount((r.no_filings || 0) + (r.no_xbrl || 0))}</td>
+      <td>${fmtInt(b.dumped)}/${fmtInt(b.filings)}</td>
+      <td>${mkCount(kinds.check_mismatch)}</td><td>${mkCount(kinds.missing_metric)}</td>
+      <td>${mkCount(kinds.statement_missing)}</td><td>${mkCount(kinds.not_reported)}</td>
+      <td>${mkCount(kinds.implausible_value)}</td><td>${mkCount(other)}</td>
+      <td class="${errors ? 'mk-error' : ''}">${mkCount(errors)}</td>
+      <td><span class="mk-row-actions">
+        <button class="panel-btn row-btn" onclick="marketAction('rerun', ${b.batch})" ${busy ? 'disabled' : ''}
+                title="Analyse this batch again from the kept filings; nothing is downloaded">Rerun</button>
+        ${b.download_failed ? `<button class="panel-btn row-btn" onclick="marketAction('rerun', ${b.batch}, { retry_failed: true })" ${busy ? 'disabled' : ''}
+                title="Download the ${b.download_failed} filings that failed, then analyse the batch again">Retry downloads</button>` : ''}
+        ${unfinished ? `<button class="panel-btn row-btn" onclick="marketAction('resume', ${b.batch})" ${busy ? 'disabled' : ''}
+                title="Scan the companies this batch has not done yet">Resume</button>` : ''}
+      </span></td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="12" class="muted">No batch yet: choose how many companies and press Scan.</td></tr>';
+}
+
+async function marketStart() {
+  const count = Math.floor(Number($('#mk-count').value));
+  await marketRequest({ action: 'next', count });
+}
+
+async function marketAction(action, batch, extra = {}) {
+  await marketRequest({ action, batch, ...extra });
+}
+
+async function marketRequest(payload) {
+  try {
+    await mkJSON('/api/scan/run', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify(payload) });
+  } catch (err) {
+    $('#mk-meta').textContent = `Could not start: ${err.message}`;
+    return;
+  }
+  MARKET.follow = true;
+  if (payload.batch) {
+    MARKET.batch = payload.batch;
+    MARKET.view = 'log';
+    MARKET.run = null;
+  }
+  setTimeout(loadMarket, 700);
+}
+
+async function marketStop() {
+  try {
+    await mkJSON('/api/scan/cancel', { method: 'POST' });
+  } catch (err) {
+    $('#mk-meta').textContent = `Could not stop: ${err.message}`;
+  }
+  setTimeout(loadMarket, 1500);
+}
+
+function openMarketBatch(batch) {
+  if (MARKET.batch !== batch) {
+    MARKET.batch = batch;
+    MARKET.view = 'issues';
+    MARKET.kind = '';
+    MARKET.run = null;
+    MARKET.cik = null;
+  }
+  renderMarket();
+  loadMarketBatch(batch);
+}
+
+function setMarketView(view) {
+  MARKET.view = view;
+  if (view !== 'company') MARKET.cik = null;
+  renderMarketDetail();
+  if (view === 'log') loadMarketLog();
+}
+
+async function loadMarketBatch(batch, { keep = false } = {}) {
+  if (!batch) return;
+  try {
+    const kind = MARKET.kind ? `?kind=${encodeURIComponent(MARKET.kind)}` : '';
+    MARKET.detail = await mkJSON(`/api/scan/batch/${batch}${kind}`);
+  } catch (err) {
+    $('#mk-detail').hidden = false;
+    $('#mk-detail-meta').textContent = `Could not load batch ${batch}: ${err.message}`;
+    return;
+  }
+  renderMarketDetail();
+  if (MARKET.view === 'log') await loadMarketLog();
+  if (MARKET.view === 'company' && MARKET.cik && !keep) await loadMarketCompany(MARKET.cik);
+}
+
+function mkHead(cells) {
+  $('#mk-head').innerHTML = `<tr>${cells.map(([label, cls = '', title = '']) =>
+    `<th class="${cls}"${title ? ` title="${esc(title)}"` : ''}>${esc(label)}</th>`).join('')}</tr>`;
+}
+
+// One row per issue: the line, then where it sits and why, in the same cell.
+function mkIssueRows(issues, withTicker = true) {
+  if (!issues.length) return `<tr><td colspan="7" class="muted">No issues${MARKET.kind ? ' of this kind' : ''}.</td></tr>`;
+  return issues.map(i => {
+    const where = [i.statement, i.concept && i.concept !== i.label ? i.concept : '', i.accession].filter(Boolean).join(' · ');
+    return `<tr class="${i.severity === 'error' ? 'mk-error' : i.severity === 'info' ? 'mk-info' : ''}">
+      <td>${withTicker ? `<button class="mk-link" onclick="openMarketCompany(${i.cik})">${esc(i.ticker || i.cik)}</button>` : esc(i.form || '')}</td>
+      <td>${i.fiscal_year ? `FY${i.fiscal_year}` : esc(i.period || '')}</td>
+      <td class="mk-left">${esc(MK_KINDS[i.kind] || i.kind)}</td>
+      <td class="mk-text"><b>${esc(i.label || i.concept || '')}</b>${i.detail ? `<span class="mk-why">${esc(i.detail)}</span>` : ''}${where ? `<span class="mk-where">${esc(where)}</span>` : ''}</td>
+      <td>${mkNumber(i.reported)}</td><td>${mkNumber(i.computed)}</td><td>${mkNumber(i.difference)}</td>
+    </tr>`;
+  }).join('');
+}
+
+const MK_ISSUE_HEAD = [['Ticker'], ['Year'], ['Issue', 'mk-left'], ['Line, why, where', 'mk-left'],
+  ['Reported', '', 'What the filing says the total is'], ['Computed', '', 'The sum of its parts'], ['Difference']];
+
+function renderMarketDetail() {
+  const detail = MARKET.detail;
+  if (!detail) return;
+  const s = detail.summary;
+  $('#mk-detail').hidden = false;
+  $('#mk-detail-title').textContent = MARKET.view === 'company' && MARKET.company
+    ? `${MARKET.company.universe.ticker} · ${MARKET.company.universe.name}`
+    : `Batch ${s.batch}: ${s.first}–${s.last}`;
+  const views = { ...MK_VIEWS, ...(MARKET.cik ? { company: MARKET.company?.universe.ticker || 'Company' } : {}) };
+  $('#mk-views').innerHTML = Object.entries(views).map(([key, label]) =>
+    `<button class="${MARKET.view === key ? 'active' : ''}" aria-pressed="${MARKET.view === key}" onclick="setMarketView('${key}')">${esc(label)}</button>`).join('');
+  const kinds = s.issue_kinds || {};
+  $('#mk-kind').hidden = MARKET.view !== 'issues';
+  $('#mk-kind').innerHTML = `<option value="">Every issue (${fmtInt(s.issues)})</option>`
+    + Object.entries(kinds).map(([kind, n]) =>
+      `<option value="${esc(kind)}" ${MARKET.kind === kind ? 'selected' : ''}>${esc(MK_KINDS[kind] || kind)} (${fmtInt(n)})</option>`).join('');
+  $('#mk-csv').hidden = MARKET.view !== 'issues';
+  const runs = (MARKET.data?.runs || []).filter(run => run.batch === s.batch);
+  if (!MARKET.run && runs.length) MARKET.run = runs[0].id;
+  $('#mk-run-log').hidden = MARKET.view !== 'log' || !runs.length;
+  $('#mk-log-dl').hidden = MARKET.view !== 'log' || !MARKET.run;
+  $('#mk-run-log').innerHTML = runs.map(run =>
+    `<option value="${run.id}" ${run.id === MARKET.run ? 'selected' : ''}>Run ${run.id}: ${esc(run.kind)}, ${esc(run.status)}${run.started ? `, ${fmtDate(run.started)}` : ''}</option>`).join('');
+  const log = MARKET.view === 'log';
+  $('#mk-log-box').hidden = !log;
+  $('#mk-table-wrap').hidden = log;
+
+  if (MARKET.view === 'issues') {
+    const shown = detail.issues.length;
+    $('#mk-detail-meta').textContent = `${fmtInt(s.issues)} issues in ${fmtInt(s.companies)} companies`
+      + (shown < (MARKET.kind ? kinds[MARKET.kind] || 0 : s.issues) ? `; the first ${fmtInt(shown)} shown, the CSV has them all` : '')
+      + '. Errors first, then warnings; notes (dimmed) are still issues and count in every total.';
+    mkHead(MK_ISSUE_HEAD);
+    $('#mk-body').innerHTML = mkIssueRows(detail.issues);
+  } else if (MARKET.view === 'companies') {
+    $('#mk-detail-meta').textContent = `${fmtInt(s.companies)} of ${fmtInt(s.size)} companies done; `
+      + `${fmtInt(s.dumped)} of ${fmtInt(s.filings)} filings kept (${(s.bytes / 1048576).toFixed(1)} MB).`;
+    mkHead([['Ticker'], ['Name', 'mk-left'], ['Result', 'mk-left'], ['Years'],
+      ['Annual', '', 'Fiscal years analysed of the annual reports found'], ['10-Q', '', '10-Qs after the latest annual report'],
+      ['Adds up', '', 'Totals that add up, of those checked'], ['Mismatches'], ['Unread', '', 'Metrics in the filing that were not read'],
+      ['No statement', '', 'Metrics not read because no statement was found'], ['Not in filing', '', 'Metrics checked against the filing and not in it'],
+      ['Looks wrong', '', 'Metrics that contradict each other'], ['Other', '', 'Every other issue kind, errors included'], ['Issues'], ['Time'],
+      ['Error', 'mk-left']]);
+    $('#mk-body').innerHTML = detail.companies.map(c => `<tr class="${c.result === 'failed' ? 'mk-error' : !c.result ? 'mk-info' : ''}">
+        <td><button class="mk-link" onclick="openMarketCompany(${c.cik})">${esc(c.ticker)}</button></td>
+        <td class="mk-left">${esc(c.name || '')}</td>
+        <td class="mk-left">${esc(c.result ? MK_RESULTS[c.result] || c.result : 'not done yet')}</td>
+        <td>${c.first_fy ? `${c.first_fy}–${c.last_fy}` : '—'}</td>
+        <td>${c.result ? `${fmtInt(c.annual_analysed || 0)}/${fmtInt(c.annual_found || 0)}` : '—'}</td>
+        <td>${c.result ? fmtInt(c.quarterly_found || 0) + (c.overdue_10k ? ' (overdue)' : '') : '—'}</td>
+        <td>${c.checks_total ? `${fmtInt(c.checks_ok)}/${fmtInt(c.checks_total)}` : '—'}</td>
+        ${['check_mismatch', 'missing_metric', 'statement_missing', 'not_reported', 'implausible_value'].map(kind =>
+          `<td>${c.result ? mkCount((c.issue_kinds || {})[kind]) : '—'}</td>`).join('')}
+        <td>${c.result ? mkCount(mkOther(c.issue_kinds, MK_COLUMN_KINDS.slice(0, 5))) : '—'}</td>
+        <td>${c.result ? mkCount(c.issues) : '—'}</td>
+        <td>${c.seconds ? `${Math.round(c.seconds)} s` : '—'}</td>
+        <td class="mk-text">${esc(c.result && c.result !== 'ok' ? c.error || '' : '')}</td>
+      </tr>`).join('') || '<tr><td colspan="16" class="muted">No companies.</td></tr>';
+  } else if (MARKET.view === 'company' && MARKET.company) {
+    const { company, filings, issues } = MARKET.company;
+    $('#mk-detail-meta').innerHTML = esc(company
+      ? `${MK_RESULTS[company.result] || company.result}${company.error && company.result !== 'ok' ? `: ${company.error}` : ''} · `
+        + `${fmtInt(filings.filter(f => f.dumped).length)} of ${fmtInt(filings.length)} filings kept · ${fmtInt(issues.length)} issues`
+      : 'Not scanned yet.')
+      + ` · <button class="mk-link" onclick="openMarketCharts('${esc(MARKET.company.universe.ticker)}')">Open in Charts</button>`;
+    mkHead([['Form'], ...MK_ISSUE_HEAD.slice(1)]);
+    $('#mk-body').innerHTML = mkIssueRows(issues, false);
+    $('#mk-body2').innerHTML = filings.map(f => `<tr class="${f.error && !f.dumped ? 'mk-error' : ''}">
+        <td>${esc(f.form)}</td><td>${esc(f.report_date || '—')}</td><td>${esc(f.filed || '—')}</td>
+        <td class="mk-left">${f.dumped ? (f.xbrl ? 'kept' : 'kept, no XBRL') : f.error ? 'download failed' : 'not downloaded'}</td>
+        <td>${f.bytes ? `${fmtInt(Math.round(f.bytes / 1024))} KB` : '—'}</td>
+        <td>${f.seconds ? `${f.seconds.toFixed(1)} s` : '—'}</td>
+        <td class="mk-left">${esc(f.accession)}</td>
+        <td class="mk-text">${esc(f.error || (f.reader ? `reader ${f.reader}` : ''))}</td>
+      </tr>`).join('') || '<tr><td colspan="8" class="muted">No filings listed.</td></tr>';
+  }
+  $('#mk-filings').hidden = MARKET.view !== 'company' || !MARKET.company;
+}
+
+async function openMarketCompany(cik) {
+  MARKET.cik = cik;
+  MARKET.view = 'company';
+  await loadMarketCompany(cik);
+}
+
+async function loadMarketCompany(cik) {
+  try {
+    MARKET.company = await mkJSON(`/api/scan/company/${cik}`);
+  } catch (err) {
+    $('#mk-detail-meta').textContent = `Could not load the company: ${err.message}`;
+    return;
+  }
+  renderMarketDetail();
+}
+
+// The single-ticker pipeline reads the same kept filings, so this is quick.
+function openMarketCharts(ticker) {
+  $('#ticker').value = ticker;
+  updateMode();
+  handlePrimary();
+}
+
+async function loadMarketLog() {
+  if (!MARKET.run) {
+    $('#mk-log').textContent = 'No run of this batch yet.';
+    return;
+  }
+  try {
+    const data = await mkJSON(`/api/scan/run/${MARKET.run}/log`);
+    const box = $('#mk-log-box');
+    const atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 8;
+    $('#mk-log').innerHTML = data.lines.map(line => {
+      const cls = /\[!\]/.test(line) ? 'term-warn' : /\[\+\]/.test(line) ? 'term-ok' : '';
+      return cls ? `<span class="${cls}">${esc(line)}</span>` : esc(line);
+    }).join('\n') || 'The log is empty.';
+    $('#mk-detail-meta').textContent = data.total > data.lines.length
+      ? `The last ${fmtInt(data.lines.length)} of ${fmtInt(data.total)} lines; download the log for all of it.`
+      : `${fmtInt(data.total)} lines.`;
+    if (atEnd) box.scrollTop = box.scrollHeight;
+  } catch (err) {
+    $('#mk-log').textContent = `Could not load the log: ${err.message}`;
+  }
+}
+
+function downloadMarketIssues() {
+  if (MARKET.batch) location.href = `/api/scan/batch/${MARKET.batch}/issues.csv`;
+}
+
+function downloadMarketLog() {
+  if (MARKET.run) location.href = `/api/scan/run/${MARKET.run}/log?download=1`;
+}
+
+
+function simAnnualDividend() {
+  const data = SIM.data;
+  if (!data) return 0;
+  if (data.dividend_rate !== null && data.dividend_rate !== undefined) return data.dividend_rate;
+  if (data.annual_dividend !== null && data.annual_dividend !== undefined) return data.annual_dividend;
+  return (data.dividends || []).reduce((sum, d) => sum + d.amount, 0);
+}
+
+function setSimMode(mode) {
+  SIM.mode = mode;
+  $('#sim-cash').classList.toggle('active', mode === 'cash');
+  $('#sim-reinvest').classList.toggle('active', mode === 'reinvest');
+  renderSimulation();
+}
+
+function clearBacktest() {
+  if (!SIM.backtest) return;
+  SIM.backtest = null;
+  renderSimulation();
+}
+
+function syncSimControls() {
+  const backtest = !!SIM.backtest;
+  $('#sim-target').disabled = backtest;
+  $('#sim-years').disabled = backtest;
+  $('#sim-cash').disabled = false;
+  $('#sim-reinvest').disabled = false;
+  $('#sim-cash').classList.toggle('active', SIM.mode === 'cash');
+  $('#sim-reinvest').classList.toggle('active', SIM.mode === 'reinvest');
+  $('#sim-clear').hidden = !backtest;
+  $('#sim-form-title').textContent = backtest ? 'Your past investment' : 'Your projection';
+  $('#sim-hint').innerHTML = backtest
+    ? `Investing <b>${fmtMoney(Math.max(0, Number($('#sim-amount').value) || 0), SIM.data ? SIM.data.currency : 'USD')}</b>
+       on <b>${esc(SIM.backtest.date)}</b>; click a future point to reset.`
+    : 'Click the chart to backtest an investment at a past date.';
+  $('#sim-note').textContent = backtest
+    ? (SIM.mode === 'reinvest'
+      ? 'Dividends are reinvested at the price on the payment date, so the share count grows. Value is the shares held at the current price. Estimates only; no taxes or fees.'
+      : 'Dividends are paid in cash, not reinvested. Value is the shares held at the current price plus dividends received. Estimates only; no taxes or fees.')
+    : 'Future dividends hold the trailing yield, so they grow with the projected price. Estimates only; no taxes or fees.';
+}
+
+async function initSimulation(force = false) {
+  const select = $('#sim-run');
+  if (force || !select.dataset.loaded || select.dataset.pin !== GRAPH.ticker) {
+    select.dataset.loaded = '1';
+    try {
+      const { items } = await (await fetch('/api/recent')).json();
+      const runs = items.filter(item => item.has_csv);
+      if (!runs.length) {
+        $('#sim-status').textContent = 'No successful runs yet. Run a ticker first.';
+        select.innerHTML = '';
+        return;
+      }
+      const current = SIM.ticker;
+      select.innerHTML = runs.map(runOption).join('');
+      SIM.ticker = '';
+      select.value = pickRun(select, runs, current);
+    } catch {
+      $('#sim-status').textContent = 'Could not load runs.';
+      return;
+    }
+  }
+  if (!select.value) return;
+  if (!force && SIM.data && SIM.ticker === select.value) return;
+  loadSimulation();
+}
+
+async function loadSimulation(keepTarget = false) {
+  const select = $('#sim-run');
+  const ticker = select.value;
+  if (!ticker) return;
+  const seq = (SIM.seq = (SIM.seq || 0) + 1);
+  const changedTicker = ticker !== SIM.ticker;
+  SIM.ticker = ticker;
+  $('#sim-status').textContent = `Fetching ${ticker} market data…`;
+  try {
+    const res = await fetch(`/api/simulation/${ticker}?range=${SIM.range}`);
+    const data = await res.json();
+    if (seq !== SIM.seq) return;
+    if (!res.ok) throw new Error(data.error || 'Request failed');
+    SIM.data = data;
+    SIM.backtest = null;
+    if (changedTicker || !keepTarget) {
+      const target = $('#sim-target');
+      target.value = data.price ? (data.price * 1.2).toFixed(2) : '';
+    }
+    $('#sim-status').textContent =
+      `${ticker} in ${data.currency}, ${data.prices.length} price points`;
+    renderStats();
+    renderSimulation();
+  } catch (err) {
+    if (seq !== SIM.seq) return;
+    SIM.data = null;
+    $('#sim-svg').replaceChildren();
+    $('#sim-result').innerHTML = '';
+    $('#sim-status').textContent = `Market data unavailable: ${err.message}`;
+  }
+}
+
+function renderStats() {
+  const data = SIM.data;
+  if (!data || !data.prices.length) return;
+  const price = data.price;
+  const first = data.prices[0].close;
+  const highs = data.prices.map(p => p.close);
+  const high = Math.max(...highs);
+  const low = Math.min(...highs);
+  const change = first ? ((price - first) / first) * 100 : null;
+  const annual = simAnnualDividend();
+  const yieldPct = price ? (annual / price) * 100 : null;
+  $('#sim-title').textContent = `${data.ticker} market data`;
+  $('#sim-stats').innerHTML = `
+    <div class="stat"${tip('sim_price')}><span>Stock price</span><b>${fmtMoney(price, data.currency)}</b></div>
+    <div class="stat"${tip('sim_change')}><span>Period change</span><b class="${tone(change)}">${change === null ? '—' : (change >= 0 ? '+' : '') + fmtNum(change) + '%'}</b></div>
+    <div class="stat"${tip('sim_high')}><span>Period high</span><b>${fmtMoney(high, data.currency)}</b></div>
+    <div class="stat"${tip('sim_low')}><span>Period low</span><b>${fmtMoney(low, data.currency)}</b></div>
+    <div class="stat"${tip('sim_pe')}><span>Trailing P/E</span><b>${fmtNum(data.trailing_pe)}</b></div>
+    <div class="stat"${tip('sim_dividend')}><span>Annual dividend</span><b>${fmtMoney(annual, data.currency)}</b></div>
+    <div class="stat"${tip('sim_yield')}><span>Dividend yield</span><b>${yieldPct === null ? '—' : fmtNum(yieldPct) + '%'}</b></div>`;
+}
+
+function svgEl(name, attrs = {}) {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', name);
+  for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, value);
+  return el;
+}
+
+function simulate() {
+  const data = SIM.data;
+  if (!data || !data.price) return null;
+  const amount = Math.max(0, Number($('#sim-amount').value) || 0);
+  const years = Math.max(0.25, Number($('#sim-years').value) || 4);
+  const entered = Number($('#sim-target').value);
+  const target = entered > 0 ? entered : data.price;
+  const annual = simAnnualDividend();
+  // Hold the trailing yield, so a higher projected price pays more per share.
+  const dividendYield = data.price ? annual / data.price : 0;
+  const startShares = amount / data.price;
+  let shares = startShares;
+  let cash = 0;
+  const rows = [];
+  const steps = Math.round(years * 4); // quarterly dividend schedule
+  for (let q = 1; q <= steps; q += 1) {
+    const t = q / steps;
+    const price = data.price + (target - data.price) * t;
+    const dividendPerShare = (price * dividendYield) / 4;
+    if (SIM.mode === 'reinvest' && dividendPerShare > 0) shares += (shares * dividendPerShare) / price;
+    else cash += shares * dividendPerShare;
+    if (q % 4 === 0 || q === steps) {
+      rows.push({
+        label: (q / 4).toFixed(2).replace(/\.?0+$/, '') + 'y',
+        price,
+        value: shares * price + cash,
+      });
+    }
+  }
+  const marketValue = shares * target;
+  const dividendGain = SIM.mode === 'cash' ? cash : marketValue - startShares * target;
+  return {
+    price: data.price, target, years, amount, rows, annual,
+    marketValue, dividendGain, total: marketValue + (SIM.mode === 'cash' ? cash : 0),
+    profit: marketValue + (SIM.mode === 'cash' ? cash : 0) - amount,
+  };
+}
+
+function backtestPlan() {
+  const data = SIM.data;
+  const bt = SIM.backtest;
+  if (!data || !bt || !(bt.price > 0)) return null;
+  const amount = Math.max(0, Number($('#sim-amount').value) || 0);
+  const reinvest = SIM.mode === 'reinvest';
+  let shares = amount / bt.price;
+  const entry = new Date(bt.date + 'T00:00:00Z');
+  const last = data.prices[data.prices.length - 1];
+  if (!last) return null;
+  const lastDate = new Date(last.date + 'T00:00:00Z');
+  const lastPrice = data.price || last.close;
+  const dividends = (data.dividends || [])
+    .filter(d => d.date > bt.date)
+    .map(d => ({ t: new Date(d.date + 'T00:00:00Z').getTime(), amount: d.amount }))
+    .sort((a, b) => a.t - b.t);
+
+  const priceAt = stamp => {
+    let price = null;
+    for (const point of data.prices) {
+      if (new Date(point.date + 'T00:00:00Z').getTime() > stamp) break;
+      price = point.close;
+    }
+    return price;
+  };
+
+  const rows = [];
+  let cash = 0;
+  let paidTotal = 0;
+  let paidIndex = 0;
+  let previous = amount;
+  const checkpoint = (date, label) => {
+    const stamp = date.getTime();
+    let paid = 0;
+    while (paidIndex < dividends.length && dividends[paidIndex].t <= stamp) {
+      const payout = shares * dividends[paidIndex].amount;
+      paid += payout;
+      paidTotal += payout;
+      if (reinvest) {
+        // Buy more shares at the close on the dividend payment date.
+        const buyPrice = priceAt(dividends[paidIndex].t) ?? lastPrice;
+        if (buyPrice > 0) shares += payout / buyPrice;
+      } else {
+        cash += payout;
+      }
+      paidIndex += 1;
+    }
+    const price = stamp >= lastDate.getTime() ? lastPrice : (priceAt(stamp) ?? lastPrice);
+    const value = shares * price + cash;
+    rows.push({ label, dividends: paid, value, yearGain: value - previous, totalGain: value - amount });
+    previous = value;
+  };
+
+  // One checkpoint per full year held, then today (value includes dividends).
+  for (let year = 1; ; year += 1) {
+    const at = new Date(Date.UTC(entry.getUTCFullYear() + year, entry.getUTCMonth(), entry.getUTCDate()));
+    if (at.getTime() >= lastDate.getTime()) break;
+    checkpoint(at, `Year ${year}`);
+  }
+  checkpoint(lastDate, 'Now');
+
+  const value = rows[rows.length - 1].value;
+  return {
+    amount, shares, entryPrice: bt.price, date: bt.date, reinvest,
+    dividends: paidTotal, cash, value, profit: value - amount,
+    returnPct: amount ? ((value - amount) / amount) * 100 : null,
+    rows,
+  };
+}
+
+function renderSimulation() {
+  const data = SIM.data;
+  if (!data || !data.prices.length) return;
+  syncSimControls();
+  const plan = simulate();
+  const svg = $('#sim-svg');
+  // The SVG scales to its box, so size text in screen pixels: k converts
+  // CSS px to chart units and the margins grow with the labels.
+  const box = svg.getBoundingClientRect().width || 900;
+  // Phones get a taller chart and fewer date labels so nothing collides. On a
+  // wider screen the chart is as tall as the window leaves room for, so the
+  // range buttons under it stay on screen.
+  const room = innerHeight - $('.topbar').getBoundingClientRect().height - 250;
+  const W = 900, H = box < 600 ? 700 : Math.round(W * Math.min(Math.max(room, 300), 640) / box), R = 18;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const k = W / box;
+  const xTicks = Math.max(2, Math.min(4, Math.floor(box / 140)));
+  const fs = 13 * textScale() * k;
+  const L = Math.round(fs * 6.4), T = Math.round(fs * 1.9), B = Math.round(fs * 2.4);
+  const tipW = Math.round(fs * 16), tipH = Math.round(fs * 3.9);
+  svg.replaceChildren();
+
+  const price = data.price;
+  const entered = Number($('#sim-target').value);
+  const target = entered > 0 ? entered : price;
+  const years = Math.max(0.25, Number($('#sim-years').value) || 4);
+  const now = new Date(data.prices[data.prices.length - 1].date + 'T00:00:00Z');
+  const end = new Date(now.getTime() + years * 365.25 * 86400000);
+  const hist = data.prices.map(p => ({ t: new Date(p.date + 'T00:00:00Z').getTime(), p: p.close }));
+  const proj = [];
+  for (let i = 1; i <= 24; i += 1) {
+    const t = i / 24;
+    proj.push({
+      t: now.getTime() + (end.getTime() - now.getTime()) * t,
+      p: price + (target - price) * t,
+    });
+  }
+  const all = hist.concat(proj);
+  const t0 = all[0].t, t1 = all[all.length - 1].t;
+  const values = all.map(d => d.p).concat([price, target]);
+  let lo = Math.min(...values), hi = Math.max(...values);
+  const pad = (hi - lo || hi * 0.1 || 1) * 0.08;
+  lo -= pad; hi += pad;
+  const x = t => L + ((t - t0) / (t1 - t0 || 1)) * (W - L - R);
+  const y = v => T + (1 - (v - lo) / (hi - lo || 1)) * (H - T - B);
+
+  // Grid + y labels
+  // Round steps (1, 2, 2.5 or 5 times a power of ten), about four of them.
+  const rough = (hi - lo) / 4 || 1;
+  const mag = 10 ** Math.floor(Math.log10(rough));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(m => m >= rough);
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
+    svg.append(svgEl('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: 'var(--line-soft)', 'stroke-width': 1 }));
+    const label = svgEl('text', { x: L - fs * 0.6, y: y(v) + fs * 0.35, 'text-anchor': 'end', fill: 'var(--muted)', 'font-size': fs });
+    label.textContent = fmtMoney(v, data.currency, Number.isInteger(step) ? 0 : 2);
+    svg.append(label);
+  }
+
+  // Historical area + line
+  const histPath = hist.map((d, i) => `${i ? 'L' : 'M'}${x(d.t).toFixed(1)},${y(d.p).toFixed(1)}`).join(' ');
+  svg.append(svgEl('path', {
+    d: `${histPath} L${x(hist[hist.length - 1].t)},${H - B} L${x(hist[0].t)},${H - B} Z`,
+    fill: 'var(--accent-soft)', stroke: 'none',
+  }));
+  svg.append(svgEl('path', { d: histPath, fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2 }));
+  const projPath = [{ t: now.getTime(), p: price }].concat(proj)
+    .map((d, i) => `${i ? 'L' : 'M'}${x(d.t).toFixed(1)},${y(d.p).toFixed(1)}`).join(' ');
+  svg.append(svgEl('path', {
+    d: projPath, fill: 'none',
+    stroke: SIM.backtest ? 'var(--muted)' : 'var(--green)',
+    opacity: SIM.backtest ? 0.45 : 1,
+    'stroke-width': 2, 'stroke-dasharray': '6 5',
+  }));
+  svg.append(svgEl('line', {
+    x1: x(now.getTime()), x2: x(now.getTime()), y1: T, y2: H - B,
+    stroke: 'var(--line)', 'stroke-width': 1, 'stroke-dasharray': '3 4',
+  }));
+
+  // Backtest marker: the price paid and the density of the invested amount.
+  const entryIndex = SIM.backtest
+    ? hist.findIndex(d => d.t === new Date(SIM.backtest.date + 'T00:00:00Z').getTime())
+    : -1;
+  if (entryIndex >= 0) {
+    const entry = hist[entryIndex];
+    svg.append(svgEl('line', {
+      x1: x(entry.t), x2: x(entry.t), y1: T, y2: H - B,
+      stroke: 'var(--green)', 'stroke-width': 1, 'stroke-dasharray': '3 4', opacity: 0.8,
+    }));
+    svg.append(svgEl('circle', {
+      cx: x(entry.t), cy: y(entry.p), r: 4.5,
+      fill: 'var(--green)', stroke: 'var(--surface)', 'stroke-width': 1.5,
+    }));
+  }
+
+  // X labels
+  for (let i = 0; i <= xTicks; i += 1) {
+    const t = t0 + ((t1 - t0) * i) / xTicks;
+    const label = svgEl('text', {
+      x: x(t), y: H - B + fs * 1.5, 'text-anchor': i === 0 ? 'start' : i === xTicks ? 'end' : 'middle',
+      fill: 'var(--muted)', 'font-size': fs,
+    });
+    label.textContent = fmtDate(t);
+    svg.append(label);
+  }
+
+  // Legend
+  const legend = svgEl('text', { x: L, y: T - fs * 0.5, fill: 'var(--muted)', 'font-size': fs });
+  legend.textContent = SIM.backtest
+    ? `Price; projection off, backtest from ${SIM.backtest.date}`
+    : `Price, projected to ${fmtMoney(target, data.currency)}`;
+  svg.append(legend);
+
+  // Hover crosshair + tooltip
+  const cross = svgEl('line', { y1: T, y2: H - B, stroke: 'var(--muted)', 'stroke-width': 1, opacity: 0 });
+  const dot = svgEl('circle', { r: 3.5, fill: 'var(--accent)', opacity: 0 });
+  const tip = svgEl('g', { opacity: 0 });
+  tip.append(svgEl('rect', { width: tipW, height: tipH, rx: 6 * k, fill: 'var(--surface-2)', stroke: 'var(--line)' }));
+  const tipDate = svgEl('text', { x: fs * 0.75, y: fs * 1.55, fill: 'var(--muted)', 'font-size': fs });
+  const tipPrice = svgEl('text', { x: fs * 0.75, y: fs * 3.1, fill: 'var(--text)', 'font-size': fs * 1.08 });
+  tip.append(tipDate, tipPrice);
+  svg.append(cross, dot, tip);
+
+  svg.onmousemove = event => {
+    const rect = svg.getBoundingClientRect();
+    const px = ((event.clientX - rect.left) / rect.width) * W;
+    const best = all.reduce((a, b) =>
+      Math.abs(x(b.t) - px) < Math.abs(x(a.t) - px) ? b : a
+    );
+    cross.setAttribute('x1', x(best.t));
+    cross.setAttribute('x2', x(best.t));
+    cross.setAttribute('opacity', 0.6);
+    dot.setAttribute('cx', x(best.t));
+    dot.setAttribute('cy', y(best.p));
+    dot.setAttribute('opacity', 1);
+    tipDate.textContent = fmtDate(best.t) + (best.t > now.getTime() ? ' (projected)' : '');
+    tipPrice.textContent = fmtMoney(best.p, data.currency);
+    const tx = Math.min(Math.max(x(best.t) - tipW / 2, L), W - R - tipW);
+    tip.setAttribute('transform', `translate(${tx},${T + fs * 0.3})`);
+    tip.setAttribute('opacity', 1);
+  };
+  svg.onmouseleave = () => {
+    cross.setAttribute('opacity', 0);
+    dot.setAttribute('opacity', 0);
+    tip.setAttribute('opacity', 0);
+  };
+  SIM.hideTip = svg.onmouseleave;
+  svg.onclick = event => {
+    const rect = svg.getBoundingClientRect();
+    const px = ((event.clientX - rect.left) / rect.width) * W;
+    const stamp = t0 + ((px - L) / (W - L - R)) * (t1 - t0);
+    if (stamp >= now.getTime()) {
+      clearBacktest();
+      return;
+    }
+    let best = null;
+    let bestDiff = Infinity;
+    for (const point of data.prices) {
+      const t = new Date(point.date + 'T00:00:00Z').getTime();
+      const diff = Math.abs(t - stamp);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = point;
+      }
+    }
+    if (!best || !(best.close > 0)) return;
+    SIM.backtest = { date: best.date, price: best.close };
+    renderSimulation();
+  };
+
+  if (SIM.backtest) {
+    const past = backtestPlan();
+    if (!past) return;
+    const signed = value => (value > 0 ? '+' : '') + fmtMoney(value, data.currency);
+    $('#sim-result').innerHTML = `
+      <div class="sim-summary">
+        <div class="stat"><span>Invested</span><b>${fmtMoney(past.amount, data.currency)}</b></div>
+        <div class="stat"><span>Bought at</span><b>${fmtMoney(past.entryPrice, data.currency)}</b></div>
+        <div class="stat"><span>Shares</span><b>${fmtNum(past.shares, 4)}</b></div>
+        <div class="stat"><span>${past.reinvest ? 'Dividends reinvested' : 'Dividends received'}</span><b>${past.dividends ? fmtMoney(past.dividends, data.currency) : 'No dividends'}</b></div>
+        <div class="stat"><span>Value today</span><b>${fmtMoney(past.value, data.currency)}</b></div>
+        <div class="stat"><span>Profit</span><b class="${tone(past.profit)}">${signed(past.profit)} (${past.returnPct === null ? '—' : (past.returnPct >= 0 ? '+' : '') + fmtNum(past.returnPct) + '%'})</b></div>
+      </div>
+      <div class="sim-table">
+        <div class="table-wrap">
+          <table class="data">
+            <thead>
+              <tr>
+                <th>Year</th>
+                <th>Dividends</th>
+                <th>Value</th>
+                <th>Gain in year</th>
+                <th>Total gain</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${past.rows.map(row => `
+                <tr>
+                  <td>${esc(row.label)}</td>
+                  <td>${fmtMoney(row.dividends, data.currency)}</td>
+                  <td>${fmtMoney(row.value, data.currency)}</td>
+                  <td class="${tone(row.yearGain)}">${signed(row.yearGain)}</td>
+                  <td class="${tone(row.totalGain)}">${signed(row.totalGain)}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+    return;
+  }
+
+  if (!plan) return;
+  $('#sim-result').innerHTML = `
+    <div class="sim-summary">
+      <div class="stat"><span>Market value</span><b>${fmtMoney(plan.marketValue, data.currency)}</b></div>
+      <div class="stat"><span>Dividend gains</span><b>${plan.annual ? fmtMoney(plan.dividendGain, data.currency) : 'No dividends'}</b></div>
+      <div class="stat"><span>Total value</span><b>${fmtMoney(plan.total, data.currency)}</b></div>
+      <div class="stat"><span>Profit</span><b class="${tone(plan.profit)}">${fmtMoney(plan.profit, data.currency)}</b></div>
+    </div>
+    <div class="sim-years">
+      ${plan.rows.map(row => `
+        <div class="stat"><span>Year ${row.label}</span><b>${fmtMoney(row.value, data.currency)}</b></div>`).join('')}
+    </div>`;
+}
+
+/* Implied growth ----------------------------------------------------------- */
+
+let SIM_WIDTH = 0, SIM_HEIGHT = innerHeight;
+new ResizeObserver(([entry]) => {
+  const width = Math.round(entry.contentRect.width);
+  if (!width || width === SIM_WIDTH) return;
+  SIM_WIDTH = width;
+  if (SIM.data) renderSimulation();
+}).observe($('#sim-svg'));
+// The chart's height follows the window's too.
+window.addEventListener('resize', () => {
+  if (innerHeight === SIM_HEIGHT) return;
+  SIM_HEIGHT = innerHeight;
+  if (SIM.data && !$('#pane-simulation').classList.contains('hidden')) renderSimulation();
+});
+
+document.querySelectorAll('#sim-ranges button').forEach(button => {
+  button.onclick = () => {
+    SIM.range = button.dataset.range;
+    document.querySelectorAll('#sim-ranges button')
+      .forEach(other => other.classList.toggle('active', other === button));
+    if (SIM.ticker) loadSimulation(true);
+  };
+});
+
+
+// Restore the pinned graph, then resume watching every other job in progress:
+// graph runs through the status badge, screener jobs through its progress.
+applyTheme(document.documentElement.dataset.theme || 'dark');
+$('.tabs').addEventListener('scroll', syncTabFades, { passive: true });
+window.addEventListener('resize', syncTabFades);
+syncTabFades();
+loadAccount();
+suggestTickers();
+setInterval(() => { if (!$('#ticker').value) suggestTickers(); }, 6000);
+applyPrefs();
+applySimPrefs();
+// A ticker in the URL (a bookmark or shared link) wins over the saved pin.
+const START = parseHash();
+if (START.ticker) {
+  GRAPH.ticker = START.ticker;
+  try { localStorage.setItem('stocky-graph', START.ticker); } catch {}
+}
+renderGraph();
+refreshGraph();
+showTab(START.tab || PREFS.tab, { history: 'replace' });
+(async () => {
+  const { jobs, batch } = await (await fetch('/api/jobs')).json();
+  for (const job of jobs) {
+    if (job.charts && job.ticker !== GRAPH.ticker) poll(job.ticker);
+  }
+  const screening = new Set(jobs.filter(job => !job.charts).map(job => job.ticker));
+  if (!screening.size) return;
+  const tickers = [...new Set([...batch, ...screening])];
+  SCREEN.status = Object.fromEntries(tickers.map(t => [t, screening.has(t) ? 'queued' : 'done']));
+  SCREEN.total = tickers.length;
+  screenPoll([...screening]);
+})();

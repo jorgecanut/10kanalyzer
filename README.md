@@ -744,8 +744,15 @@ The running build is shown in Options → Data → Version, in `/healthz`
 commit is optional there: set it with
 `STOCKY_COMMIT=$(git rev-parse HEAD) docker compose up -d --build`; outside
 Docker the app asks `git`. Since every release bumps `VERSION`, the version is
-enough to find the code, and `code_sha1` (a hash of every root `*.py` and
-`templates/*.html`) confirms it is exactly that release.
+enough to find the code, and `code_sha1` (a hash of every root `*.py`,
+`templates/*.html`, `static/*.js` and `static/*.css`) confirms it is exactly
+that release.
+
+The page is three files: `templates/index.html` (the markup, about 50 KB),
+`static/app.css` and `static/app.js`. The two static files are requested as
+`app.js?v=<first ten characters of code_sha1>`, so the browser keeps them
+between page loads and takes new ones after a deploy; before, 250 KB of
+inline script and styles came with every page load.
 
 Every account has a diagnostics log, `data/users/<id>/diagnostics.jsonl`
 (trimmed to the newest 2000 entries past 1 MB): failed requests (with the
