@@ -137,8 +137,11 @@ moves. Each batch takes the next N companies no batch has taken, and for each:
    lists it under the chart. Metrics of one year that
    contradict each other (gross profit above revenue, revenue minus cost far
    from gross profit) are reported as `implausible_value`: the totals checks
-   cannot see that the wrong fact was picked. 10-KTs and 10-Qs are dumped but
-   not analysed yet.
+   cannot see that the wrong fact was picked. An operating income filled in
+   from gross profit less SG&A and R&D (`operating_income_derived` in
+   `financial_data.csv`, starred in the chart) is still reported as not read:
+   an estimate never stands in for the filing's own figure. 10-KTs and 10-Qs
+   are dumped but not analysed yet.
 
 **Rerun** repeats step 3 for a batch from the dump alone, with no SEC request:
 fix the code, rerun the same batch, compare the issues. **Retry downloads**
@@ -200,8 +203,18 @@ EV/EBITDA, earnings yield, Greenblatt return on capital, the historical P/E
 median and percentile, Piotroski F-score (0–9), Altman Z-score and the accruals
 ratio. When a filer prints no total-liabilities line (the Z-score needs one),
 it is derived: current plus noncurrent totals, else total liabilities and equity
-(or total assets) minus equity. Prices come from Yahoo; if Yahoo is unreachable the run still succeeds
-and valuation is skipped with a warning. `insider.json` (from `insider.py`)
+(or total assets) minus equity. Balance-sheet totals are matched exactly and
+only on the balance sheet (a looser match took the first line that mentions
+"assets" for total assets). Prices come from Yahoo, for every year it has, and
+so do the stock splits that put old share counts on today's basis: a share
+count that doubles in a merger is not a split. If Yahoo is unreachable the run
+still succeeds. What the valuation lacked or assumed goes to `data_issues.csv`
+and under the valuation chart: a year with no price or share count, or no
+depreciation (EV/EBITDA is then blank, not EV/EBIT), is
+`valuation_input_missing`; no cash line or no long-term debt read (enterprise
+value then counts none), or splits guessed from the share counts (Yahoo's
+unknown, or an ADS), is `valuation_assumed`; no valuation at all is
+`valuation_skipped`. `insider.json` (from `insider.py`)
 lists every open-market Form 4 buy and sell (codes `P` and `S`) in the last 6
 months — no transaction cap. Both steps are fail-soft, and the trades have
 their own **Insiders** tab.
@@ -797,6 +810,10 @@ maintenance.
   biotech filers like Aquestive often have no cost of revenue at all, so some
   gross-margin points are legitimately absent. The CSV flags derived rows via
   `gross_profit_derived`.
+- `OperatingIncomeLoss` not tagged is filled in as gross profit less SG&A and
+  R&D when those exist. That leaves out depreciation, impairments and other
+  operating costs, so the row is flagged `operating_income_derived`, the chart
+  stars the series, and the missing figure is still reported as a data issue.
 - Each metric tries several XBRL concepts in priority order, because filers
   change tags over time. A company can stop tagging `NetIncomeLoss` from a given
   year (Estée Lauder moved to `NetIncomeLossAvailableToCommonStockholdersBasic`),

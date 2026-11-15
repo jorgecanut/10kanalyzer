@@ -107,5 +107,19 @@ class PngTests(unittest.TestCase):
                 self.assertTrue(Path(path).read_bytes().startswith(b"\x89PNG"))
 
 
+class DerivedSeriesTests(unittest.TestCase):
+    def operating(self, flag):
+        df = pd.DataFrame([{"fiscal_year": 2025, "Revenues": 1000.0, "OperatingIncomeLoss": 300.0,
+                            "operating_income_derived": flag}])
+        chart = charts.chart_income_statement("TEST", df, pd.DataFrame(), [2025])
+        return next(s for panel in chart["panels"] for s in panel["series"] if s["label"] == "Operating Income")
+
+    def test_a_derived_operating_income_is_starred(self):
+        self.assertTrue(self.operating(True)["derived"])
+
+    def test_a_reported_one_is_not(self):
+        self.assertFalse(self.operating(False)["derived"])
+
+
 if __name__ == "__main__":
     unittest.main()

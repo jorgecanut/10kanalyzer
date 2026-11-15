@@ -13,6 +13,8 @@ import unittest.mock
 from contextlib import redirect_stdout
 from pathlib import Path
 
+import pandas as pd
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import edgar_dashboard  # noqa: E402
@@ -84,6 +86,40 @@ class CheckSummaryTest(unittest.TestCase):
         self.assertEqual(counts["filings"], 2)
         self.assertEqual(counts["statement"], {"totals": 2, "ok": 1, "mismatch": 1, "incomplete": 0})
         self.assertEqual(counts["note"]["incomplete"], 1)
+
+
+class DerivedOperatingIncomeTest(unittest.TestCase):
+    def frame(self, operating):
+        import extract
+        row = {metric: float("nan") for metric in extract.METRIC_CONCEPTS}
+        row.update(period_of_report="2024-12-31", fiscal_year=2024, Revenues=1000e6, GrossProfit=400e6,
+                   SellingGeneralAndAdministrativeExpense=100e6, OperatingIncomeLoss=operating)
+        return edgar_dashboard.clean_and_derive(pd.DataFrame([row]))
+
+    def test_a_filled_in_operating_income_is_flagged(self):
+        out = self.frame(float("nan"))
+        self.assertEqual(out["OperatingIncomeLoss"].iloc[0], 300.0)
+        self.assertTrue(out["operating_income_derived"].iloc[0])
+
+    def test_a_reported_one_is_not(self):
+        out = self.frame(120e6)
+        self.assertEqual(out["OperatingIncomeLoss"].iloc[0], 120.0)
+        self.assertFalse(out["operating_income_derived"].iloc[0])
+
+
+class WriteIssuesTest(unittest.TestCase):
+    def test_valuation_issues_are_written_with_the_others(self):
+        frame = pd.DataFrame([{"period_of_report": "2024-12-31", "fiscal_year": 2024, "Revenues": 1.0,
+                               "NetIncomeLoss": 1.0, "OperatingIncomeLoss": 1.0, "OperatingCashFlow": 1.0,
+                               "StockholdersEquity": 1.0}])
+        extra = [{"kind": "valuation_assumed", "severity": "warning", "fiscal_year": 2024, "period": "2024-12-31",
+                  "concept": "Cash", "label": None, "detail": "no cash line"}]
+        with tempfile.TemporaryDirectory() as folder, \
+                unittest.mock.patch.object(edgar_dashboard, "OUTPUT_DIR", folder), redirect_stdout(io.StringIO()):
+            issues = edgar_dashboard._write_issues(frame, pd.DataFrame(), {}, extra)
+            written = pd.read_csv(Path(folder) / "data_issues.csv")
+        self.assertEqual([issue["kind"] for issue in issues], ["valuation_assumed"])
+        self.assertEqual(list(written["concept"]), ["Cash"])
 
 
 if __name__ == "__main__":

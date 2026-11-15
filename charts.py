@@ -278,6 +278,14 @@ def _df_series(df: pd.DataFrame, col: str, years: list[int]) -> pd.Series:
     return df.set_index("fiscal_year")[col].reindex(years)
 
 
+def _any_flag(df: pd.DataFrame, col: str, years: list[int]) -> bool:
+    """Whether ``col`` (a derived flag of ``clean_and_derive``) is set for any of ``years``."""
+    if col not in df.columns:
+        return False
+    rows = df[pd.to_numeric(df["fiscal_year"], errors="coerce").isin(years)]
+    return bool(rows[col].astype(str).str.lower().isin(["true", "1"]).any())
+
+
 def _stmt_series(
     statements: pd.DataFrame,
     statement_type: str,
@@ -546,7 +554,8 @@ def chart_income_statement(
          ["SellingGeneralAndAdministrativeExpense"]),
         ("R&D", _df_series(df, "ResearchAndDevelopmentExpense", years), "reported",
          ["ResearchAndDevelopmentExpense"]),
-        ("Operating Income", _df_series(df, "OperatingIncomeLoss", years), "reported", ["OperatingIncomeLoss"]),
+        ("Operating Income", _df_series(df, "OperatingIncomeLoss", years),
+         "derived" if _any_flag(df, "operating_income_derived", years) else "reported", ["OperatingIncomeLoss"]),
         ("Interest Expense", _stmt_series(statements, "income", interest, years), "reported", interest),
         ("Goodwill Impairment", _stmt_series(statements, "income", goodwill_loss, years), "reported",
          goodwill_loss),
@@ -1349,6 +1358,8 @@ def render_pngs(
 # --------------------------------------------------------------------------- #
 # The key metrics each chart is drawn from, also when a metric has no value at
 # all (its series is then left out, so the series alone would not tell).
+# The market inputs valuation.py reports issues on (a missing price, an assumed zero).
+VALUATION_INPUTS = ("Price", "Shares", "Cash", "Depreciation", "LongTermDebt", "Splits")
 CHART_METRICS = {
     "01_income_statement": {"Revenues", "CostOfRevenue", "GrossProfit", "OperatingIncomeLoss", "NetIncomeLoss"},
     "02_margins": {"Revenues", "GrossProfit", "OperatingIncomeLoss", "NetIncomeLoss"},
@@ -1357,7 +1368,7 @@ CHART_METRICS = {
     "07_returns": {"NetIncomeLoss", "StockholdersEquity", "OperatingIncomeLoss"},
     # P/E, P/B, P/FCF, EV/EBIT, F-score and Z-score.
     "08_valuation": {"Revenues", "GrossProfit", "OperatingIncomeLoss", "NetIncomeLoss", "OperatingCashFlow",
-                     "CapEx", "StockholdersEquity"},
+                     "CapEx", "StockholdersEquity", *VALUATION_INPUTS},
 }
 
 

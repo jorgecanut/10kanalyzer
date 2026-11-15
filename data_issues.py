@@ -74,7 +74,19 @@ TITLES = {
     "statement_missing": "Statement not found",
     "not_reported": "Not in the filing",
     "implausible_value": "Value looks wrong",
+    # Made by valuation.py: a ratio left blank, a ratio built on an assumption, no valuation at all.
+    "valuation_input_missing": "Valuation input missing",
+    "valuation_assumed": "Valuation uses an assumption",
+    "valuation_skipped": "Valuation not computed",
 }
+# Key metric -> the column of ``clean_and_derive`` that says its value was derived, and from what.
+DERIVED_FLAGS = {"OperatingIncomeLoss": "operating_income_derived"}
+DERIVED_NOTES = {"OperatingIncomeLoss": "gross profit less SG&A and R&D, which leaves out other operating costs"}
+
+
+def _truthy(value) -> bool:
+    """A flag as the frame holds it or as a CSV gives it back (``"True"``)."""
+    return str(value).strip().lower() in ("true", "1")
 
 
 def _issue(kind: str, severity: str, **fields) -> dict:
@@ -242,9 +254,14 @@ def company_issues(derived: pd.DataFrame, checks: pd.DataFrame, filed: dict[str,
         common = {"accession": where.get("accession"), "form": where.get("form"),
                   "fiscal_year": row.get("fiscal_year"), "period": row["period_of_report"]}
         for metric in KEY_METRICS:
-            if pd.notna(row.get(metric)):
+            # A value derived from other lines is not the metric read: it must
+            # not hide that the filing's own figure is missing.
+            stand_in = _truthy(row.get(DERIVED_FLAGS.get(metric, "")))
+            if pd.notna(row.get(metric)) and not stand_in:
                 continue
             kind, severity, detail, label = classify_missing(metric, (where.get("evidence") or {}).get(metric))
+            if stand_in:
+                detail += f"; the value shown is derived ({DERIVED_NOTES[metric]})"
             issues.append(_issue(kind, severity, concept=metric, label=label, detail=detail, **common))
         for metric, why in implausible(row):
             issues.append(_issue("implausible_value", "warning", concept=metric, detail=why, **common))

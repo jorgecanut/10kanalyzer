@@ -44,7 +44,9 @@ from extract import snap_ratio
 USD_TO_MILLIONS = 1_000_000
 PRICE_MATCH_DAYS = 10
 MIN_F_SCORE_TESTS = 6
-PRICE_RANGE_YEARS = 10
+# A split dated this soon after a share count may already be in it: filers restate
+# the counts of a year for a split made before the report went out.
+RESTATED_DAYS = 100
 PRICE_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) Stocky/1.0"
 # Yahoo's quote API (cookie + crumb) wants a full browser User-Agent; the same as app.py's.
 YAHOO_BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64) Stocky/1.0"
@@ -127,6 +129,11 @@ DEPRECIATION = (
 # Market data
 # --------------------------------------------------------------------------- #
 
+def yahoo_symbol(ticker: str) -> str:
+    """Yahoo spells a share class with a dash: SEC's BRK.B is its BRK-B."""
+    return str(ticker).replace(".", "-")
+
+
 def _chart(ticker: str, query: str) -> dict:
     url = (
         "https://query1.finance.yahoo.com/v8/finance/chart/"
@@ -140,15 +147,16 @@ def _chart(ticker: str, query: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def fetch_price_history(ticker: str, years: int = 10) -> list[dict]:
+def fetch_price_history(ticker: str, years: int | None = None) -> list[dict]:
     """Monthly split-adjusted closes from Yahoo's v8 chart API.
 
-    Returns ``[{"date": "YYYY-MM-DD", "close": float}]`` ascending by date, or
-    an empty list when the request fails for any reason.
+    Every year Yahoo has by default (a run reads every annual filing), or the
+    last ``years``. Returns ``[{"date": "YYYY-MM-DD", "close": float}]``
+    ascending by date, or an empty list when the request fails for any reason.
     """
     try:
-        span = max(1, int(years))
-        payload = _chart(ticker, f"interval=1mo&range={span}y")
+        span = "max" if years is None else f"{max(1, int(years))}y"
+        payload = _chart(yahoo_symbol(ticker), f"interval=1mo&range={span}")
         result = (payload.get("chart") or {}).get("result") or []
         if not result:
             raise ValueError("empty chart result")
@@ -166,15 +174,38 @@ def fetch_price_history(ticker: str, years: int = 10) -> list[dict]:
             day = dt.datetime.fromtimestamp(int(stamp), dt.UTC).date()
             bars[day.isoformat()] = value
         return [{"date": day, "close": bars[day]} for day in sorted(bars)]
-    except Exception:  # noqa: BLE001 - market data is best effort
-        print(f"[!] Price history unavailable for {ticker}")
+    except Exception as exc:  # noqa: BLE001 - market data is best effort
+        print(f"[!] Price history unavailable for {ticker} ({type(exc).__name__}: {exc})")
         return []
+
+
+def fetch_splits(ticker: str) -> list[dict] | None:
+    """Every stock split Yahoo knows: ``[{"date", "ratio"}]`` (2.0 for 2:1), oldest first.
+
+    ``None`` when they could not be fetched: unknown is not the same as none.
+    """
+    try:
+        payload = _chart(yahoo_symbol(ticker), "interval=3mo&range=max&events=splits")
+        result = (payload.get("chart") or {}).get("result") or []
+        if not result:
+            raise ValueError("empty chart result")
+        splits = []
+        for event in ((result[0].get("events") or {}).get("splits") or {}).values():
+            numerator, denominator = _finite(event.get("numerator")), _finite(event.get("denominator"))
+            if not (numerator > 0 and denominator > 0) or numerator == denominator:
+                continue
+            day = dt.datetime.fromtimestamp(int(event["date"]), dt.UTC).date()
+            splits.append({"date": day.isoformat(), "ratio": numerator / denominator})
+        return sorted(splits, key=lambda split: split["date"])
+    except Exception as exc:  # noqa: BLE001 - reported by the caller as an assumption
+        print(f"[!] Stock splits unavailable for {ticker} ({type(exc).__name__}: {exc})")
+        return None
 
 
 def fetch_quote(ticker: str) -> dict | None:
     """Latest price and currency from the chart meta block, or ``None``."""
     try:
-        payload = _chart(ticker, "interval=1d&range=1d")
+        payload = _chart(yahoo_symbol(ticker), "interval=1d&range=1d")
         result = (payload.get("chart") or {}).get("result") or []
         if not result:
             return None
@@ -230,13 +261,16 @@ def _statement_metric(
     concepts: list[str],
     labels: list[str],
     fuzzy: bool = True,
+    statement: str | tuple[str, ...] | None = None,
 ) -> pd.Series:
-    """Look a balance-sheet line up per fiscal year, tolerant to tag drift.
+    """Look a statement line up per fiscal year, tolerant to tag drift.
 
     Exact standard_concept matches win, then exact label matches, then (when
-    fuzzy) a case-insensitive substring match. Values are converted to USD
-    millions. Totals pass fuzzy=False: a substring such as "liabilities" also
-    matches every single liability line.
+    fuzzy) a case-insensitive substring match. Values are converted to
+    millions. Totals pass fuzzy=False: a substring such as "liabilities" or
+    "assets" also matches every single liability or asset line. ``statement``
+    keeps the search to that statement (or those): the cash flow statement's
+    "net increase in cash and cash equivalents" is not the cash held.
     """
     out = pd.Series(np.nan, index=years, dtype="float64")
     if statements is None or statements.empty or "value" not in statements.columns:
@@ -244,6 +278,8 @@ def _statement_metric(
     frame = statements.copy()
     if "fiscal_year" not in frame.columns:
         return out
+    if statement is not None and "statement" in frame.columns:
+        frame = frame[frame["statement"].isin([statement] if isinstance(statement, str) else list(statement))]
     frame["_fy"] = pd.to_numeric(frame["fiscal_year"], errors="coerce")
     frame = frame[frame["_fy"].isin(years)]
     frame["_value"] = pd.to_numeric(frame["value"], errors="coerce")
@@ -309,12 +345,11 @@ def _total_liabilities(statements: pd.DataFrame, years: list[int]) -> pd.Series:
     noncurrent totals, else total liabilities and equity (or total assets)
     minus total equity. Equity may be negative (a deficit), which is right.
     """
-    reported = _statement_metric(statements, years, *TOTAL_LIABILITIES, fuzzy=False)
-    current = _statement_metric(statements, years, *CURRENT_LIABILITIES, fuzzy=False)
-    noncurrent = _statement_metric(statements, years, *NONCURRENT_LIABILITIES, fuzzy=False)
-    both_sides = _statement_metric(statements, years, *LIABILITIES_AND_EQUITY, fuzzy=False)
-    assets = _statement_metric(statements, years, *TOTAL_ASSETS, fuzzy=False)
-    equity = _statement_metric(statements, years, *EQUITY, fuzzy=False)
+    def total(names) -> pd.Series:
+        return _statement_metric(statements, years, *names, fuzzy=False, statement="balance")
+
+    reported, current, noncurrent = total(TOTAL_LIABILITIES), total(CURRENT_LIABILITIES), total(NONCURRENT_LIABILITIES)
+    both_sides, assets, equity = total(LIABILITIES_AND_EQUITY), total(TOTAL_ASSETS), total(EQUITY)
     total = reported.where(reported.notna(), current + noncurrent)
     total = total.where(total.notna(), both_sides - equity)
     return total.where(total.notna(), assets - equity)
@@ -441,29 +476,34 @@ def _latest_value(frame: pd.DataFrame, names: pd.Series, concept: str) -> tuple[
 
 
 def _extract_shares(facts: pd.DataFrame, year: int) -> float:
-    """Shares outstanding for one fiscal year, in shares.
+    """Shares outstanding for one fiscal year, in shares (see ``_dated_shares``)."""
+    return _dated_shares(facts, year)[0]
+
+
+def _dated_shares(facts: pd.DataFrame, year: int) -> tuple[float, object]:
+    """Shares outstanding for one fiscal year and the date of that count.
 
     In order: the reported outstanding count; issued minus treasury shares at
     the same date (filers such as Pfizer report only those two); the weighted
     average diluted, then basic, count for the year.
     """
     if facts is None or facts.empty:
-        return np.nan
+        return np.nan, pd.NaT
     if not {"concept", "value"} <= set(facts.columns):
-        return np.nan
+        return np.nan, pd.NaT
     frame = facts
     if "fiscal_year" in frame.columns:
         frame = frame[pd.to_numeric(frame["fiscal_year"], errors="coerce") == year]
     if frame.empty:
-        return np.nan
+        return np.nan, pd.NaT
     names = frame["concept"].astype(str).str.split(":").str[-1]
     for concept in ("CommonStockSharesOutstanding",
                     "EntityCommonStockSharesOutstanding",
                     # IFRS filers.
                     "NumberOfSharesOutstanding"):
-        value, _ = _latest_value(frame, names, concept)
+        value, when = _latest_value(frame, names, concept)
         if np.isfinite(value):
-            return value
+            return value, when
 
     issued, issued_date = _latest_value(frame, names, "CommonStockSharesIssued")
     if np.isfinite(issued):
@@ -471,24 +511,60 @@ def _extract_shares(facts: pd.DataFrame, year: int) -> float:
         for concept in ("TreasuryStockCommonShares", "TreasuryStockShares"):
             treasury, treasury_date = _latest_value(frame, names, concept)
             if np.isfinite(treasury) and treasury_date == issued_date and treasury < issued:
-                return issued - treasury
+                return issued - treasury, issued_date
 
     for concept in ("WeightedAverageNumberOfDilutedSharesOutstanding",
                     "WeightedAverageNumberOfSharesOutstandingBasic",
                     # IFRS filers.
                     "AdjustedWeightedAverageShares",
                     "WeightedAverageShares"):
-        value, _ = _latest_value(frame, names, concept)
+        value, when = _latest_value(frame, names, concept)
         if np.isfinite(value):
-            return value
-    return np.nan
+            return value, when
+    return np.nan, pd.NaT
+
+
+def _apply_splits(raw: dict[int, float], dates: dict[int, object], splits: list[dict]) -> dict[int, float]:
+    """Share counts on today's split basis: each one times every split made after its date.
+
+    Yahoo prices are split-adjusted, so a count from before a split must be
+    multiplied by it or market cap collapses. The splits are Yahoo's, not
+    guessed from the counts: a merger that doubles the shares is not a split.
+    A split made within ``RESTATED_DAYS`` of a count is left out when the
+    count already shows it (the filer restated the year for it).
+    """
+    years = sorted(year for year, value in raw.items() if np.isfinite(value) and value > 0)
+    adjusted = dict(raw)
+    for position, year in enumerate(years):
+        when = dates.get(year)
+        if when is None or pd.isna(when):
+            continue
+        factor = 1.0
+        for split in splits:
+            day, ratio = pd.Timestamp(split["date"]), float(split["ratio"])
+            if day <= when:
+                continue
+            if (day - when).days <= RESTATED_DAYS:
+                later = raw[years[position + 1]] if position + 1 < len(years) else None
+                earlier = raw[years[position - 1]] if position else None
+                if later is not None:
+                    restated = abs(np.log(raw[year] / later)) < abs(np.log(raw[year] * ratio / later))
+                else:
+                    restated = earlier is not None and \
+                        abs(np.log(raw[year] / earlier / ratio)) < abs(np.log(raw[year] / earlier))
+                if restated:
+                    continue
+            factor *= ratio
+        adjusted[year] = raw[year] * factor
+    return adjusted
 
 
 def _normalise_splits(raw: dict[int, float]) -> dict[int, float]:
-    """Scale historical share counts up to the newest split basis.
+    """Share counts on the newest split basis, the splits guessed from the counts themselves.
 
-    Yahoo prices are split-adjusted, so share counts before a split must be
-    multiplied by every later split factor or market cap collapses.
+    Only for when Yahoo's splits are unknown or are not the filer's (an ADS):
+    a jump of half or more between two years is taken for a split, which a
+    large issuance also looks like. ``build_evaluation`` reports each use.
     """
     adjusted = dict(raw)
     years = sorted(year for year, value in raw.items() if np.isfinite(value))
@@ -563,7 +639,7 @@ def _reporting_currency(data: pd.DataFrame) -> str:
     return "USD"
 
 
-def fetch_fx_history(base: str, quote_currency: str, years: int = PRICE_RANGE_YEARS) -> list[dict]:
+def fetch_fx_history(base: str, quote_currency: str, years: int | None = None) -> list[dict]:
     """Monthly ``quote_currency`` per one ``base`` (EUR -> USD: about 1.1), as price bars."""
     if base == quote_currency:
         return []
@@ -582,7 +658,7 @@ def _yahoo_summary(ticker: str, modules: str) -> dict:
     with opener.open(Request("https://query1.finance.yahoo.com/v1/test/getcrumb", headers=headers),
                      timeout=10) as response:
         crumb = response.read().decode("utf-8", "replace").strip()
-    url = (f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{quote(ticker)}?"
+    url = (f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{quote(yahoo_symbol(ticker))}?"
            + urlencode({"modules": modules, "crumb": crumb}))
     with opener.open(Request(url, headers=headers), timeout=15) as response:
         payload = json.loads(response.read().decode("utf-8"))
@@ -712,13 +788,21 @@ def build_evaluation(
     price_history: list[dict],
     price_scale: dict[int, float] | None = None,
     price_currency: str | None = None,
+    splits: list[dict] | None = None,
+    issues: list[dict] | None = None,
 ) -> pd.DataFrame:
     """One row per fiscal year with valuation ratios and quality scores.
 
     ``price_scale`` turns a year's quoted price into a price per ordinary
     share in the reporting currency (see ``market_scale``); a year missing
     from it gets no market-based ratios. ``None`` means the price needs no
-    conversion (a US filer reporting in USD).
+    conversion (a US filer reporting in USD). ``splits`` are Yahoo's
+    (``fetch_splits``); ``None`` (unknown) guesses them from the share counts.
+
+    ``issues``, when a list, gets every input that was missing or assumed
+    (``data_issues`` kinds ``valuation_input_missing`` and
+    ``valuation_assumed``): a ratio is left blank or flagged, never built on a
+    silent zero.
     """
     if df is None or df.empty or "fiscal_year" not in df.columns:
         return _empty_evaluation()
@@ -737,16 +821,21 @@ def build_evaluation(
     years = [int(year) for year in data["fiscal_year"]]
     currency = _reporting_currency(data)
 
+    def balance(names, fuzzy: bool = False) -> pd.Series:
+        return _statement_metric(statements, years, *names, fuzzy=fuzzy, statement="balance")
+
+    # Totals are matched exactly: a looser match takes the first line that
+    # mentions "assets" or "long-term debt" (its current portion) for the total.
     statement_metrics = {
-        "total_assets": _statement_metric(statements, years, *TOTAL_ASSETS),
+        "total_assets": balance(TOTAL_ASSETS),
         "total_liabilities": _total_liabilities(statements, years),
-        "retained_earnings": _statement_metric(statements, years, *RETAINED_EARNINGS),
-        "cash": _statement_metric(statements, years, *CASH),
-        "equity": _statement_metric(statements, years, *EQUITY),
-        "long_term_debt": _statement_metric(statements, years, *LONG_TERM_DEBT),
-        "current_assets": _statement_metric(statements, years, *CURRENT_ASSETS),
-        "current_liabilities": _statement_metric(statements, years, *CURRENT_LIABILITIES),
-        "depreciation": _statement_metric(statements, years, *DEPRECIATION),
+        "retained_earnings": balance(RETAINED_EARNINGS, fuzzy=True),
+        "cash": balance(CASH, fuzzy=True),
+        "equity": balance(EQUITY),
+        "long_term_debt": balance(LONG_TERM_DEBT),
+        "current_assets": balance(CURRENT_ASSETS),
+        "current_liabilities": balance(CURRENT_LIABILITIES),
+        "depreciation": _statement_metric(statements, years, *DEPRECIATION, statement=("cashflow", "income")),
     }
     if statement_metrics["depreciation"].isna().all():
         statement_metrics["depreciation"] = _fact_metric(
@@ -796,13 +885,34 @@ def build_evaluation(
     total_assets = by_year(statement_metrics["total_assets"])
     total_liabilities = by_year(statement_metrics["total_liabilities"])
     retained_earnings = by_year(statement_metrics["retained_earnings"])
-    cash = by_year(statement_metrics["cash"]).fillna(0.0)
-    depreciation = by_year(statement_metrics["depreciation"]).fillna(0.0)
+    cash = by_year(statement_metrics["cash"])
+    depreciation = by_year(statement_metrics["depreciation"])
+
+    period_dates = _period_dates(data, statements)
+
+    def note(kind: str, severity: str, year: int, concept: str, detail: str) -> None:
+        if issues is not None:
+            when = period_dates.get(year)
+            issues.append({"kind": kind, "severity": severity, "fiscal_year": year,
+                           "period": None if when is None or pd.isna(when) else str(when.date()),
+                           "concept": concept, "label": None, "detail": detail})
 
     # Share counts and price history.
-    raw_shares = {year: _extract_shares(facts, year) for year in years}
-    share_counts = _normalise_splits(raw_shares)
-    period_dates = _period_dates(data, statements)
+    dated = {year: _dated_shares(facts, year) for year in years}
+    raw_shares = {year: value for year, (value, _) in dated.items()}
+    is_ads = "ads" in data.columns and data["ads"].astype(str).str.lower().isin(["true", "1"]).any()
+    if splits is None or is_ads:
+        # An ADS's splits on Yahoo are changes of its ratio, not of the ordinary shares.
+        share_counts = _normalise_splits(raw_shares)
+        why = "Yahoo's splits could not be fetched" if splits is None else "the quote is an ADS, whose splits are not the share's"
+        for year in years:
+            if np.isfinite(raw_shares[year]) and share_counts[year] != raw_shares[year]:
+                note("valuation_assumed", "warning", year, "Splits",
+                     f"{why}, so a split was guessed from the share counts: {raw_shares[year]:,.0f} shares "
+                     f"counted as {share_counts[year]:,.0f}; a large issuance looks the same")
+    else:
+        share_dates = {year: when if pd.notna(when) else period_dates.get(year) for year, (_, when) in dated.items()}
+        share_counts = _apply_splits(raw_shares, share_dates, splits)
     prices = {year: _close_near(price_history, period_dates.get(year)) for year in years}
 
     rows: list[dict] = []
@@ -810,6 +920,16 @@ def build_evaluation(
     for position, year in enumerate(years):
         price = _finite(prices[year])
         shares = _finite(share_counts.get(year, np.nan))
+        if not np.isfinite(price):
+            note("valuation_input_missing", "warning", year, "Price",
+                 f"no closing price within {PRICE_MATCH_DAYS} days of the year end; price-based ratios are blank")
+        elif price_scale is not None and not np.isfinite(_finite(price_scale.get(year, np.nan))):
+            note("valuation_input_missing", "warning", year, "Price",
+                 "no exchange rate or ADS ratio to turn the quote into a price per share in the reporting "
+                 "currency; price-based ratios are blank")
+        if not np.isfinite(shares):
+            note("valuation_input_missing", "warning", year, "Shares",
+                 "no share count was read for the year; price-based ratios are blank")
         # Price per ordinary share in the reporting currency.
         share_price = price if price_scale is None else price * _finite(price_scale.get(year, np.nan))
         market_cap = share_price * shares / USD_TO_MILLIONS if (
@@ -821,9 +941,11 @@ def build_evaluation(
         ocf_value = _finite(operating_cash_flow.iloc[position])
         fcf_value = _finite(free_cash_flow.iloc[position])
         ebit_value = _finite(ebit.iloc[position])
-        ebitda_value = ebit_value + _finite(depreciation.iloc[position]) if (
-            np.isfinite(ebit_value)
-        ) else np.nan
+        depreciation_value = _finite(depreciation.iloc[position])
+        ebitda_value = ebit_value + depreciation_value
+        if np.isfinite(ebit_value) and not np.isfinite(depreciation_value):
+            note("valuation_input_missing", "info", year, "Depreciation",
+                 "no depreciation and amortization was read, so EV/EBITDA is blank")
         gross_value = _finite(gross_profit.iloc[position])
         equity_value = _finite(equity.iloc[position])
         debt_value = _finite(long_term_debt.iloc[position])
@@ -837,6 +959,13 @@ def build_evaluation(
         if np.isfinite(market_cap):
             enterprise_value = market_cap + (debt_value if np.isfinite(debt_value) else 0.0) \
                 - (cash_value if np.isfinite(cash_value) else 0.0)
+            if not np.isfinite(cash_value):
+                note("valuation_assumed", "warning", year, "Cash",
+                     "no cash line was read from the balance sheet, so enterprise value subtracts none: "
+                     "EV and the ratios on it are overstated by the cash held")
+            if not np.isfinite(debt_value):
+                note("valuation_assumed", "info", year, "LongTermDebt",
+                     "no long-term debt was read, so enterprise value adds none (right only if there is none)")
 
         pe = _safe_div(market_cap, net_income_value, positive_only=True)
         pb = _safe_div(market_cap, equity_value, positive_only=True)
@@ -960,8 +1089,12 @@ def main() -> None:
     df = load("financial_data.csv")
     statements = load("statements.csv")
     facts = load("facts.csv")
-    history = fetch_price_history(ticker, PRICE_RANGE_YEARS)
-    evaluation = build_evaluation(ticker, df, statements, facts, history)
+    history = fetch_price_history(ticker)
+    issues: list[dict] = []
+    evaluation = build_evaluation(ticker, df, statements, facts, history, splits=fetch_splits(ticker),
+                                  issues=issues)
+    for issue in issues:
+        print(f"[!] FY{issue['fiscal_year']} {issue['concept']}: {issue['detail']}")
     path = write_evaluation(ticker, evaluation, output_dir)
     print(evaluation.to_string(index=False))
     print(f"[+] Wrote {path}")
