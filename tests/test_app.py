@@ -77,7 +77,10 @@ class AppTestCase(unittest.TestCase):
 
     def signup(self, name, email):
         client = app.app.test_client()
-        res = client.post("/api/signup", json={"name": name, "email": email, "password": PASSWORD})
+        body = {"name": name, "email": email, "password": PASSWORD}
+        if email == app._admin_email():
+            body["admin_code"] = app._admin_setup_code()      # the admin's first sign-up needs it
+        res = client.post("/api/signup", json=body)
         self.assertEqual(res.status_code, 201, res.get_json())
         self._clients = getattr(self, "_clients", []) + [client]
         return client
@@ -102,6 +105,27 @@ class AppTestCase(unittest.TestCase):
 
 
 class AuthTests(AppTestCase):
+    def test_a_huge_request_body_is_refused(self):
+        anon = app.app.test_client()
+        res = anon.post("/api/login", data=b"x" * (app.MAX_BODY_BYTES + 1), content_type="application/json")
+        self.assertEqual(res.status_code, 413)
+
+    def test_the_sec_identity_is_plain_ascii(self):
+        # httpx refuses a User-Agent it cannot encode, and every SEC request failed.
+        self.assertEqual(app._identity({"name": "Łukasz Żółć", "email": "l@example.com"}),
+                         "Lukasz Zolc l@example.com")
+        self.assertEqual(app._identity({"name": "Søren Weiß", "email": "s@example.com"}),
+                         "Soren Weiss s@example.com")
+        self.assertEqual(app._identity({"name": "山田 太郎", "email": "y@example.com"}),
+                         "Stocky user y@example.com")
+        self.assertEqual(app._identity({"name": "Ada Lovelace", "email": "ada@example.com"}),
+                         "Ada Lovelace ada@example.com")
+
+    def test_an_email_the_sec_header_cannot_carry_is_refused(self):
+        res = app.app.test_client().post("/api/signup", json={"name": "Zoë", "email": "zoë@example.com",
+                                                              "password": PASSWORD})
+        self.assertEqual(res.status_code, 400)
+
     def test_signed_out_requests_are_refused(self):
         anon = app.app.test_client()
         self.assertEqual(anon.get("/api/recent").status_code, 401)
@@ -880,6 +904,27 @@ class LimitTests(AppTestCase):
         self.assertEqual(boss.delete(f"/api/admin/users/{uid}", json={}).status_code, 400)
         self.assertEqual(boss.delete(f"/api/admin/users/{uid}", json={"confirm": "DELETE"}).status_code, 200)
         self.assertIsNone(app._get_user(uid))
+
+    def test_the_admin_email_cannot_be_claimed_without_the_setup_code(self):
+        # The admin is whoever holds that email, and emails are not verified.
+        body = {"name": "Mallory", "email": "boss@example.com", "password": PASSWORD}
+        anon = app.app.test_client()
+        res = anon.post("/api/signup", json=body)
+        self.assertEqual(res.status_code, 403)
+        self.assertTrue(res.get_json()["admin_code"])
+        self.assertEqual(anon.post("/api/signup", json={**body, "admin_code": "guess"}).status_code, 403)
+        with app._db() as conn:
+            self.assertIsNone(conn.execute("SELECT 1 FROM users WHERE email = 'boss@example.com'").fetchone())
+
+    def test_the_setup_code_is_on_the_server_and_works_once(self):
+        path = app.DATA_DIR / "admin_setup_code"
+        code = app._admin_setup_code()
+        self.assertEqual(path.read_text().strip(), code)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        boss = self.signup("Boss", "boss@example.com")
+        self.assertTrue(boss.get("/api/account").get_json()["user"]["admin"])
+        self.assertFalse(path.exists())
+        self.assertNotEqual(app._admin_setup_code(), code)
 
     def test_nobody_can_take_the_admin_email(self):
         res = self.client.patch("/api/account", json={"email": "boss@example.com", "current_password": PASSWORD})

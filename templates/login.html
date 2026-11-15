@@ -91,6 +91,10 @@
     <input id="email" type="email" autocomplete="email" maxlength="200" required>
     <label for="password">Password</label>
     <input id="password" type="password" autocomplete="current-password" minlength="8" required>
+    <div id="code-row" class="hidden">
+      <label for="code">Admin setup code</label>
+      <input id="code" autocomplete="off" maxlength="100">
+    </div>
     <button id="submit" class="primary" type="submit">Sign in</button>
     <p class="note" id="note">Accounts live only on this machine. Delete the app and they are gone.</p>
   </form>
@@ -112,6 +116,7 @@ function setMode(next) {
     ? 'Your name and email are sent to the SEC as the contact for your requests, as it requires. Nothing leaves this machine otherwise.'
     : 'Accounts live only on this machine. Delete the app and they are gone.';
   $('#msg').textContent = '';
+  $('#code-row').classList.add('hidden');
   (up ? $('#name') : $('#email')).focus();
 }
 
@@ -119,6 +124,7 @@ async function submitForm(event) {
   event.preventDefault();
   const body = { email: $('#email').value.trim(), password: $('#password').value };
   if (mode === 'up') body.name = $('#name').value.trim();
+  if (mode === 'up' && $('#code').value.trim()) body.admin_code = $('#code').value.trim();
   $('#submit').disabled = true;
   $('#msg').textContent = '';
   try {
@@ -128,6 +134,8 @@ async function submitForm(event) {
       body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
+    // The admin's first sign-up: the server asks for the code it keeps in its data folder.
+    if (data.admin_code) { $('#code-row').classList.remove('hidden'); $('#code').focus(); }
     if (!res.ok) throw new Error(data.error || 'Something went wrong.');
     // Keep the tab and ticker the visitor was sent here from (#charts/AAPL).
     location.href = '/' + location.hash;
