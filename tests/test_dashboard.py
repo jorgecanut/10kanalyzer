@@ -122,5 +122,86 @@ class WriteIssuesTest(unittest.TestCase):
         self.assertEqual(list(written["concept"]), ["Cash"])
 
 
+class PublishTest(unittest.TestCase):
+    """A run writes into a staging folder; only a finished run replaces the results."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, self.root, True)
+        self.live = self.root / "AAA"
+        self.live.mkdir()
+        self.staging = self.live / edgar_dashboard.STAGING_DIRNAME
+        self.staging.mkdir()
+        for name in ("financial_data.csv", "evaluation.csv", "charts.json", "run.log"):
+            (self.live / name).write_text("old")
+        (self.live / ".png_cache").mkdir()
+
+    def publish(self, charts):
+        with redirect_stdout(io.StringIO()) as out:
+            edgar_dashboard.publish(str(self.staging), str(self.live), with_charts=charts)
+        return out.getvalue()
+
+    def test_new_files_replace_the_old_and_the_staging_folder_goes(self):
+        (self.staging / "financial_data.csv").write_text("new")
+        (self.staging / "charts.json").write_text("new")
+        self.publish(charts=True)
+        self.assertEqual((self.live / "financial_data.csv").read_text(), "new")
+        self.assertEqual((self.live / "charts.json").read_text(), "new")
+        self.assertFalse(self.staging.exists())
+        self.assertFalse((self.live / ".png_cache").exists())      # drawn from the old charts
+
+    def test_a_file_this_run_did_not_produce_is_removed_and_said_so(self):
+        # A valuation that failed left last month's evaluation.csv beside new numbers.
+        (self.staging / "financial_data.csv").write_text("new")
+        log = self.publish(charts=True)
+        self.assertFalse((self.live / "evaluation.csv").exists())
+        self.assertIn("evaluation.csv", log)
+        self.assertEqual((self.live / "run.log").read_text(), "old")    # not the pipeline's file
+
+    def test_a_run_without_charts_keeps_the_charts_it_did_not_redraw(self):
+        (self.staging / "financial_data.csv").write_text("new")
+        self.publish(charts=False)
+        self.assertEqual((self.live / "charts.json").read_text(), "old")
+        self.assertTrue((self.live / ".png_cache").exists())
+
+    def test_a_finished_run_publishes_what_it_made_and_drops_what_it_did_not(self):
+        import extract
+        import valuation
+        row = {metric: float("nan") for metric in extract.METRIC_CONCEPTS}
+        row.update(period_of_report="2024-12-31", fiscal_year=2024, form="10-K", currency="USD",
+                   Revenues=1000e6, NetIncomeLoss=100e6, OperatingIncomeLoss=150e6, OperatingCashFlow=160e6,
+                   StockholdersEquity=500e6)
+        frames = (pd.DataFrame([row]), pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
+        saved = sys.stdout, sys.stderr
+        try:
+            with unittest.mock.patch.object(edgar_dashboard, "build_dataset", return_value=frames), \
+                    unittest.mock.patch.object(edgar_dashboard, "_start_insiders", return_value=None), \
+                    unittest.mock.patch.object(edgar_dashboard, "_report_insiders"), \
+                    unittest.mock.patch.object(valuation, "fetch_price_history", side_effect=OSError("Yahoo down")), \
+                    redirect_stdout(io.StringIO()):
+                edgar_dashboard.main(["--ticker", "AAA", "--output-dir", str(self.root), "--no-charts"])
+        finally:
+            sys.stdout, sys.stderr = saved
+        self.assertIn("1000.0", (self.live / "financial_data.csv").read_text())
+        self.assertFalse((self.live / "evaluation.csv").exists())           # no valuation this time
+        issues = pd.read_csv(self.live / "data_issues.csv")
+        self.assertEqual(list(issues["kind"]), ["valuation_skipped"])
+        self.assertEqual((self.live / "charts.json").read_text(), "old")    # --no-charts
+        self.assertFalse(self.staging.exists())
+
+    def test_a_run_that_fails_leaves_the_previous_results_alone(self):
+        saved = sys.stdout, sys.stderr
+        try:
+            with unittest.mock.patch.object(edgar_dashboard, "build_dataset", side_effect=RuntimeError("SEC down")), \
+                    unittest.mock.patch.object(edgar_dashboard, "_start_insiders", return_value=None), \
+                    redirect_stdout(io.StringIO()), self.assertRaises(RuntimeError):
+                edgar_dashboard.main(["--ticker", "AAA", "--output-dir", str(self.root)])
+        finally:
+            sys.stdout, sys.stderr = saved
+        self.assertEqual((self.live / "financial_data.csv").read_text(), "old")
+        self.assertEqual((self.live / "evaluation.csv").read_text(), "old")
+        self.assertFalse(self.staging.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

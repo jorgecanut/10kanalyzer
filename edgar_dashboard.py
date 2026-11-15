@@ -22,6 +22,7 @@ import gc
 import json
 import os
 import re
+import shutil
 import sys
 import threading
 import time
@@ -57,6 +58,17 @@ BASE_OUTPUT_DIR = "financial_graphs"
 # moves it, and the default sits inside the output directory.
 CACHE_ENV = "STOCKY_FILING_CACHE"
 CACHE_DIRNAME = ".filing_cache"
+
+# A run writes here, inside the ticker's folder, and ``publish`` moves the
+# files out when it has finished: a run that fails, is cancelled or is killed
+# leaves the previous results whole instead of a mix of old and new files.
+STAGING_DIRNAME = ".staging"
+# What a run produces. One it did not produce this time (no valuation because
+# Yahoo was down, no statements) is removed, never left over from an earlier
+# run to pass for current. The chart files only count for a run with charts.
+RESULT_FILES = ("financial_data.csv", "data_issues.csv", "statements.csv", "facts.csv", "notes.csv",
+                "calc_check.csv", "evaluation.csv", "insider.json")
+CHART_FILES = (charts.SPEC_FILE, "data_quality.csv")
 
 # Resolved at runtime in main(): each ticker gets its own sub-directory so that
 # running several companies does not overwrite previous results.
@@ -501,6 +513,25 @@ def _write_issues(df: pd.DataFrame, checks: pd.DataFrame, filed: dict,
     return issues
 
 
+def publish(staging: str, live: str, with_charts: bool) -> None:
+    """Move a finished run's files from ``staging`` into ``live`` (the ticker's folder).
+
+    Each file is renamed into place, so a reader never sees half of one. A
+    result file the run did not produce is removed from ``live`` and the log
+    says so. A run without charts (screener mode) leaves the charts alone.
+    """
+    for name in RESULT_FILES + (CHART_FILES if with_charts else ()):
+        new, old = os.path.join(staging, name), os.path.join(live, name)
+        if os.path.isfile(new):
+            os.replace(new, old)
+        elif os.path.isfile(old):
+            os.remove(old)
+            print(f"[!] {name}: this run produced none, so the previous run's was removed")
+    if with_charts:
+        charts.clear_images(live)             # drawn from the previous charts.json
+    shutil.rmtree(staging, ignore_errors=True)
+
+
 def print_summary(df: pd.DataFrame) -> None:
     display_cols = [
         "fiscal_year", "Revenues", "NetIncomeLoss", "GrossMargin",
@@ -612,7 +643,7 @@ def _filings_arg(value: str) -> int | str:
     return number
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     global OUTPUT_DIR, DATA_CSV, TICKER
     sys.stdout, sys.stderr = _Stamped(sys.stdout), _Stamped(sys.stderr)
 
@@ -639,18 +670,29 @@ def main() -> None:
         "--no-cache", action="store_true",
         help="Parse every filing again, ignoring and not updating the filing cache",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     n_filings = None if args.filings == "max" else args.filings
     cache_dir = None if args.no_cache else (args.cache_dir or os.path.join(args.output_dir, CACHE_DIRNAME))
 
     if not TICKER_RE.match(args.ticker.upper()):
         parser.error("invalid ticker")
 
-    # Point the module globals at a per-ticker output directory.
+    # Point the module globals at the run's staging folder inside the
+    # per-ticker output directory (see STAGING_DIRNAME).
     TICKER = args.ticker.upper()
-    OUTPUT_DIR = os.path.join(args.output_dir, TICKER)
+    live_dir = os.path.join(args.output_dir, TICKER)
+    OUTPUT_DIR = os.path.join(live_dir, STAGING_DIRNAME)
     DATA_CSV = os.path.join(OUTPUT_DIR, "financial_data.csv")
+    shutil.rmtree(OUTPUT_DIR, ignore_errors=True)        # left by a run that was killed
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    try:
+        _run(args, n_filings, cache_dir, live_dir)
+    finally:
+        shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
+
+
+def _run(args, n_filings: int | None, cache_dir: str | None, live_dir: str) -> None:
+    """The run itself, written into ``OUTPUT_DIR`` (staging) and published to ``live_dir`` at the end."""
 
     # Insider trades need nothing from the 10-Ks, so their Form 4 downloads
     # run while the 10-Ks are fetched instead of after them.
@@ -667,7 +709,7 @@ def main() -> None:
     df = clean_and_derive(raw)
 
     df.to_csv(DATA_CSV, index=False)
-    print(f"[+] Wrote ratio data to {os.path.abspath(DATA_CSV)}")
+    print("[+] Wrote ratio data to financial_data.csv")
 
     # XBRL-driven artifacts: everything the filer stated, not a curated list.
     if not statements.empty:
@@ -720,7 +762,8 @@ def main() -> None:
 
     if args.no_charts:
         print("[*] Charts skipped (screener mode)")
-        print(f"\n[+] Done. CSV data written to '{os.path.abspath(OUTPUT_DIR)}/'.")
+        publish(OUTPUT_DIR, live_dir, with_charts=False)
+        print(f"\n[+] Done. CSV data written to '{os.path.abspath(live_dir)}/'.")
         return
 
     # charts.json only: the page draws it, and PNGs are drawn when downloaded.
@@ -728,7 +771,8 @@ def main() -> None:
     rendered = charts.render_all(TICKER, OUTPUT_DIR, df, statements, facts, log=print, issues=issues)
     print(f"    [+] {len(rendered)} charts written to charts.json")
 
-    print(f"\n[+] Done. {len(rendered)} charts and CSV data written to '{os.path.abspath(OUTPUT_DIR)}/'.")
+    publish(OUTPUT_DIR, live_dir, with_charts=True)
+    print(f"\n[+] Done. {len(rendered)} charts and CSV data written to '{os.path.abspath(live_dir)}/'.")
 
 
 if __name__ == "__main__":

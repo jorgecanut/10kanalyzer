@@ -194,6 +194,14 @@ The web app uses the same per-ticker layout inside each user's folder,
 `data/users/<id>/<TICKER>/`, plus a `run.json` recording the last successful
 run (filings, charts or not, finish time) for the same-day cache.
 
+A run writes into `<TICKER>/.staging/` and moves its files into the ticker's
+folder only when it has finished, each one renamed into place. A run that
+fails, is cancelled or is killed therefore leaves the previous results whole,
+never a mix of old and new files. A file the finished run did not produce (no
+`evaluation.csv` because Yahoo was down, no `statements.csv`) is removed and
+the log says so: a leftover from an earlier run never passes for current. A
+run without charts (screener mode) leaves `charts.json` as it was.
+
 `statements.csv` / `facts.csv` / `notes.csv` are the data-first, XBRL-driven
 artifacts: no metric is hard-coded, so a new filer needs no code change.
 `financial_data.csv` holds the derived ratio inputs/outputs.
