@@ -243,7 +243,10 @@ asks for a name, email and password. Accounts live in `data/stocky.db`
 `data/` (or the app) and every account and result is gone. Users never see one
 another's runs, jobs or files; each user has an internal id, never shown, that
 names their folder. The account's name and email are the SEC identity for that
-user's runs, so there is nothing to put in Docker or `.env`. Set
+user's runs, so there is nothing to put in Docker or `.env`. It is sent in
+plain ASCII, as a request header must be: accents are dropped from the name
+(Żółć is sent as Zolc; the name shown in the app is untouched) and an email
+with accented letters is refused. Set
 `STOCKY_DATA_DIR` to keep `data/` somewhere else.
 
 **One admin, limited users.** `STOCKY_ADMIN_EMAIL` in `.env` (never in the
@@ -260,8 +263,12 @@ accepted request adds the granted runs to that day. Sign-ins pause after 10
 failures per email in 15 minutes and new accounts are capped per hour. The run
 queue still runs one pipeline at a time, but in turns: the admin's runs first,
 then each user's first waiting run, then each user's second, so one long
-screener batch never holds others back. Nobody can take the admin email by
-signing up or editing their account once the admin account exists.
+screener batch never holds others back. Emails are not verified, so creating
+the admin account needs a **setup code**: the app writes it to
+`data/admin_setup_code` (readable only by whoever runs the server) and the
+sign-up form asks for it when the admin's email is entered. The code works
+once; a new one is made if the admin account is ever deleted. Nobody can take
+the admin email by editing their account either.
 
 ```bash
 pip install -r requirements.txt
@@ -274,7 +281,7 @@ Routes:
 | --- | --- | --- |
 | `GET` | `/` | The UI (Home / Charts / Insiders / Screener / Simulation / News tabs); redirects to `/login` when signed out |
 | `GET` | `/login` | Sign-in / create-account page |
-| `POST` | `/api/signup` | `{"name","email","password"}` → creates the account and signs in |
+| `POST` | `/api/signup` | `{"name","email","password"}` → creates the account and signs in; the admin's email also needs `"admin_code"` (403 with `admin_code: true` otherwise) |
 | `POST` | `/api/login` | `{"email","password"}` → signs in |
 | `POST` | `/api/logout` | Signs out |
 | `GET` | `/api/account` | The signed-in user's name, email and SEC identity (never the id) |
@@ -1012,7 +1019,11 @@ this project must not regress them.
 - `requirements.txt` is pinned to exact tested versions (auto-deploy builds
   on every push; unpinned deps were unreviewed supply-chain exposure).
 
-Known remaining exposure: the sign-in has no rate limiting or lockout and there
+- No request body may exceed 6 MB (a profile picture is at most 5): sign-in
+  and sign-up are public and used to read a body of any size into memory.
+
+Known remaining exposure: the sign-in pause is per email only (no per-address
+limit, and it can lock a known email out for 15 minutes) and there
 is no HTTPS of its own — it is meant for a private machine or network. Put it
 behind nginx with TLS (and `auth_basic` if you like) before exposing it.
 

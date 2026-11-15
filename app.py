@@ -32,6 +32,7 @@ import sys
 import threading
 import time
 import traceback
+import unicodedata
 import uuid
 import zipfile
 import xml.etree.ElementTree as ET
@@ -86,6 +87,9 @@ COLORS = ("orange", "blue", "teal", "green", "amber", "red", "pink", "violet")
 AVATAR_SIZE = 256                    # stored as a square PNG of this many pixels
 AVATAR_MAX_BYTES = 5 * 1024 * 1024
 AVATAR_MAX_PIXELS = 40_000_000       # refuse decompression bombs before decoding
+# No request may be bigger than a profile picture plus some slack: sign-in and
+# sign-up are public and would otherwise read any body into memory.
+MAX_BODY_BYTES = AVATAR_MAX_BYTES + 1024 * 1024
 
 # Tickers: letters/digits plus the "." and "-" seen in symbols such as BRK.B.
 TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
@@ -111,6 +115,7 @@ DIAG_LOCK = threading.Lock()
 app = Flask(__name__)
 app.config.update(
     TEMPLATES_AUTO_RELOAD=True,
+    MAX_CONTENT_LENGTH=MAX_BODY_BYTES,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     PERMANENT_SESSION_LIFETIME=timedelta(days=30),
@@ -292,6 +297,9 @@ def _clean_email(raw) -> str:
     email = str(raw or "").strip()
     if not EMAIL_RE.match(email) or len(email) > 200:
         abort(400, "Enter a valid email address.")
+    if not email.isascii():
+        # It is sent to the SEC in a request header, which carries ASCII only.
+        abort(400, "Use an email address with plain letters only (no accents).")
     return email
 
 
@@ -302,9 +310,24 @@ def _clean_password(raw) -> str:
     return password
 
 
+# Letters with no accent to drop: NFKD leaves them as they are.
+_ASCII_LETTERS = str.maketrans({"Ł": "L", "ł": "l", "Ø": "O", "ø": "o", "Đ": "D", "đ": "d", "ß": "ss",
+                                "Æ": "AE", "æ": "ae", "Œ": "OE", "œ": "oe", "Þ": "Th", "þ": "th", "ı": "i"})
+
+
+def _ascii(text: str) -> str:
+    """``text`` in plain ASCII: accents dropped (Żółć -> Zolc), anything else left out."""
+    plain = unicodedata.normalize("NFKD", str(text).translate(_ASCII_LETTERS))
+    return " ".join(plain.encode("ascii", "ignore").decode().split())
+
+
 def _identity(user: dict) -> str:
-    """The SEC User-Agent contact: the account's name and email."""
-    return f"{user['name']} {user['email']}"
+    """The SEC User-Agent contact: the account's name and email, in ASCII.
+
+    A request header carries nothing else: a name such as Łukasz made every
+    SEC request of that account fail. The name shown in the app is untouched.
+    """
+    return f"{_ascii(user['name']) or 'Stocky user'} {_ascii(user['email'])}"
 
 
 def _public_user(user: dict) -> dict:
@@ -325,6 +348,32 @@ def _admin_email() -> str:
 def _is_admin(user: dict | None) -> bool:
     admin = _admin_email()
     return bool(admin and user and user["email"].strip().lower() == admin)
+
+
+def _admin_setup_code() -> str:
+    """The code the admin's first sign-up needs, kept in ``data/admin_setup_code``.
+
+    The admin is whoever holds STOCKY_ADMIN_EMAIL and emails are not verified,
+    so without it anyone who knows the address could create that account
+    first. Only someone with access to the server can read the file; it is
+    removed once the account exists and made anew if the account is deleted.
+    """
+    path = DATA_DIR / "admin_setup_code"
+    try:
+        code = path.read_text().strip()
+        if code:
+            return code
+    except OSError:
+        pass
+    code = secrets.token_urlsafe(12)
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        path.write_text(code + "\n")
+        path.chmod(0o600)
+        print(f"[*] admin setup code written to {path}", file=sys.stderr)
+    except OSError as exc:
+        print(f"[!] cannot write {path}: {exc}; the admin setup code is {code}", file=sys.stderr)
+    return code
 
 
 def _require_admin() -> None:
@@ -880,6 +929,12 @@ def signup():
     password = _clean_password(payload.get("password"))
     if _throttle("signup", SIGNUPS_PER_HOUR, 3600):
         abort(429, "Too many new accounts right now; try again in an hour.")
+    claims_admin = bool(_admin_email()) and email.lower() == _admin_email()
+    if claims_admin and not secrets.compare_digest(str(payload.get("admin_code") or "").strip().encode(),
+                                                   _admin_setup_code().encode()):
+        return jsonify(error="This is the admin's email. Enter the setup code from the file "
+                             "admin_setup_code in the app's data folder on the server.",
+                       status=403, admin_code=True), 403
     uid = uuid.uuid4().hex
     try:
         with _db() as conn:
@@ -889,6 +944,8 @@ def signup():
             )
     except sqlite3.IntegrityError:
         abort(409, "An account with that email already exists.")
+    if claims_admin:
+        (DATA_DIR / "admin_setup_code").unlink(missing_ok=True)      # it works once
     _start_session(uid)
     return jsonify(user=_public_user(_get_user(uid))), 201
 
