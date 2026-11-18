@@ -290,7 +290,8 @@ def quarter_inputs():
                        "Revenues": 1100.0, "NetIncomeLoss": 120.0, "OperatingIncomeLoss": 170.0,
                        "OperatingCashFlow": 170.0, "CapEx": 40.0, "FreeCashFlow": 130.0, "GrossProfit": 440.0,
                        "StockholdersEquity": 520.0, "LongTermDebt": 200.0, "AssetsCurrent": 310.0,
-                       "LiabilitiesCurrent": 150.0, "EpsDiluted": 1.2}])
+                       "LiabilitiesCurrent": 150.0, "EpsDiluted": 1.2,
+                       "EpsDiluted__ytd": 0.7, "EpsDiluted__ytd_prior": 0.5}])
     st = pd.DataFrame([
         {**line("balance", "us-gaap_Assets", "Total assets", 1000e6, standard="Assets"), "fiscal_year": "Q2'26",
          "period_of_report": "2026-06-30"},
@@ -410,3 +411,70 @@ class TodayTests(unittest.TestCase):
                                "is_dimensioned": False}])
         self.assertEqual(valuation.latest_shares(pd.concat([older, fa])), (100e6, "2026-07-20"))
         self.assertIsNone(valuation.latest_shares(pd.DataFrame()))
+
+
+class ReviewFixTests(unittest.TestCase):
+    """Splits and currencies around the quarter slots and today's record (final review)."""
+
+    def slot_inputs(self, eps_ytd=1.3, eps_prior=0.33, slot_shares=1000e6):
+        q, st, fa = quarter_inputs()
+        q = q.drop(columns=["EpsDiluted"]).assign(**{"EpsDiluted__ytd": eps_ytd, "EpsDiluted__ytd_prior": eps_prior})
+        fa.loc[:, "value"] = slot_shares
+        return q, st, fa
+
+    def test_split_between_10k_and_10q_in_ttm_eps(self):
+        # FY2025 EPS 11.93 on 100M shares; a 10:1 split on 2026-03-01; the 10-Q (1000M shares)
+        # reports YTD 1.3 and a restated prior YTD 0.33. TTM on the new basis: 1.193 + 1.3 - 0.33.
+        df, statements, frame = with_eps((10.0, 11.93))
+        q, st, fa = self.slot_inputs()
+        out = valuation.build_evaluation("TEST", df, statements, frame, PRICES_Q, splits=[
+            {"date": "2026-03-01", "ratio": 10.0}], quarters=q, quarter_statements=st, quarter_facts=fa)
+        slot = out.iloc[-1]
+        self.assertAlmostEqual(slot["eps_diluted"], 1.193 + 1.3 - 0.33)
+        self.assertAlmostEqual(out.iloc[1]["eps_diluted"], 1.193)            # FY2025 on today's basis too
+
+    def test_today_shares_follow_a_later_split(self):
+        q, st, fa = quarter_inputs()
+        df, statements, frame = with_eps()
+        evaluation = valuation.build_evaluation("TEST", df, statements, frame, PRICES_Q, splits=[],
+                                                quarters=q, quarter_statements=st, quarter_facts=fa)
+        today = valuation.build_today(evaluation, {"price": 12.0, "time": "t"}, (100e6, "2026-07-20"), PRICES_Q,
+                                      [], splits=[{"date": "2026-10-01", "ratio": 2.0}])
+        self.assertAlmostEqual(today["shares"], 200e6)
+        self.assertAlmostEqual(today["market_cap"], 12.0 * 200e6 / 1e6)
+
+    def test_no_share_count_eps_still_follows_splits_and_the_issue_is_true(self):
+        df, statements, frame = with_eps((2.0, 1.0))
+        frame = frame[~((frame["concept"] == "us-gaap:CommonStockSharesOutstanding") & (frame["fiscal_year"] == 2024))]
+        issues = []
+        out = valuation.build_evaluation("TEST", df, statements, frame, PRICES, issues=issues,
+                                         splits=[{"date": "2025-06-01", "ratio": 2.0}]).set_index("fiscal_year")
+        self.assertAlmostEqual(out.loc[2024, "pe"], 20.0 / 1.0)               # EPS 2.0 / split 2
+        shares = [i for i in issues if i["concept"] == "Shares" and i["fiscal_year"] == 2024]
+        self.assertTrue(shares and "P/E" in shares[0]["detail"] and "market cap" in shares[0]["detail"])
+
+    def test_foreign_scale_reaches_slots_and_today(self):
+        # A CAD reporter quoted in USD: 1 CAD = 0.75 USD, so a USD price x 1/0.75 is the CAD price.
+        q, st, fa = quarter_inputs()
+        df, statements, frame = with_eps()
+        scale = {2024: 1 / 0.75, 2025: 1 / 0.75, "Q2'26": 1 / 0.75, "today": 1 / 0.75}
+        issues = []
+        evaluation = valuation.build_evaluation("TEST", df, statements, frame, PRICES_Q, splits=[], issues=issues,
+                                                price_scale=scale, quarters=q, quarter_statements=st,
+                                                quarter_facts=fa)
+        self.assertAlmostEqual(evaluation.iloc[-1]["pe"], 18.0 / 0.75 / 1.2)
+        today = valuation.build_today(evaluation, {"price": 15.0, "time": "t"}, (100e6, "2026-07-20"), PRICES_Q,
+                                      [], price_scale=scale)
+        self.assertAlmostEqual(today["pe"], 15.0 / 0.75 / 1.2)
+
+    def test_today_without_a_scale_for_a_foreign_quote_is_blank_and_said(self):
+        q, st, fa = quarter_inputs()
+        df, statements, frame = with_eps()
+        evaluation = valuation.build_evaluation("TEST", df, statements, frame, PRICES_Q, splits=[],
+                                                price_scale={}, quarters=q, quarter_statements=st, quarter_facts=fa)
+        issues = []
+        today = valuation.build_today(evaluation, {"price": 15.0, "time": "t"}, None, PRICES_Q, issues,
+                                      price_scale={})
+        self.assertIsNone(today["pe"])
+        self.assertIsNone(today["market_cap"])
+        self.assertTrue(any(i["concept"] == "Price" for i in issues))

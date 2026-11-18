@@ -264,6 +264,14 @@ def build(annual: pd.DataFrame, annual_sources: dict, entries: list[dict],
     frame = pd.DataFrame(rows)
     if not frame.empty:
         frame = edgar_dashboard.derive(frame)
+        # A metric the quarter lacks but derive() estimated is drawn and valued
+        # with the estimate: its issue says so, as for a fiscal year.
+        for metric, flag in data_issues.DERIVED_FLAGS.items():
+            estimated = set(frame.loc[frame[flag].astype(bool), "slot"]) if flag in frame.columns else set()
+            for issue in issues:
+                if (issue["kind"] == "quarter_metric_missing" and issue.get("concept") == metric
+                        and issue.get("fiscal_year") in estimated and "derived" not in issue["detail"]):
+                    issue["detail"] += f"; the value shown is derived ({data_issues.DERIVED_NOTES[metric]})"
     return frame, issues, {"statements": pd.DataFrame(slot_statements), "facts": pd.DataFrame(slot_facts)}
 
 

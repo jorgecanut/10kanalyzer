@@ -703,7 +703,8 @@ def market_scale(
     data: pd.DataFrame,
     facts: pd.DataFrame,
     statements: pd.DataFrame,
-) -> tuple[dict[int, float] | None, str, str]:
+    extra_dates: dict[str, str] | None = None,
+) -> tuple[dict | None, str, str]:
     """Per fiscal year, quoted price -> price per ordinary share in the reporting currency.
 
     Returns ``(scale, price_currency, note)``. ``scale`` is ``None`` when the
@@ -711,6 +712,8 @@ def market_scale(
     pipeline (cover page or EPS per ADS), else from Yahoo's trailing EPS per
     traded share against the latest EPS per ordinary share; when it cannot be
     found the scale is empty, so market-based ratios stay blank, not wrong.
+    ``extra_dates`` (quarter slot -> period end) get a scale of their own, and
+    ``"today"`` the latest rate, for today's record.
     """
     currency = _reporting_currency(data)
     print("[*] Valuation: reading the quote currency (Yahoo Finance)")
@@ -751,6 +754,14 @@ def market_scale(
         rate = fx_at(int(year))
         if np.isfinite(rate) and rate > 0:
             scale[int(year)] = 1.0 / (rate * ratio)
+    for slot, date in (extra_dates or {}).items():
+        rate = 1.0 if currency == price_currency else _close_near(fx_history, pd.Timestamp(date))
+        if np.isfinite(rate) and rate > 0:
+            scale[slot] = 1.0 / (rate * ratio)
+    rates = [bar for bar in fx_history or [] if np.isfinite(_finite(bar.get("close")))]
+    today_rate = 1.0 if currency == price_currency else (_finite(rates[-1]["close"]) if rates else np.nan)
+    if np.isfinite(today_rate) and today_rate > 0:
+        scale["today"] = 1.0 / (today_rate * ratio)
     note = (f"{price_currency} price per ADS = {ratio:g} ordinary shares ({source}), converted to {currency}"
             if is_adr else f"{price_currency} price converted to {currency}")
     return scale, price_currency, note
@@ -861,6 +872,9 @@ def build_evaluation(
             return frame if base is None or base.empty else pd.concat([base, frame], ignore_index=True)
         statements = keyed(quarter_statements, statements)
         facts = keyed(quarter_facts, facts)
+        if price_scale is not None:            # a slot's scale is keyed by its label (``market_scale``)
+            price_scale = {**price_scale, **{key: price_scale[slot] for key, slot in slots.items()
+                                             if slot in price_scale}}
     years = [int(year) for year in data["fiscal_year"]]
     currency = _reporting_currency(data)
 
@@ -960,6 +974,8 @@ def build_evaluation(
 
     rows: list[dict] = []
     metrics: dict[int, dict] = {}
+    raw_eps: dict[int, float] = {}
+    factors: dict[int, float] = {}
     for position, year in enumerate(years):
         price = _finite(prices[year])
         shares = _finite(share_counts.get(year, np.nan))
@@ -972,7 +988,8 @@ def build_evaluation(
                  "currency; price-based ratios are blank")
         if not np.isfinite(shares):
             note("valuation_input_missing", "warning", year, "Shares",
-                 "no share count was read for the year; price-based ratios are blank")
+                 "no share count was read for the year; market cap and the ratios built on it are blank "
+                 "(P/E is still price / diluted EPS when the EPS was read)")
         # Price per ordinary share in the reporting currency.
         share_price = price if price_scale is None else price * _finite(price_scale.get(year, np.nan))
         market_cap = share_price * shares / USD_TO_MILLIONS if (
@@ -1010,12 +1027,18 @@ def build_evaluation(
                 note("valuation_assumed", "info", year, "LongTermDebt",
                      "no long-term debt was read, so enterprise value adds none (right only if there is none)")
 
-        eps = _finite(_numeric(data, "EpsDiluted").iloc[position]) if "EpsDiluted" in data.columns else np.nan
-        if not np.isfinite(eps):
-            eps = _fact_eps(facts, year)
-        raw_count, count = _finite(raw_shares.get(year, np.nan)), _finite(share_counts.get(year, np.nan))
-        if np.isfinite(eps) and np.isfinite(raw_count) and np.isfinite(count) and count > 0:
-            eps = eps * raw_count / count            # on Yahoo's split basis, like the price
+        # Diluted EPS on Yahoo's split basis, like the price. A quarter slot's TTM
+        # adds the fiscal year's EPS and the 10-Q's YTD - prior YTD, each on its own basis.
+        factors[year] = _eps_factor(year, raw_shares, share_counts, splits, period_dates)
+        if year in slots:
+            latest_year = max((key for key in years if key not in slots and key < year), default=None)
+            ytd, before = (_finite(_numeric(data, f"EpsDiluted__{part}").iloc[position])
+                           if f"EpsDiluted__{part}" in data.columns else np.nan for part in ("ytd", "ytd_prior"))
+            eps = (raw_eps.get(latest_year, np.nan) * factors.get(latest_year, np.nan)
+                   + (ytd - before) * factors[year])
+        else:
+            raw_eps[year] = _fact_eps(facts, year)
+            eps = raw_eps[year] * factors[year]
         if np.isfinite(eps):
             pe_basis = "diluted_eps"
             pe = _safe_div(share_price, eps, positive_only=True)
@@ -1129,6 +1152,32 @@ def build_evaluation(
     return evaluation
 
 
+def _split_product(splits: list[dict] | None, after) -> float:
+    """The product of Yahoo's split ratios dated after ``after``."""
+    when = pd.Timestamp(after) if after is not None and not pd.isna(after) else None
+    if not splits or when is None:
+        return 1.0
+    factor = 1.0
+    for split in splits:
+        if pd.Timestamp(split["date"]) > when:
+            factor *= float(split["ratio"])
+    return factor
+
+
+def _eps_factor(year: int, raw_shares: dict, share_counts: dict, splits: list[dict] | None,
+                period_dates: dict) -> float:
+    """What turns the year's per-share figures into Yahoo's split basis.
+
+    The share count's own factor when there is one (it knows a count already
+    restated for a split); else every split Yahoo dates after the period end;
+    1 when neither the count nor the splits are known.
+    """
+    raw_count, count = _finite(raw_shares.get(year, np.nan)), _finite(share_counts.get(year, np.nan))
+    if np.isfinite(raw_count) and np.isfinite(count) and raw_count > 0 and count > 0:
+        return raw_count / count
+    return 1.0 / _split_product(splits, period_dates.get(year))
+
+
 def pe_percentile(value, history: pd.Series) -> float:
     """Where ``value`` sits among the fiscal years' P/Es (0-100); nan with fewer than three."""
     history = pd.to_numeric(history, errors="coerce").dropna()
@@ -1179,7 +1228,8 @@ def latest_shares(facts: pd.DataFrame) -> tuple[float, str] | None:
 
 
 def build_today(evaluation: pd.DataFrame, quote: dict | None, shares: tuple[float, str] | None,
-                price_history: list[dict], issues: list[dict] | None = None) -> dict:
+                price_history: list[dict], issues: list[dict] | None = None, splits: list[dict] | None = None,
+                price_scale: dict | None = None) -> dict:
     """Today's valuation: the latest price over the newest TTM (or fiscal year), for the Home card.
 
     Fundamentals are the last row of ``evaluation`` (the newest quarter slot,
@@ -1188,6 +1238,12 @@ def build_today(evaluation: pd.DataFrame, quote: dict | None, shares: tuple[floa
     one, the last monthly close, and an issue says so. Shares are the newest
     cover-page count (``latest_shares``), else the row's. The F-score is the
     latest fiscal year's; the P/E percentile compares with the fiscal years' P/Es.
+
+    ``splits`` (Yahoo's) put a cover-page count from before a split on today's
+    basis. ``price_scale`` (``market_scale``; None: the quote needs no
+    conversion) turns the quote into a price per ordinary share in the
+    reporting currency, today's rate first; without one the price-based
+    numbers are blank and an issue says so.
     """
     def note(concept: str, detail: str) -> None:
         if issues is not None:
@@ -1213,9 +1269,22 @@ def build_today(evaluation: pd.DataFrame, quote: dict | None, shares: tuple[floa
         note("Price", "today's quote could not be fetched, so the card uses the last monthly close"
              + (f" ({price_time})" if price_time else " (none either: price-based numbers are blank)"))
 
-    count, shares_date = (shares if shares else (_finite(last.get("shares")), last.get("period_end")))
-    scale = _finite(last.get("price_scale"))
-    share_price = price * (scale if np.isfinite(scale) else 1.0)
+    if shares:
+        count, shares_date = shares
+        count = count * _split_product(splits, shares_date)       # a split after the cover page's date
+    else:
+        count, shares_date = _finite(last.get("shares")), last.get("period_end")
+    if price_scale is None:
+        scale = 1.0
+    else:
+        scale = _finite(price_scale.get("today", np.nan))
+        if not np.isfinite(scale):
+            known = pd.to_numeric(evaluation["price_scale"], errors="coerce").dropna()
+            scale = float(known.iloc[-1]) if len(known) else np.nan
+        if not np.isfinite(scale):
+            note("Price", "no exchange rate or ADS ratio to turn today's quote into a price per share in the "
+                          "reporting currency; today's price-based numbers are blank")
+    share_price = price * scale
     market_cap = share_price * count / USD_TO_MILLIONS if np.isfinite(share_price) and np.isfinite(_finite(count)) \
         else np.nan
     net_debt = _finite(last.get("enterprise_value")) - _finite(last.get("market_cap"))

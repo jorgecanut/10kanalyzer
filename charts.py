@@ -295,7 +295,8 @@ def _any_flag(df: pd.DataFrame, col: str, years: list[int]) -> bool:
     """Whether ``col`` (a derived flag of ``clean_and_derive``) is set for any of ``years``."""
     if col not in df.columns:
         return False
-    rows = df[pd.to_numeric(df["fiscal_year"], errors="coerce").isin(years)]
+    wanted = {_slot_key(year) for year in years}
+    rows = df[df["fiscal_year"].map(_slot_key).isin(wanted)]
     return bool(rows[col].astype(str).str.lower().isin(["true", "1"]).any())
 
 
