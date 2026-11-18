@@ -1160,6 +1160,16 @@ class CompanyCategoryTests(AppTestCase):
             info = app._classify_company(_submissions(sic, description, forms))
             self.assertEqual((info["category"], info["warn"]), (label, warn), sic)
 
+    def test_an_incomplete_filing_list_proves_no_missing_10k(self):
+        # JPM's newest 1,000 filings are prospectuses; its 10-Ks are on SEC's older pages.
+        bank = _submissions("6021", "National Commercial Banks", ["424B2"] * 1000)
+        bank["filings"]["files"] = [{"name": "CIK0000019617-submissions-001.json"}]
+        self.assertEqual(app._classify_company(bank)["category"], "Bank")
+        busy = _submissions("3571", "Electronic Computers", ["424B2"] * 1000)
+        busy["filings"]["files"] = [{"name": "older.json"}]
+        self.assertEqual((app._classify_company(busy)["category"], app._classify_company(busy)["warn"]),
+                         ("Electronic Computers", False))
+
     def test_info_is_fetched_once_and_kept(self):
         calls = []
 
@@ -1173,6 +1183,14 @@ class CompanyCategoryTests(AppTestCase):
         self.assertTrue(first["items"]["1705696"]["warn"])
         self.assertEqual(again["items"]["1705696"]["category"], "REIT")
         self.assertEqual(sorted(c for c, _ in calls), [27419, 1705696])           # the second call used the copy
+        # An answer kept under an older rule is asked again.
+        path = app.DATA_DIR / "company_info.json"
+        stored = json.loads(path.read_text())
+        stored["1705696"]["rule"] = 0
+        path.write_text(json.dumps(stored))
+        with unittest.mock.patch.object(app, "_download_submissions", side_effect=download):
+            self.client.get("/api/company-info", query_string={"ciks": "1705696"})
+        self.assertEqual(len(calls), 3)
         self.assertIn("ada@example.com", calls[0][1])
 
     def test_unreachable_is_unknown_not_cached(self):

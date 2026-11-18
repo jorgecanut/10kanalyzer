@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
 import unittest.mock
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -52,6 +53,10 @@ class _Company:
     def __init__(self, cik):
         self.cik = cik
         self.filings = _filings_of(cik)
+        # DDD is a bank: the scan skips it before listing or downloading anything.
+        self.data = SimpleNamespace(sic="6021" if cik == 40 else "7372",
+                                    sic_description="National Commercial Banks" if cik == 40 else "Software",
+                                    entity_type="operating")
 
     def get_filings(self, form, amendments=False):
         return self.filings.get(form, [])
@@ -313,3 +318,21 @@ class IsolationTest(ScanCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SkipTest(ScanCase):
+    def test_a_company_stocky_cannot_analyse_is_skipped_before_any_download(self):
+        code, read, log = self.run_scan("next", "--count", "4")
+        self.assertEqual(code, 0)
+        results = {row["ticker"]: row for row in self.db.execute("SELECT * FROM companies")}
+        self.assertEqual((results["DDD"]["result"], results["DDD"]["error"]), ("skipped", "Bank"))
+        self.assertEqual(results["DDD"]["annual_found"], 0)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM filings WHERE cik = 40").fetchone()[0], 0)
+        self.assertEqual(read, 10)                       # AAA's and CCC's filings only, as before
+        self.assertIn("[+] DDD: skipped", log + (self.root / self.db.execute(
+            "SELECT log FROM runs").fetchone()["log"]).read_text())
+        summary = scan.batch_summary(self.db, 1)
+        self.assertEqual(summary["results"]["skipped"], 1)
+        # A rerun from the dump keeps it skipped and asks SEC nothing.
+        code, read, _ = self.run_scan("rerun", "--batch", "1", offline=True)
+        self.assertEqual(self.db.execute("SELECT result FROM companies WHERE cik = 40").fetchone()[0], "skipped")

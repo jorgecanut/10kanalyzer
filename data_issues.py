@@ -91,6 +91,7 @@ TITLES = {
     "valuation_input_missing": "Valuation input missing",
     "valuation_assumed": "Valuation uses an assumption",
     "valuation_skipped": "Valuation not computed",
+    "pe_non_operating": "P/E rests on non-operating profit",
     # Made by quarters.py: the 10-Qs after the latest annual report.
     "quarter_unread": "10-Q not read",
     "quarter_metric_missing": "Quarter metric not read",
