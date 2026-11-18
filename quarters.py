@@ -36,6 +36,10 @@ PRIOR_YEAR_DAYS = (358, 372)  # a year earlier, on 52/53-week calendars too
 RESTATED_TOLERANCE = 0.005    # prior year-end balances differing by more than this
 RESTATED_METRICS = ("AssetsCurrent", "LiabilitiesCurrent", "LongTermDebt", "StockholdersEquity")
 
+# A fiscal year's value filled in from other lines (``edgar_dashboard.derive``):
+# its TTM is filled in the same way, from the TTM of those lines.
+YEAR_DERIVED = {"GrossProfit": "gross_profit_derived", "OperatingIncomeLoss": "operating_income_derived"}
+
 DURATIONS = [metric for metric, (_, kind) in extract.METRIC_CONCEPTS.items() if kind == "duration"]
 INSTANTS = [metric for metric, (_, kind) in extract.METRIC_CONCEPTS.items() if kind == "instant"]
 
@@ -82,15 +86,22 @@ def _read(view, period: str, min_days: int, max_days: int) -> dict:
         return extract.extract_filing(view, period, min_days=min_days, max_days=max_days)
 
 
-def _restated(facts: pd.DataFrame, fy: pd.Series, fy_end: str, currency, slot, period, accession) -> list[dict]:
-    """Prior year-end balances in the 10-Q that differ from the 10-K's."""
+def _restated(facts: pd.DataFrame, fy: pd.Series, fy_end: str, currency, slot, period, accession,
+              annual_sources: dict) -> list[dict]:
+    """Prior year-end balances in the 10-Q that differ from the 10-K's, under the same tag.
+
+    Only the tag the 10-K's value was read from is compared: a 10-Q that tags
+    the year end under another concept (TGT's 10-K has LongTermDebt and
+    LongTermDebtAndCapitalLeaseObligations, its 10-Q only the second) has not
+    restated anything; that is reported as ``quarter_concept_differs``.
+    """
     issues = []
     for metric in RESTATED_METRICS:
         before = pd.to_numeric(fy.get(metric), errors="coerce")
-        if pd.isna(before):
+        source = str(annual_sources.get(metric) or "")
+        if pd.isna(before) or not source or ":" in source or " " in source or source == "components":
             continue
-        concepts = extract.METRIC_CONCEPTS[metric][0]
-        now = _millions(extract.extract_metric(facts, concepts, fy_end, "instant", currency=currency))
+        now = _millions(extract.extract_metric(facts, [source], fy_end, "instant", currency=currency))
         if np.isnan(now) or abs(now - before) <= abs(before) * RESTATED_TOLERANCE:
             continue
         issues.append(_issue("quarter_restated", "info", slot, period, accession, concept=metric,
@@ -192,6 +203,14 @@ def build(annual: pd.DataFrame, annual_sources: dict, entries: list[dict],
                 out[f"{metric}__q"] = now - previous[f"{metric}__ytd"]
             else:
                 out[f"{metric}__q"] = np.nan
+            if _truthy(fy.get(YEAR_DERIVED.get(metric, ""))):
+                # The year's value was filled in from other lines: so is the TTM
+                # (derive, below). Reported only where the year's is (data_issues).
+                out[metric] = np.nan
+                if metric in data_issues.DERIVED_FLAGS:
+                    missing(metric, "the fiscal year's value is derived, not read, so the TTM is derived the same "
+                                    f"way ({data_issues.DERIVED_NOTES[metric]})")
+                continue
             if overdue:
                 out[metric] = np.nan
                 if pd.notna(year_value):
@@ -221,6 +240,9 @@ def build(annual: pd.DataFrame, annual_sources: dict, entries: list[dict],
             out[f"{metric}__source"] = ytd["sources"].get(metric)
             if np.isnan(value) and pd.notna(pd.to_numeric(fy.get(metric), errors="coerce")):
                 missing(metric, f"the fiscal year has it but this 10-Q's balance sheet at {period} does not")
+            elif not np.isnan(value):
+                _compare_sources(issues, metric, annual_sources.get(metric), ytd["sources"].get(metric), None,
+                                 slot, period, accession)
 
         # Diluted EPS: TTM the same way (the valuation's P/E is price / diluted EPS).
         eps_year = valuation._fact_eps(annual_facts, fy_year)
@@ -234,7 +256,7 @@ def build(annual: pd.DataFrame, annual_sources: dict, entries: list[dict],
                                            issues, overdue))
         slot_facts.extend({**fact, "fiscal_year": slot} for fact in ytd.get("facts") or [])
 
-        issues.extend(_restated(facts, fy, fy_end, currency, slot, period, accession))
+        issues.extend(_restated(facts, fy, fy_end, currency, slot, period, accession, annual_sources))
         issues.extend(_filing_issues(ytd, slot, period, accession))
         rows.append(out)
         previous = out
@@ -288,14 +310,21 @@ def _slot_lines(annual_statements: pd.DataFrame | None, fy_year: int, ytd: dict,
     return lines
 
 
+def _truthy(value) -> bool:
+    return str(value).strip().lower() in ("true", "1")
+
+
 def _compare_sources(issues: list, metric: str, year: str | None, now: str | None, before: str | None,
                      slot, period, accession) -> None:
     """A TTM made of values read from different tags measures two things: say so."""
-    seen = {"fiscal year": year, "year to date": now, "year earlier": before}
+    seen = {"fiscal year": year, ("year to date" if metric in DURATIONS else "quarter end"): now,
+            "year earlier": before}
     named = {where: source for where, source in seen.items() if source}
     if len(set(named.values())) > 1:
         issues.append(_issue("quarter_concept_differs", "warning", slot, period, accession, concept=metric,
-                             detail="the TTM adds values read from different tags: "
+                             detail=("the TTM adds values read from different tags: " if before is not None or
+                                     metric in DURATIONS else "the quarter's value is read from another tag than "
+                                     "the fiscal year's: ")
                                     + ", ".join(f"{where} {source}" for where, source in named.items())))
 
 
