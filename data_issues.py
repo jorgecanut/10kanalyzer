@@ -35,12 +35,18 @@ KEY_METRICS = ("Revenues", "NetIncomeLoss", "OperatingIncomeLoss", "OperatingCas
 # know (AAUAF's ProfitLossFromContinuingOperations) is exactly what must not
 # pass as "not reported".
 EVIDENCE = {
+    # Wide on purpose: any line or tag that names revenue, but not a cost or a
+    # deferral of it (MGX's "Collaboration revenue", its own tag
+    # RevenueAndReversalOfRevenue...: in the filing, so never "not reported").
     "Revenues": ("income", {"Revenue", "HealthCareRevenue"},
-                 re.compile(r"^(total )?(net )?(operating )?(revenues?|sales)\b(?!.*(cost|marketing|expense))",
-                            re.IGNORECASE),
+                 re.compile(r"^(total )?(net )?(operating )?(revenues?|sales)\b(?!.*(cost|marketing|expense))"
+                            r"|^(?!.*\b(costs?|deferred|unearned|remaining|recogni\w*|expenses?|marketing)\b)"
+                            r".*\brevenues?\b", re.IGNORECASE),
                  re.compile(r"^(Revenues?|RevenueFrom\w+|SalesRevenue\w*|\w*OperatingRevenue|RevenuesNet\w*"
                             r"|HealthCareOrganizationRevenue\w*|ElectricUtilityRevenue|RevenueMineralSales"
-                            r"|OilAndGasRevenue|RealEstateRevenueNet)$")),
+                            r"|OilAndGasRevenue|RealEstateRevenueNet)$"
+                            r"|^(?!.*(Cost|Deferred|Unearned|Remaining|IncreaseDecrease|Recogni|Expense|Marketing"
+                            r"|PerformanceObligation|Receivable|Liability))\w*Revenue\w*$")),
     "NetIncomeLoss": ("income", {"NetIncome", "ProfitLoss"},
                       re.compile(r"^net (income|loss|earnings|profit)|^(profit|loss) for the", re.IGNORECASE),
                       re.compile(r"^(NetIncomeLoss(AvailableToCommonStockholdersBasic)?|ProfitLoss"

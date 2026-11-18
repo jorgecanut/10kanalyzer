@@ -68,6 +68,8 @@ OUTPUT_COLUMNS = [
     "total_liabilities", "z_partial", "price_scale",
     # Enterprise value's debt: long-term, due within a year, leases (counted when EV_INCLUDES_LEASES).
     "debt_long", "debt_short", "leases",
+    # Short-term investments, subtracted from enterprise value with the cash.
+    "investments",
 ]
 # Diluted earnings per share, US GAAP then IFRS.
 EPS_DILUTED = ("EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted", "DilutedEarningsLossPerShare",
@@ -151,11 +153,11 @@ LONG_DEBT_LINES = {
 # A line with the company's own tag whose label reads like debt due within a
 # year is counted as short-term debt, and reported as counted by its label.
 SHORT_TERM_DEBT_LABEL = re.compile(
-    r"borrowing|short[- ]term debt|commercial paper|notes payable|bank (loan|overdraft)|"
-    r"current (portion|maturities) of|credit facilit", re.IGNORECASE)
+    r"borrowing|short[- ]term debt|commercial paper|notes payable|bank (?:loan|overdraft)|"
+    r"current (?:portion|maturities) of|credit facilit", re.IGNORECASE)
 # Due after a year: "non-current", "net of current portion", or "long-term" unless
 # it is the current portion (or maturities) of long-term debt.
-NONCURRENT_LABEL = re.compile(r"non-?current|net of current|^(?!.*current (portion|maturities)).*long[- ]term",
+NONCURRENT_LABEL = re.compile(r"non-?current|net of current|^(?!.*current (?:portion|maturities)).*long[- ]term",
                               re.IGNORECASE)
 OPERATING_LEASE_TOTAL = ("OperatingLeaseLiability",)
 LEASE_LINES = {
@@ -167,6 +169,17 @@ LEASE_LINES = {
 }
 OPERATING_LEASE_LINES = {"OperatingLeaseLiabilityCurrent", "OperatingLeaseLiabilityNoncurrent",
                          "OperatingLeaseLiability", "OperatingLeaseNonCurrentDebtEquivalent"}
+# Short-term investments and marketable securities: cash for enterprise value
+# (a biotech keeps most of it there: MGX's 119M against 42M of cash), as in
+# Yahoo's total cash. Balance-sheet lines, by tag or standard concept.
+SHORT_TERM_INVESTMENTS = {
+    "ShortTermInvestments", "MarketableSecuritiesCurrent", "AvailableForSaleSecuritiesDebtSecuritiesCurrent",
+    "AvailableForSaleSecuritiesCurrent", "HeldToMaturitySecuritiesCurrent", "TradingSecuritiesCurrent",
+    "OtherShortTermInvestments", "ShortTermBankDeposits", "CertificatesOfDepositAtCarryingValue",
+    "DebtSecuritiesAvailableForSaleCurrent", "EquitySecuritiesFvNiCurrent",
+    # IFRS spellings.
+    "CurrentInvestments", "ShorttermInvestments", "ShorttermDepositsNotClassifiedAsCashEquivalents",
+}
 # Leases in enterprise value (Yahoo's way). Off: the Magic Formula's usual EV.
 EV_INCLUDES_LEASES = True
 
@@ -457,6 +470,23 @@ def _debt_parts(statements: pd.DataFrame, facts: pd.DataFrame, years: list[int]
     return long_debt, short, leases, by_label
 
 
+def _short_investments(statements: pd.DataFrame, years: list[int]) -> pd.Series:
+    """Per year (millions): the balance sheet's short-term investment lines, each once (0 when none)."""
+    out = pd.Series(0.0, index=years, dtype="float64")
+    if statements is None or statements.empty or not {"fiscal_year", "value", "concept"} <= set(statements.columns):
+        return out
+    frame = statements[statements["statement"] == "balance"] if "statement" in statements.columns else statements
+    frame = frame.assign(_fy=pd.to_numeric(frame["fiscal_year"], errors="coerce"),
+                         _value=pd.to_numeric(frame["value"], errors="coerce"))
+    frame = frame[frame["_fy"].isin(years) & frame["_value"].notna()]
+    tag = frame["concept"].astype(str).str.split(r"[:_]", n=1, regex=True).str[-1]
+    std = frame["standard_concept"].fillna("").astype(str) if "standard_concept" in frame.columns \
+        else pd.Series("", index=frame.index)
+    for year, group in frame[tag.isin(SHORT_TERM_INVESTMENTS) | std.isin(SHORT_TERM_INVESTMENTS)].groupby("_fy"):
+        out[int(year)] = float(group["_value"].abs().sum()) / USD_TO_MILLIONS
+    return out
+
+
 def _total_liabilities(statements: pd.DataFrame, years: list[int]) -> pd.Series:
     """Total liabilities per fiscal year (millions), derived when not reported.
 
@@ -483,7 +513,7 @@ def _fact_metric(facts: pd.DataFrame, years: list[int], concepts: list[str],
     out = pd.Series(np.nan, index=years, dtype="float64")
     if facts is None or facts.empty or "concept" not in facts.columns:
         return out
-    frame = facts.copy()
+    frame = facts.reset_index(drop=True)      # repeated row labels misalign the masks below
     if "fiscal_year" not in frame.columns or "value" not in frame.columns:
         return out
     frame["_fy"] = pd.to_numeric(frame["fiscal_year"], errors="coerce")
@@ -1049,6 +1079,7 @@ def build_evaluation(
     cash = by_year(statement_metrics["cash"])
     sheet_long_debt, short_debt, lease_debt, debt_by_label = _debt_parts(statements, facts, years)
     sheet_long_debt, short_debt, lease_debt = by_year(sheet_long_debt), by_year(short_debt), by_year(lease_debt)
+    investments = by_year(_short_investments(statements, years))
     depreciation = by_year(statement_metrics["depreciation"])
 
     period_dates = _period_dates(data, statements)
@@ -1120,6 +1151,7 @@ def build_evaluation(
         cash_value = _finite(cash.iloc[position])
         short_value = _finite(short_debt.iloc[position])
         lease_value = _finite(lease_debt.iloc[position])
+        investments_value = _finite(investments.iloc[position])
         # Enterprise value's debt is the balance sheet's own lines; the tagged
         # figure only when the sheet has no long-term debt line.
         sheet_debt = _finite(sheet_long_debt.iloc[position])
@@ -1137,7 +1169,10 @@ def build_evaluation(
             enterprise_value = market_cap + (debt_value if np.isfinite(debt_value) else 0.0) \
                 + (short_value if np.isfinite(short_value) else 0.0) \
                 + (lease_value if EV_INCLUDES_LEASES and np.isfinite(lease_value) else 0.0) \
-                - (cash_value if np.isfinite(cash_value) else 0.0)
+                - (cash_value if np.isfinite(cash_value) else 0.0) \
+                - (investments_value if np.isfinite(investments_value) else 0.0)
+            if enterprise_value <= 0:
+                note("valuation_input_missing", "info", year, "EnterpriseValue", NEGATIVE_EV)
             if not np.isfinite(cash_value):
                 note("valuation_assumed", "warning", year, "Cash",
                      "no cash line was read from the balance sheet, so enterprise value subtracts none: "
@@ -1169,8 +1204,10 @@ def build_evaluation(
                  "weighted diluted count)")
         pb = _safe_div(market_cap, equity_value, positive_only=True)
         pfcf = _safe_div(market_cap, fcf_value, positive_only=True)
-        ev_ebit = _safe_div(enterprise_value, ebit_value, positive_only=True)
-        ev_ebitda = _safe_div(enterprise_value, ebitda_value, positive_only=True)
+        # A negative enterprise value (cash above market cap plus debt) gives no ratio.
+        ev_positive = enterprise_value if np.isfinite(enterprise_value) and enterprise_value > 0 else np.nan
+        ev_ebit = _safe_div(ev_positive, ebit_value, positive_only=True)
+        ev_ebitda = _safe_div(ev_positive, ebitda_value, positive_only=True)
         earnings_yield = _safe_div(ebit_value, enterprise_value, positive_only=True)
         # Greenblatt return on capital: EBIT / (net working capital + net fixed
         # assets). Assets minus current liabilities is the standard practical
@@ -1232,6 +1269,7 @@ def build_evaluation(
             "debt_long": debt_value,
             "debt_short": short_value,
             "leases": lease_value,
+            "investments": investments_value,
             "eps_diluted": eps,
             "pe_basis": pe_basis,
             "enterprise_value": enterprise_value,
@@ -1349,6 +1387,10 @@ def latest_shares(facts: pd.DataFrame) -> tuple[float, str] | None:
     return float(frame.loc[frame["_when"] == when, "_value"].sum()), str(when.date())
 
 
+NEGATIVE_EV = ("enterprise value is negative: cash and short-term investments exceed market cap plus debt, "
+               "so EV/EBIT, EV/EBITDA, earnings yield and FCF yield are blank (they mean nothing below zero)")
+
+
 def build_today(evaluation: pd.DataFrame, quote: dict | None, shares: tuple[float, str] | None,
                 price_history: list[dict], issues: list[dict] | None = None, splits: list[dict] | None = None,
                 price_scale: dict | None = None) -> dict:
@@ -1367,9 +1409,9 @@ def build_today(evaluation: pd.DataFrame, quote: dict | None, shares: tuple[floa
     reporting currency, today's rate first; without one the price-based
     numbers are blank and an issue says so.
     """
-    def note(concept: str, detail: str) -> None:
+    def note(concept: str, detail: str, kind: str = "valuation_assumed", severity: str = "warning") -> None:
         if issues is not None:
-            issues.append({"kind": "valuation_assumed", "severity": "warning", "fiscal_year": None,
+            issues.append({"kind": kind, "severity": severity, "fiscal_year": None,
                            "period": None, "concept": concept, "label": None, "detail": detail})
 
     if evaluation is None or evaluation.empty:
@@ -1411,6 +1453,11 @@ def build_today(evaluation: pd.DataFrame, quote: dict | None, shares: tuple[floa
         else np.nan
     net_debt = _finite(last.get("enterprise_value")) - _finite(last.get("market_cap"))
     enterprise_value = market_cap + net_debt if np.isfinite(net_debt) else np.nan
+    if np.isfinite(enterprise_value) and enterprise_value <= 0:
+        note("EnterpriseValue", NEGATIVE_EV, "valuation_input_missing", "info")
+        enterprise_value_for_ratios = np.nan
+    else:
+        enterprise_value_for_ratios = enterprise_value
     ebit, fcf = _finite(last.get("ebit")), _finite(last.get("fcf"))
     if last.get("pe_basis") == "diluted_eps":
         pe = _safe_div(share_price, _finite(last.get("eps_diluted")), positive_only=True)
@@ -1432,9 +1479,9 @@ def build_today(evaluation: pd.DataFrame, quote: dict | None, shares: tuple[floa
         "market_cap": clean(market_cap), "enterprise_value": clean(enterprise_value),
         "earnings_period": earnings_period, "earnings_end": last.get("period_end"),
         "pe": clean(pe), "pe_basis": last.get("pe_basis"),
-        "ev_ebit": clean(_safe_div(enterprise_value, ebit, positive_only=True)),
-        "earnings_yield": clean(_safe_div(ebit, enterprise_value, positive_only=True)),
-        "fcf_yield": clean(_safe_div(fcf, enterprise_value, positive_only=True)),
+        "ev_ebit": clean(_safe_div(enterprise_value_for_ratios, ebit, positive_only=True)),
+        "earnings_yield": clean(_safe_div(ebit, enterprise_value_for_ratios, positive_only=True)),
+        "fcf_yield": clean(_safe_div(fcf, enterprise_value_for_ratios, positive_only=True)),
         "return_on_capital": clean(last.get("return_on_capital")),
         "pe_percentile": clean(pe_percentile(pe, years["pe"])),
         "z_score": clean(z_score),

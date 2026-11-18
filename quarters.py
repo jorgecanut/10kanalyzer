@@ -224,7 +224,7 @@ def build(annual: pd.DataFrame, annual_sources: dict, entries: list[dict],
                 evidence = (ytd.get("evidence") or {}).get(metric)
                 why = data_issues.classify_missing(metric, evidence)[2] if evidence else \
                     "no tag or statement line was read for the year to date"
-                missing(metric, f"the fiscal year has it but this 10-Q does not: {why}")
+                missing(metric, f"the fiscal year has it but it was not read from this 10-Q: {why}")
             elif np.isnan(before):
                 missing(metric, "the 10-Q has the year to date but not the same months a year earlier"
                         + ("" if prior_date else " (no prior-year comparative period was found in it)"))

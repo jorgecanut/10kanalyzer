@@ -92,6 +92,27 @@ class EvidenceTests(unittest.TestCase):
         income = _statement([("us-gaap_CostOfRevenue", "Cost of sales", "CostOfGoodsAndServicesSold", 50.0)])
         self.assertEqual(_kinds(_xbrl(income=income), facts)["Revenues"], "not_reported")
 
+    def test_mgx_a_company_tagged_revenue_line_is_found(self):
+        # MGX's 10-Q: "Collaboration revenue" under its own tag (it includes a reversal). It is in the
+        # filing, so the gap is a missing_metric naming the line, never "not in the filing".
+        income = _statement([("mgx_RevenueAndReversalOfRevenueFromContractWithCustomerExcludingAssessedTax",
+                              "Collaboration revenue", None, 991000.0),
+                             ("us-gaap_ResearchAndDevelopmentExpense", "Research and development", None, 4.1e7)])
+        kinds = _kinds(_xbrl(income=income), _facts([]), {})
+        self.assertEqual(kinds["Revenues"], "missing_metric")
+        evidence = data_issues.metric_evidence(_xbrl(income=income), _facts([]), PERIOD, {})
+        self.assertIn("Collaboration revenue", data_issues.classify_missing("Revenues", evidence["Revenues"])[3])
+        facts = _facts([("mgx:RevenueAndReversalOfRevenueFromContractWithCustomerExcludingAssessedTax", 991000.0,
+                         "2024-01-01", PERIOD)])
+        self.assertEqual(_kinds(_xbrl(income=_statement([])), facts)["Revenues"], "missing_metric")
+
+    def test_revenue_words_that_are_not_revenue(self):
+        income = _statement([("us-gaap_CostOfRevenue", "Cost of revenue", "CostOfGoodsAndServicesSold", 50.0),
+                             ("abc_DeferredRevenueRecognized", "Deferred revenue recognized", None, 5.0)])
+        facts = _facts([("us-gaap:IncreaseDecreaseInDeferredRevenue", -4.0, "2024-01-01", PERIOD),
+                        ("us-gaap:RevenueRemainingPerformanceObligation", 9.0, "2024-01-01", PERIOD)])
+        self.assertEqual(_kinds(_xbrl(income=income), facts)["Revenues"], "not_reported")
+
     def test_no_evidence_is_never_not_reported(self):
         self.assertEqual(data_issues.classify_missing("Revenues", None)[0], "missing_metric")
         self.assertEqual(data_issues.classify_missing("Revenues", {})[0], "missing_metric")
