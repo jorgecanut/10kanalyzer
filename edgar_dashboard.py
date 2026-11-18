@@ -38,6 +38,7 @@ import data_issues
 import charts
 import dump
 import extract
+import quarters
 import filing_cache
 import filing_view
 
@@ -67,7 +68,7 @@ STAGING_DIRNAME = ".staging"
 # Yahoo was down, no statements) is removed, never left over from an earlier
 # run to pass for current. The chart files only count for a run with charts.
 RESULT_FILES = ("financial_data.csv", "data_issues.csv", "statements.csv", "facts.csv", "notes.csv",
-                "calc_check.csv", "evaluation.csv", "insider.json")
+                "calc_check.csv", "evaluation.csv", "insider.json", "quarters.csv")
 CHART_FILES = (charts.SPEC_FILE, "data_quality.csv")
 
 # Resolved at runtime in main(): each ticker gets its own sub-directory so that
@@ -585,6 +586,37 @@ def _write_issues(df: pd.DataFrame, checks: pd.DataFrame, filed: dict,
     return issues
 
 
+# More 10-Qs than this after the latest annual report: the 10-K is overdue (the scan's rule).
+MAX_QUARTERS = 3
+QUARTERS_CSV = "quarters.csv"
+
+
+def quarter_step(df: pd.DataFrame, filed: dict, entries: list[dict],
+                 failures: list[dict]) -> tuple[pd.DataFrame, list[dict]]:
+    """The quarters since the latest annual report (``quarters.py``), written to quarters.csv, and their issues.
+
+    ``filed`` is the run's period -> {sources, ...}; ``entries`` the 10-Qs'
+    dumps and ``failures`` the ones that could not be obtained.
+    """
+    latest = str(df.sort_values("period_of_report").iloc[-1]["period_of_report"]) if not df.empty else ""
+    frame, issues = quarters.build(df, (filed.get(latest) or {}).get("sources") or {}, entries)
+    for failure in failures:
+        issues.append(data_issues._issue("quarter_unread", "warning", fiscal_year=None, period=failure.get("period"),
+                                         form=failure.get("form") or QUARTERLY_FORM, accession=failure.get("accession"),
+                                         detail=f"the 10-Q could not be downloaded or read ({failure.get('error')})"))
+    if len(entries) + len(failures) > MAX_QUARTERS:
+        issues.append(data_issues._issue("overdue_10k", "info", fiscal_year=None, period=latest, form=QUARTERLY_FORM,
+                                         detail=f"{len(entries) + len(failures)} 10-Qs after the latest annual report "
+                                                f"({latest}): the next 10-K is overdue"))
+    if frame.empty:
+        print("[*] Quarters: none since the latest annual report" + (f" ({latest})" if latest else ""))
+        return frame, issues
+    frame.to_csv(os.path.join(OUTPUT_DIR, QUARTERS_CSV), index=False)
+    print(f"[+] Quarters: {', '.join(frame['slot'])} (TTM to {frame.iloc[-1]['period_end']}); "
+          f"wrote {QUARTERS_CSV}")
+    return frame, issues
+
+
 def publish(staging: str, live: str, with_charts: bool) -> None:
     """Move a finished run's files from ``staging`` into ``live`` (the ticker's folder).
 
@@ -784,10 +816,16 @@ def _run(args, n_filings: int | None, cache_dir: str | None, live_dir: str) -> N
 
     def on_filing(period, form, accession, extracted):
         filed[period] = {"form": form, "accession": accession, "evidence": extracted.get("evidence"),
-                         "statement_problems": extracted.get("statement_problems")}
+                         "statement_problems": extracted.get("statement_problems"),
+                         "sources": extracted.get("sources")}
 
-    raw, statements, facts, checks = build_dataset(TICKER, n_filings, cache_dir, on_filing=on_filing)
+    quarter_entries: list[dict] = []
+    quarter_failures: list[dict] = []
+    raw, statements, facts, checks = build_dataset(TICKER, n_filings, cache_dir, on_filing=on_filing,
+                                                   quarters=quarter_entries, quarter_failures=quarter_failures)
     df = clean_and_derive(raw)
+    quarter_frame, quarter_issues = quarter_step(df, filed, quarter_entries, quarter_failures)
+    quarter_entries.clear()
 
     df.to_csv(DATA_CSV, index=False)
     print("[+] Wrote ratio data to financial_data.csv")
@@ -836,7 +874,7 @@ def _run(args, n_filings: int | None, cache_dir: str | None, live_dir: str) -> N
         print(f"[!] valuation skipped: {type(exc).__name__}: {exc}")
         valuation_issues = [skipped(f"{type(exc).__name__}: {exc}")]
     # After the valuation, so what it lacked or assumed is reported with the rest.
-    issues = _write_issues(df, checks, filed, valuation_issues)
+    issues = _write_issues(df, checks, filed, quarter_issues + valuation_issues)
 
     # Insider trades were fetched alongside the 10-Ks; report what came back.
     _report_insiders(insiders)

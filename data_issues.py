@@ -85,6 +85,13 @@ TITLES = {
     "valuation_input_missing": "Valuation input missing",
     "valuation_assumed": "Valuation uses an assumption",
     "valuation_skipped": "Valuation not computed",
+    # Made by quarters.py: the 10-Qs after the latest annual report.
+    "quarter_unread": "10-Q not read",
+    "quarter_metric_missing": "Quarter metric not read",
+    "quarter_concept_differs": "Quarter read from another tag",
+    "quarter_restated": "Restated in the 10-Q",
+    "quarter_label_mismatch": "Quarter label disagrees",
+    "overdue_10k": "10-K overdue",
 }
 # Key metric -> the column of ``clean_and_derive`` that says its value was derived, and from what.
 DERIVED_FLAGS = {"OperatingIncomeLoss": "operating_income_derived"}
@@ -284,21 +291,43 @@ def company_issues(derived: pd.DataFrame, checks: pd.DataFrame, filed: dict[str,
 # Charts: the issues behind each chart
 # --------------------------------------------------------------------------- #
 
-def chart_warnings(concepts: set[str], years: list[int], issues: list[dict]) -> list[dict]:
+def slot_key(value):
+    """A fiscal year (int) or a quarter slot ("Q2'26") as the issue lists and charts hold them.
+
+    Read back from data_issues.csv a year is ``"2025"`` or ``2025.0``; a slot stays its text.
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        text = str(value).strip()
+        return text or None
+
+
+def slot_order(value) -> tuple:
+    """Fiscal years first, in order, then the quarter slots in time order (Q3'26 before Q1'27)."""
+    if isinstance(value, int):
+        return (0, value, 0)
+    match = re.fullmatch(r"Q(\d)'(\d\d)", str(value))
+    return (1, int(match.group(2)), int(match.group(1))) if match else (2, 0, 0)
+
+
+def chart_warnings(concepts: set[str], years: list, issues: list[dict]) -> list[dict]:
     """The issues touching a chart drawn from ``concepts`` over ``years``, one entry per kind and metric.
 
     A metric issue counts when its metric is drawn; a ``check_mismatch`` when
     the total that does not add up is one of the chart's lines.
     """
-    shown = {int(year) for year in years}
+    shown = {slot_key(year) for year in years}
     grouped: dict[tuple, dict] = {}
 
     def text(value) -> str | None:              # rows read back from data_issues.csv carry NaN
         return None if value is None or (isinstance(value, float) and pd.isna(value)) else str(value)
 
     for issue in issues:
-        year = issue.get("fiscal_year")
-        if year is None or pd.isna(year) or int(year) not in shown:
+        year = slot_key(issue.get("fiscal_year"))
+        if year is None or year not in shown:
             continue
         concept = _tag(str(issue.get("concept") or ""))
         if concept not in concepts:
@@ -310,11 +339,11 @@ def chart_warnings(concepts: set[str], years: list[int], issues: list[dict]) -> 
             "years": [], "details": []})
         if issue["severity"] == "warning":
             entry["severity"] = "warning"
-        entry["years"].append(int(year))
-        entry["details"].append({"year": int(year), "detail": text(issue.get("detail")) or ""})
+        entry["years"].append(year)
+        entry["details"].append({"year": year, "detail": text(issue.get("detail")) or ""})
     out = []
     for entry in grouped.values():
-        order = sorted(range(len(entry["years"])), key=lambda i: entry["years"][i])
+        order = sorted(range(len(entry["years"])), key=lambda i: slot_order(entry["years"][i]))
         entry["years"] = [entry["years"][i] for i in order]
         entry["details"] = [entry["details"][i] for i in order]
         out.append(entry)
