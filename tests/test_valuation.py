@@ -554,3 +554,44 @@ class EnterpriseValueDebtTests(unittest.TestCase):
         lines = [line("balance", "abc_TermLoanNoncurrent", "Long-term borrowings, net of current portion", 30e6, 2025)]
         _, issues = self.build(lines)
         self.assertEqual([i for i in issues if i["concept"] == "ShortTermDebt"], [])
+
+
+class CashAndNegativeEvTests(unittest.TestCase):
+    """A biotech's cash is mostly marketable securities (MGX: 41.7M cash, 119.1M securities)."""
+
+    def build(self, extra_lines=()):
+        df, statements, frame = with_eps()
+        statements = pd.concat([statements, pd.DataFrame(list(extra_lines))], ignore_index=True)
+        issues = []
+        out = valuation.build_evaluation("TEST", df, statements, frame, PRICES, issues=issues, splits=[])
+        return out.set_index("fiscal_year"), issues
+
+    def test_short_term_investments_count_as_cash(self):
+        lines = [line("balance", "us-gaap_AvailableForSaleSecuritiesDebtSecuritiesCurrent",
+                      "Available-for-sale marketable securities", 100e6, 2025, "ShortTermInvestments")]
+        out, _ = self.build(lines)
+        self.assertAlmostEqual(out.loc[2025, "investments"], 100.0)
+        self.assertAlmostEqual(out.loc[2025, "enterprise_value"], 1000.0 + 200.0 - 50.0 - 100.0)
+
+    def test_negative_ev_leaves_its_ratios_blank_and_says_why(self):
+        lines = [line("balance", "us-gaap_ShortTermInvestments", "Short-term investments", 1500e6, 2025,
+                      "ShortTermInvestments")]
+        out, issues = self.build(lines)
+        row = out.loc[2025]
+        self.assertLess(row["enterprise_value"], 0)
+        for column in ("ev_ebit", "ev_ebitda", "earnings_yield", "fcf_yield"):
+            self.assertTrue(pd.isna(row[column]), column)
+        said = [i for i in issues if i["fiscal_year"] == 2025 and i["concept"] == "EnterpriseValue"]
+        self.assertEqual(len(said), 1)
+        self.assertIn("cash", said[0]["detail"])
+
+    def test_today_negative_ev_is_blank_and_said(self):
+        lines = [line("balance", "us-gaap_ShortTermInvestments", "Short-term investments", 1500e6, 2025,
+                      "ShortTermInvestments")]
+        out, _ = self.build(lines)
+        issues = []
+        today = valuation.build_today(out.reset_index(), {"price": 10.0, "time": "t"}, None, PRICES, issues)
+        self.assertIsNone(today["earnings_yield"])
+        self.assertIsNone(today["fcf_yield"])
+        self.assertIsNone(today["ev_ebit"])
+        self.assertTrue(any(i["concept"] == "EnterpriseValue" for i in issues))

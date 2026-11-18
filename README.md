@@ -235,7 +235,11 @@ their own **Insiders** tab.
 `charts.py` charts them as `08_valuation`: P/E history against its median,
 annotated with the percentile, plus F-score and Z-score bars.
 
-**Enterprise value** = market cap + every borrowing − cash. The debt is the
+**Enterprise value** = market cap + every borrowing − cash and short-term
+investments (marketable securities and the like: a biotech keeps most of its
+money there; `investments` in `evaluation.csv`). A negative EV (cash above
+market cap plus debt) leaves EV/EBIT, EV/EBITDA, earnings yield and FCF yield
+blank, reported as `valuation_input_missing` (`EnterpriseValue`). The debt is the
 balance sheet's own lines, each counted once: debt due after a year, debt due
 within a year (short-term borrowings, current portion of long-term debt,
 commercial paper…) and lease liabilities (`EV_INCLUDES_LEASES` in
