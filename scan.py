@@ -58,6 +58,7 @@ from types import SimpleNamespace
 import pandas as pd
 
 import calc_check
+import company_kind
 import data_issues
 import filing_cache
 
@@ -81,7 +82,8 @@ MAX_COUNT = 10_000
 # a crash or a hang costs that company, not the batch.
 ISOLATE = True
 COMPANY_TIMEOUT = 3600
-RESULTS = ("ok", "partial", "failed", "no_filings", "no_xbrl")
+SKIPPED = "skipped"
+RESULTS = ("ok", "partial", "failed", "no_filings", "no_xbrl", SKIPPED)
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS universe (
@@ -507,7 +509,7 @@ def pipeline_version() -> str:
 
     digest = hashlib.sha1()
     for name in ("extract.py", "xbrl_extract.py", "calc_check.py", "data_issues.py", "edgar_dashboard.py",
-                 "scan.py"):
+                 "scan.py", "company_kind.py", "quarters.py", "valuation.py"):
         digest.update((HERE / name).read_bytes().replace(b"\r\n", b"\n"))
     return f"{release}+{digest.hexdigest()[:8]}"
 
@@ -524,16 +526,31 @@ def _company(db, root: Path, batch: int, run: int, kind: str, member: dict, cach
     started = time.monotonic()
     out_dir = root / "companies" / str(cik)
     try:
+        previous = db.execute("SELECT result, error FROM companies WHERE cik = ?", (cik,)).fetchone()
+        skipped = None
         if online:
             from edgar import Company
 
             company = Company(int(cik))
-            live = list_filings(db, company, cik, log)
-            dump_filings(db, cik, live, cache_dir, log, stats, retry_failed=kind != "rerun" or retry_failed)
-        elif not db.execute("SELECT 1 FROM companies WHERE cik = ?", (cik,)).fetchone():
+            # A company Stocky cannot analyse (a bank, an insurer, a REIT, a fund...) is
+            # skipped before any filing is listed or downloaded; it stays in its batch
+            # as "skipped" with the reason (company_kind.py: the run bar's red labels).
+            what = company_kind.from_company(company)
+            if what["warn"]:
+                skipped = what["category"]
+            else:
+                live = list_filings(db, company, cik, log)
+                dump_filings(db, cik, live, cache_dir, log, stats, retry_failed=kind != "rerun" or retry_failed)
+        elif previous is None:
             log("    [!] never scanned (the run was stopped before it): use resume, not rerun")
             return stats
-        summary, issues = analyse_company(db, cik, ticker, cache_dir, out_dir, log)
+        elif previous["result"] == SKIPPED:
+            skipped = previous["error"]
+        if skipped:
+            log(f"    [*] {ticker}: skipped ({skipped}): Stocky does not analyse this kind of company")
+            summary, issues = {"result": SKIPPED, "error": skipped}, []
+        else:
+            summary, issues = analyse_company(db, cik, ticker, cache_dir, out_dir, log)
     except KeyboardInterrupt:
         raise
     except Exception as exc:  # noqa: BLE001 - one company never stops the run

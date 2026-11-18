@@ -266,6 +266,19 @@ class EstimateTests(unittest.TestCase):
         self.assertIn("the value shown is derived", said[0]["detail"])
 
 
+class PrecisionInputTests(unittest.TestCase):
+    def test_diluted_shares_and_net_income_to_common(self):
+        common = "us-gaap:NetIncomeLossAvailableToCommonStockholdersDiluted"
+        extra = [fact("us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding", 78.0e6, "2026-02-01", "2026-08-01"),
+                 fact(common, 0.5 * M, "2026-02-01", "2026-08-01"), fact(common, -13.0 * M, "2025-02-02", "2025-08-02")]
+        annual_facts = pd.DataFrame([{"concept": common, "fiscal_year": 2025, "value": -2.0 * M,
+                                      "period_start": "2025-02-02", "period_end": FY_END, "is_dimensioned": False}])
+        with redirect_stdout(io.StringIO()):
+            frame, _, _ = quarters.build(annual(), SOURCES, [entry(**Q2, extra=extra)], None, annual_facts)
+        self.assertAlmostEqual(frame.iloc[0]["DilutedShares__ytd"], 78.0e6)
+        self.assertAlmostEqual(frame.iloc[0]["NetToCommon"], -2.0 + 0.5 + 13.0)
+
+
 class CalendarTests(unittest.TestCase):
     def test_53_week_prior_period(self):
         # The year before had 53 weeks: its comparative ends 371 days earlier.

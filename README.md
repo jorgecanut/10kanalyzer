@@ -118,6 +118,15 @@ The universe is SEC's `company_tickers_exchange.json`, one row per company, in
 alphabetical order of ticker; it is saved the first time, so the order never
 moves. Each batch takes the next N companies no batch has taken, and for each:
 
+0. skips a company Stocky cannot analyse, before listing or downloading
+   anything (`company_kind.py`, the same rule as the run bar's red labels):
+   a bank or credit company, a broker or asset manager, an insurer, an
+   investment or holding office, a REIT, a blank check company, or a filer
+   with no 10-K, 20-F or 40-F in its whole history (a fund). Its industry is
+   read from the record the scan fetches anyway. It stays in its batch as
+   **skipped** with the reason, counted in the Market tab's Skipped column;
+   a rerun keeps it skipped. Companies analysed before this rule keep their
+   results until scanned again online (a rerun asks SEC nothing);
 1. lists its annual reports (10-K, 10-KT, 20-F, 40-F; amendments skipped) and
    the 10-Qs filed after the latest one (more than 3 flags the 10-K overdue);
 2. dumps every filing not in the dump yet: the only SEC requests, at most 5
@@ -251,6 +260,15 @@ liabilities. A line with the company's own tag whose label reads like debt
 due within a year is counted and reported (`valuation_assumed`, info,
 `ShortTermDebt`). `evaluation.csv` shows the parts: `debt_long`,
 `debt_short`, `leases`.
+
+When the reported EPS is so small that rounding it to the cent could move
+the P/E by more than 2% (one figure under 0.25, or a TTM made of three under
+0.75), EPS is net income (to common shareholders when tagged) over the
+diluted weighted share count instead, reported as `valuation_assumed` (info,
+`EarningsPerShareDiluted`). A P/E resting on profit from outside operations
+(net income positive with an operating loss, or above 1.25 times operating
+income) is reported as `pe_non_operating`, and the Home card says so under
+its numbers.
 
 P/E is price over **diluted EPS** (on Yahoo's split basis, like the price) when
 the filing reports it; otherwise market cap over net income, reported as

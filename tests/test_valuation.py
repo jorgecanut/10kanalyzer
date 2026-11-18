@@ -595,3 +595,81 @@ class CashAndNegativeEvTests(unittest.TestCase):
         self.assertIsNone(today["fcf_yield"])
         self.assertIsNone(today["ev_ebit"])
         self.assertTrue(any(i["concept"] == "EnterpriseValue" for i in issues))
+
+
+def year_fact(concept, year, value):
+    return {"concept": concept, "fiscal_year": year, "value": value, "period_instant": None,
+            "period_start": f"{year}-01-01", "period_end": f"{year}-12-31", "is_dimensioned": False}
+
+
+class RoundedEpsTests(unittest.TestCase):
+    """EPS is rounded to the cent: at a few cents that moves the P/E by tens of percent."""
+
+    def build(self, eps, ni_common=None, shares=100e6, net_income=1.2):
+        df, statements, frame = company()
+        df["NetIncomeLoss"] = net_income
+        rows = [year_fact("us-gaap:EarningsPerShareDiluted", y, eps) for y in (2024, 2025)]
+        rows += [year_fact("us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding", y, shares) for y in (2024, 2025)]
+        if ni_common is not None:
+            rows += [year_fact("us-gaap:NetIncomeLossAvailableToCommonStockholdersDiluted", y, ni_common)
+                     for y in (2024, 2025)]
+        frame = pd.concat([frame, pd.DataFrame(rows)], ignore_index=True)
+        issues = []
+        out = valuation.build_evaluation("TEST", df, statements, frame, PRICES, issues=issues, splits=[])
+        return out.set_index("fiscal_year"), issues
+
+    def test_a_few_cents_is_recomputed_from_net_income(self):
+        out, issues = self.build(0.01)                         # 1.2M / 100M shares = 0.012
+        self.assertAlmostEqual(out.loc[2025, "eps_diluted"], 0.012)
+        self.assertAlmostEqual(out.loc[2025, "pe"], 10.0 / 0.012)
+        said = [i for i in issues if i["concept"] == "EarningsPerShareDiluted" and i["fiscal_year"] == 2025]
+        self.assertTrue(said and "rounded to the cent" in said[0]["detail"])
+
+    def test_net_income_to_common_comes_first(self):
+        out, _ = self.build(-0.01, ni_common=-0.6e6, net_income=-0.1)
+        self.assertAlmostEqual(out.loc[2025, "eps_diluted"], -0.006)
+
+    def test_a_large_eps_is_kept(self):
+        out, issues = self.build(8.13, net_income=813.0)
+        self.assertAlmostEqual(out.loc[2025, "eps_diluted"], 8.13)
+        self.assertEqual([i for i in issues if i["concept"] == "EarningsPerShareDiluted"], [])
+
+    def test_slot_ttm_eps_from_net_income_when_its_parts_are_cents(self):
+        df, statements, frame = with_eps((1.0, -0.03))
+        q, st, fa = quarter_inputs()
+        q = q.assign(**{"EpsDiluted__ytd": 0.01, "EpsDiluted__ytd_prior": -0.22, "NetIncomeLoss": 12.5,
+                        "DilutedShares__ytd": 78.0e6})
+        issues = []
+        out = valuation.build_evaluation("TEST", df, statements, frame, PRICES_Q, issues=issues, splits=[],
+                                         quarters=q, quarter_statements=st, quarter_facts=fa)
+        self.assertAlmostEqual(out.iloc[-1]["eps_diluted"], 12.5e6 / 78.0e6)
+        self.assertTrue(any(i["fiscal_year"] == "Q2'26" and "rounded to the cent" in i["detail"] for i in issues))
+
+
+class NonOperatingProfitTests(unittest.TestCase):
+    def test_profit_with_an_operating_loss_is_flagged(self):
+        q, st, fa = quarter_inputs()
+        q = q.assign(NetIncomeLoss=12.5, OperatingIncomeLoss=-3.8)
+        df, statements, frame = with_eps()
+        issues = []
+        out = valuation.build_evaluation("TEST", df, statements, frame, PRICES_Q, issues=issues, splits=[],
+                                         quarters=q, quarter_statements=st, quarter_facts=fa)
+        flagged = [i for i in issues if i["kind"] == "pe_non_operating"]
+        self.assertEqual([i["fiscal_year"] for i in flagged], ["Q2'26"])
+        today = valuation.build_today(out, {"price": 20.0, "time": "t"}, None, PRICES_Q, [])
+        self.assertIn("non-operating", today["pe_note"])
+
+    def test_profit_well_above_operating_income_is_flagged(self):
+        q, st, fa = quarter_inputs()
+        q = q.assign(NetIncomeLoss=30.0, OperatingIncomeLoss=10.0)
+        df, statements, frame = with_eps()
+        issues = []
+        valuation.build_evaluation("TEST", df, statements, frame, PRICES_Q, issues=issues, splits=[],
+                                   quarters=q, quarter_statements=st, quarter_facts=fa)
+        self.assertEqual(len([i for i in issues if i["kind"] == "pe_non_operating"]), 1)
+
+    def test_an_ordinary_year_is_not(self):
+        out, issues = evaluate(*with_eps(), splits=[])          # NI 100 against EBIT 150
+        self.assertEqual([i for i in issues if i["kind"] == "pe_non_operating"], [])
+        today = valuation.build_today(out.reset_index(), {"price": 20.0, "time": "t"}, None, PRICES, [])
+        self.assertIsNone(today["pe_note"])

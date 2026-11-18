@@ -70,7 +70,20 @@ OUTPUT_COLUMNS = [
     "debt_long", "debt_short", "leases",
     # Short-term investments, subtracted from enterprise value with the cash.
     "investments",
+    # Why the P/E does not describe the business (profit from outside operations), else empty.
+    "pe_note",
 ]
+# Filings round EPS to the cent. When that rounding could move the P/E by more
+# than EPS_PRECISION, EPS is net income (to common shareholders when tagged)
+# over the diluted weighted share count instead.
+EPS_ROUNDING = 0.005
+EPS_PRECISION = 0.02
+NET_INCOME_TO_COMMON = ("NetIncomeLossAvailableToCommonStockholdersDiluted",
+                        "NetIncomeLossAvailableToCommonStockholdersBasic")
+DILUTED_SHARES = ("WeightedAverageNumberOfDilutedSharesOutstanding", "WeightedAverageNumberOfSharesOutstandingDiluted")
+# Net income above operating income by more than this (or a profit on an
+# operating loss): the P/E rests on non-operating items, reported.
+NON_OPERATING_RATIO = 1.25
 # Diluted earnings per share, US GAAP then IFRS.
 EPS_DILUTED = ("EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted", "DilutedEarningsLossPerShare",
                "BasicAndDilutedEarningsLossPerShare")
@@ -1190,9 +1203,31 @@ def build_evaluation(
                            if f"EpsDiluted__{part}" in data.columns else np.nan for part in ("ytd", "ytd_prior"))
             eps = (raw_eps.get(latest_year, np.nan) * factors.get(latest_year, np.nan)
                    + (ytd - before) * factors[year])
+            if _too_rounded(eps, terms=3) or not np.isfinite(eps):
+                to_common = _finite(_numeric(data, "NetToCommon").iloc[position]) \
+                    if "NetToCommon" in data.columns else np.nan
+                numerator = to_common if np.isfinite(to_common) else net_income_value
+                shares_used = _finite(_numeric(data, "DilutedShares__ytd").iloc[position]) \
+                    if "DilutedShares__ytd" in data.columns else np.nan
+                if np.isfinite(numerator) and np.isfinite(shares_used) and shares_used > 0:
+                    eps = numerator * USD_TO_MILLIONS / shares_used * factors[year]
+                    note("valuation_assumed", "info", year, "EarningsPerShareDiluted",
+                         "TTM EPS is net income" + (" to common shareholders" if np.isfinite(to_common) else "")
+                         + f" ({numerator:,.1f} M) over the diluted weighted shares ({shares_used / 1e6:,.1f} M): "
+                           "the reported per-share figures are rounded to the cent, too coarse at this size")
         else:
             raw_eps[year] = _fact_eps(facts, year)
             eps = raw_eps[year] * factors[year]
+            if _too_rounded(raw_eps[year]):
+                to_common = _fact_year_value(facts, year, NET_INCOME_TO_COMMON)
+                numerator = to_common if np.isfinite(to_common) else net_income_value * USD_TO_MILLIONS
+                shares_used = _fact_year_value(facts, year, DILUTED_SHARES)
+                if np.isfinite(numerator) and np.isfinite(shares_used) and shares_used > 0:
+                    eps = numerator / shares_used * factors[year]
+                    note("valuation_assumed", "info", year, "EarningsPerShareDiluted",
+                         f"EPS is net income" + (" to common shareholders" if np.isfinite(to_common) else "")
+                         + f" over the diluted weighted shares ({numerator / shares_used:.4f}): the reported "
+                           f"{raw_eps[year]:.2f} is rounded to the cent, too coarse at this size")
         if np.isfinite(eps):
             pe_basis = "diluted_eps"
             pe = _safe_div(share_price, eps, positive_only=True)
@@ -1262,8 +1297,17 @@ def build_evaluation(
             "revenue": revenue_value,
         }
 
+        # A P/E that rests on items outside operations does not describe the business.
+        pe_note = ""
+        if np.isfinite(net_income_value) and np.isfinite(ebit_value) and net_income_value > 0 and (
+                ebit_value <= 0 or net_income_value > NON_OPERATING_RATIO * ebit_value):
+            pe_note = (f"net income ({net_income_value:,.1f} M) comes from outside operations: operating income is "
+                       f"{ebit_value:,.1f} M, so the P/E rests on non-operating items (gains, tax benefits, "
+                       "interest) that may not repeat")
+            note("pe_non_operating", "warning", year, "NetIncomeLoss", pe_note)
         when = period_dates.get(year)
         rows.append({
+            "pe_note": pe_note,
             "fiscal_year": year,
             "period_end": None if when is None or pd.isna(when) else str(when.date()),
             "debt_long": debt_value,
@@ -1347,10 +1391,35 @@ def pe_percentile(value, history: pd.Series) -> float:
     return float(((history < value).sum() + 0.5 * (history == value).sum()) / len(history) * 100.0)
 
 
-def _fact_eps(facts: pd.DataFrame, year: int) -> float:
-    """The year's diluted EPS from its facts: a dimension-free fact spanning the whole year."""
+def _fact_year_value(facts: pd.DataFrame, year: int, concepts) -> float:
+    """The year's value of the first of ``concepts`` with one: a dimension-free fact spanning the whole year."""
     if facts is None or facts.empty or not {"concept", "value"} <= set(facts.columns):
         return np.nan
+    frame = facts[pd.to_numeric(facts.get("fiscal_year"), errors="coerce") == year] \
+        if "fiscal_year" in facts.columns else facts
+    if frame.empty:
+        return np.nan
+    if "is_dimensioned" in frame.columns:
+        frame = frame[~frame["is_dimensioned"].astype(str).str.lower().isin(["true", "1"])]
+    names = frame["concept"].astype(str).str.split(":").str[-1]
+    start = pd.to_datetime(frame.get("period_start"), errors="coerce")
+    end = pd.to_datetime(frame.get("period_end"), errors="coerce")
+    whole_year = (end - start).dt.days >= extract.ANNUAL_MIN_DAYS
+    for concept in concepts:
+        hit = pd.to_numeric(frame.loc[(names == concept) & whole_year, "value"], errors="coerce").dropna()
+        if not hit.empty:
+            return float(hit.iloc[0])
+    return np.nan
+
+
+def _fact_eps(facts: pd.DataFrame, year: int) -> float:
+    """The year's diluted EPS from its facts: a dimension-free fact spanning the whole year."""
+    return _fact_year_value(facts, year, EPS_DILUTED)
+
+
+def _too_rounded(eps: float, terms: int = 1) -> bool:
+    """Whether cent rounding of ``terms`` reported EPS figures could move a P/E by more than EPS_PRECISION."""
+    return np.isfinite(eps) and terms * EPS_ROUNDING > EPS_PRECISION * abs(eps)
     frame = facts[pd.to_numeric(facts.get("fiscal_year"), errors="coerce") == year] \
         if "fiscal_year" in facts.columns else facts
     if frame.empty:
@@ -1479,6 +1548,7 @@ def build_today(evaluation: pd.DataFrame, quote: dict | None, shares: tuple[floa
         "market_cap": clean(market_cap), "enterprise_value": clean(enterprise_value),
         "earnings_period": earnings_period, "earnings_end": last.get("period_end"),
         "pe": clean(pe), "pe_basis": last.get("pe_basis"),
+        "pe_note": (str(last.get("pe_note")) if isinstance(last.get("pe_note"), str) and last.get("pe_note") else None),
         "ev_ebit": clean(_safe_div(enterprise_value_for_ratios, ebit, positive_only=True)),
         "earnings_yield": clean(_safe_div(ebit, enterprise_value_for_ratios, positive_only=True)),
         "fcf_yield": clean(_safe_div(fcf, enterprise_value_for_ratios, positive_only=True)),

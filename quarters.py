@@ -252,6 +252,17 @@ def build(annual: pd.DataFrame, annual_sources: dict, entries: list[dict],
                                             min_days=min_days, max_days=max_days) if prior_date else np.nan
         out["EpsDiluted__ytd"], out["EpsDiluted__ytd_prior"] = eps_now, eps_before
         out["EpsDiluted"] = eps_year + eps_now - eps_before if not overdue else np.nan
+        # For an EPS too rounded to trust (valuation._too_rounded): the diluted
+        # share count of the year to date, and the TTM net income to common.
+        out["DilutedShares__ytd"] = extract.extract_metric(facts, valuation.DILUTED_SHARES, period, "duration",
+                                                            min_days=min_days, max_days=max_days)
+        common_year = _millions(valuation._fact_year_value(annual_facts, fy_year, valuation.NET_INCOME_TO_COMMON))
+        common_now = _millions(extract.extract_metric(facts, valuation.NET_INCOME_TO_COMMON, period, "duration",
+                                                      currency=currency, min_days=min_days, max_days=max_days))
+        common_before = _millions(extract.extract_metric(
+            facts, valuation.NET_INCOME_TO_COMMON, prior_date, "duration", currency=currency,
+            min_days=min_days, max_days=max_days)) if prior_date else np.nan
+        out["NetToCommon"] = common_year + common_now - common_before if not overdue else np.nan
         slot_statements.extend(_slot_lines(annual_statements, fy_year, ytd, prior, slot, period, accession,
                                            issues, overdue))
         slot_facts.extend({**fact, "fiscal_year": slot} for fact in ytd.get("facts") or [])

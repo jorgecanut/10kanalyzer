@@ -66,6 +66,7 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import charts as chartlib
+import company_kind
 import filing_cache
 import scan as scanlib
 
@@ -1984,19 +1985,6 @@ SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 COMPANY_INFO_MAX_AGE = 30 * 86400
 COMPANY_INFO_MAX = 8                 # suggestions shown at once
 _COMPANY_INFO_LOCK = threading.Lock()
-ANNUAL_REPORT_FORMS = {"10-K", "20-F", "40-F", "10-K405", "10-KT"}
-FUND_FORMS = re.compile(r"^(N-|NPORT|485|497)")
-# SIC ranges whose statements Stocky's ratios do not fit (shown in red), most specific first.
-WARN_SIC = (
-    ((6798, 6798), "REIT"),
-    ((6770, 6770), "Blank check (SPAC)"),
-    ((6000, 6199), "Bank"),
-    ((6200, 6299), "Broker / asset manager"),
-    ((6300, 6499), "Insurance"),
-    ((6700, 6799), "Investment / holding office"),
-)
-
-
 def _download_submissions(cik: int, identity: str) -> dict:
     """SEC's submissions file of one company (industry, entity type, recent filings)."""
     request = Request(SUBMISSIONS_URL.format(cik=int(cik)),
@@ -2006,26 +1994,8 @@ def _download_submissions(cik: int, identity: str) -> dict:
 
 
 def _classify_company(submissions: dict) -> dict:
-    """``{"category", "warn", "sic"}``: what the company is, and whether a run can analyse it well.
-
-    Red (``warn``): no 10-K, 20-F or 40-F among its filings (a fund's holdings
-    reports, or none at all), or a financial industry whose statements the
-    ratios do not fit (banks, brokers, insurers, REITs, holding offices, SPACs).
-    """
-    sic_text = str(submissions.get("sic") or "").strip()
-    description = str(submissions.get("sicDescription") or "").strip()
-    forms = [str(form) for form in ((submissions.get("filings") or {}).get("recent") or {}).get("form") or []]
-    has_annual = any(form in ANNUAL_REPORT_FORMS for form in forms)
-    sic = int(sic_text) if sic_text.isdigit() else None
-    if not has_annual:
-        fund = any(FUND_FORMS.match(form) for form in forms) or \
-            str(submissions.get("entityType") or "").lower() not in ("", "operating")
-        category = "Fund: no company accounts" if fund else "No 10-K, 20-F or 40-F"
-        return {"category": category, "warn": True, "sic": sic}
-    for (low, high), label in WARN_SIC:
-        if sic is not None and low <= sic <= high:
-            return {"category": label, "warn": True, "sic": sic}
-    return {"category": description or "Industry unknown", "warn": False, "sic": sic}
+    """``company_kind.classify``: the rule the market scan skips companies by, too."""
+    return company_kind.classify(submissions)
 
 
 def _company_info(ciks: list[int], identity: str) -> dict[str, dict]:
@@ -2038,7 +2008,8 @@ def _company_info(ciks: list[int], identity: str) -> dict[str, dict]:
             stored = {}
     now = time.time()
     fresh = {str(cik): stored[str(cik)] for cik in ciks
-             if str(cik) in stored and now - stored[str(cik)].get("fetched", 0) <= COMPANY_INFO_MAX_AGE}
+             if str(cik) in stored and now - stored[str(cik)].get("fetched", 0) <= COMPANY_INFO_MAX_AGE
+             and stored[str(cik)].get("rule") == company_kind.RULE}
     missing = [cik for cik in ciks if str(cik) not in fresh]
 
     def fetch(cik: int):
@@ -2064,7 +2035,8 @@ def _company_info(ciks: list[int], identity: str) -> dict[str, dict]:
                 tmp = path.with_suffix(".tmp")
                 tmp.write_text(json.dumps(stored, separators=(",", ":")), encoding="utf-8")
                 os.replace(tmp, path)
-    return {cik: {key: value for key, value in info.items() if key != "fetched"} for cik, info in fresh.items()}
+    return {cik: {key: value for key, value in info.items() if key not in ("fetched", "rule")}
+            for cik, info in fresh.items()}
 
 
 @app.get("/api/company-info")
@@ -2427,7 +2399,7 @@ def _greenblatt_ranks(items: list[dict]) -> None:
 
 TODAY_FIELDS = ("pe", "ev_ebit", "earnings_yield", "return_on_capital", "fcf_yield", "pe_percentile", "z_score",
                 "f_score", "f_score_year", "price", "price_time", "price_source", "price_currency",
-                "earnings_period", "earnings_end", "shares_date", "pe_basis")
+                "earnings_period", "earnings_end", "shares_date", "pe_basis", "pe_note")
 
 
 def _today_record(directory: Path) -> dict | None:

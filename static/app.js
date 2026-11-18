@@ -1213,7 +1213,8 @@ function renderHome() {
       ${stat('FCF yield', fmtRatio(row.fcf_yield), 'fcf_yield')}
       ${stat('P/E pct', fmtPctPoints(row.pe_percentile), 'pe_percentile')}
     </div>
-    <p class="home-stats-note">${priced}</p>`;
+    <p class="home-stats-note">${priced}</p>
+    ${row.pe_note ? `<p class="home-stats-note is-warn">P/E: ${esc(row.pe_note)}</p>` : ''}`;
   }
 
   // Ranking: two above, the company, two below. Names only, no numbers.
@@ -3469,9 +3470,10 @@ const MK_KINDS = {
   valuation_assumed: 'Valuation uses an assumption', valuation_skipped: 'Valuation not computed',
   quarter_unread: '10-Q not read', quarter_metric_missing: 'Quarter metric not read',
   quarter_concept_differs: 'Quarter read from another tag', quarter_restated: 'Restated in the 10-Q',
-  quarter_label_mismatch: 'Quarter label disagrees',
+  quarter_label_mismatch: 'Quarter label disagrees', pe_non_operating: 'P/E rests on non-operating profit',
 };
-const MK_RESULTS = { ok: 'OK', partial: 'Partial', failed: 'Failed', no_filings: 'No annual reports', no_xbrl: 'No XBRL' };
+const MK_RESULTS = { ok: 'OK', partial: 'Partial', failed: 'Failed', no_filings: 'No annual reports', no_xbrl: 'No XBRL',
+                     skipped: 'Skipped' };
 const MK_VIEWS = { issues: 'Issues', companies: 'Companies', log: 'Log' };
 
 const mkNumber = v => (v === null || v === undefined || v === '' ? '—'
@@ -3566,6 +3568,7 @@ function renderMarket() {
       <td>${fmtInt(b.companies)}/${fmtInt(b.size)}</td>
       <td>${mkCount(r.ok)}</td><td>${mkCount(r.partial)}</td>
       <td class="${r.failed ? 'mk-error' : ''}">${mkCount(r.failed)}</td>
+      <td>${mkCount(r.skipped)}</td>
       <td>${mkCount((r.no_filings || 0) + (r.no_xbrl || 0))}</td>
       <td>${fmtInt(b.dumped)}/${fmtInt(b.filings)}</td>
       <td>${mkCount(kinds.check_mismatch)}</td><td>${mkCount(kinds.missing_metric)}</td>
@@ -3722,7 +3725,8 @@ function renderMarketDetail() {
     $('#mk-body').innerHTML = detail.companies.map(c => `<tr class="${c.result === 'failed' ? 'mk-error' : !c.result ? 'mk-info' : ''}">
         <td><button class="mk-link" onclick="openMarketCompany(${c.cik})">${esc(c.ticker)}</button></td>
         <td class="mk-left">${esc(c.name || '')}</td>
-        <td class="mk-left">${esc(c.result ? MK_RESULTS[c.result] || c.result : 'not done yet')}</td>
+        <td class="mk-left">${esc(c.result ? (MK_RESULTS[c.result] || c.result)
+          + (c.result === 'skipped' && c.error ? `: ${c.error}` : '') : 'not done yet')}</td>
         <td>${c.first_fy ? `${c.first_fy}–${c.last_fy}` : '—'}</td>
         <td>${c.result ? `${fmtInt(c.annual_analysed || 0)}/${fmtInt(c.annual_found || 0)}` : '—'}</td>
         <td>${c.result ? fmtInt(c.quarterly_found || 0) + (c.overdue_10k ? ' (overdue)' : '') : '—'}</td>
