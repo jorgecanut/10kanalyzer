@@ -33,15 +33,16 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>'
 const HELP = {
   ticker: 'Stock symbol.',
   fiscal_year: 'Fiscal year of the latest 10-K the values below come from.',
+  earnings_period: 'The earnings under the price-based numbers: the last twelve months to the newest 10-Q (TTM), or the latest fiscal year when no 10-Q followed it.',
   f_score: 'Piotroski F-score, 0–9: nine yes/no checks on profitability, debt, liquidity and efficiency. 7+ is strong (green), 3 or less is weak (red).',
   z_score: 'Altman Z-score: bankruptcy-risk estimate from working capital, retained earnings, EBIT, market value and sales. Above 2.99 is safe (green), below 1.81 is distress (red).',
-  pe: 'Price / earnings: share price divided by earnings per share. Lower means cheaper per dollar of profit.',
+  pe: "Price / earnings: today's share price divided by diluted earnings per share over the period shown under Earnings. Lower means cheaper per dollar of profit.",
   ev_ebit: 'Enterprise value / EBIT: what the whole business (market cap + debt − cash) costs per dollar of operating profit. Lower is cheaper.',
   earnings_yield: 'Greenblatt earnings yield: EBIT / enterprise value. Higher is cheaper.',
   return_on_capital: 'Greenblatt return on capital: EBIT / (total assets − current liabilities). Higher means a better business.',
-  greenblatt_rank: 'Greenblatt Magic Formula rank among your screened tickers: earnings-yield rank + return-on-capital rank. Lower is better.',
+  greenblatt_rank: 'Greenblatt Magic Formula: place among your screened tickers by the sum of the earnings-yield rank and the return-on-capital rank (lower sum = better place; ties share a place).',
   fcf_yield: 'Free cash flow / enterprise value: cash the business generates per dollar of its value. Higher is cheaper.',
-  pe_percentile: "Where this year's P/E sits in the company's own P/E history: 0% is its cheapest year, 100% its most expensive.",
+  pe_percentile: "Where today's P/E sits among the company's fiscal-year P/Es: 0% is its cheapest year, 100% its most expensive.",
   modified: 'When this ticker was last run.',
   sim_price: 'Latest share price from Yahoo Finance.',
   sim_change: 'Price change from the start of the selected period to now.',
@@ -1078,18 +1079,29 @@ function renderHome() {
     $('#home-stats').innerHTML = `<p class="muted">No valuation data for ${esc(ticker)}: usually Yahoo prices were
       unreachable. Open its log in the Logs tab and look for <code>[!] valuation skipped</code>.</p>`;
   } else {
+    // Price-based numbers: today's price over the newest TTM (runs before 1.22: the 10-K's year end).
+    const priced = row.price != null
+      ? `price ${fmtNum(row.price, 2)} ${esc(row.price_currency || '')} · ${row.price_source === 'quote'
+          ? `${fmtDate(row.price_time)} ${esc(String(row.price_time || '').slice(11, 16))} UTC`
+          : `month close ${fmtDate(row.price_time)} (no live quote)`} · earnings ${esc(row.earnings_period)}`
+        + (row.pe_basis === 'net_income' ? ' · P/E on net income (no diluted EPS read)' : '')
+      : `priced at the end of ${esc(row.earnings_period || 'the fiscal year')}: run again for today's price`;
+    const magic = row.greenblatt_rank
+      ? `<div class="stat" title="${esc(HELP.greenblatt_rank)} Score ${row.greenblatt_score}: earnings-yield rank + return-on-capital rank."><span>Magic rank</span><b>#${row.greenblatt_rank} of ${ranked.length}</b></div>`
+      : stat('Magic rank', '—', 'greenblatt_rank');
     $('#home-stats').innerHTML = `<div class="home-stats">
-      ${stat('FY', esc(row.fiscal_year ?? '—'), 'fiscal_year')}
-      ${stat('F-score', scoreCell(row.f_score, 7, 3), 'f_score')}
+      ${stat('Earnings', esc(row.earnings_period ?? (row.fiscal_year ? `FY${row.fiscal_year}` : '—')), 'earnings_period')}
+      ${stat(`F-score${row.f_score_year ? ` FY${row.f_score_year}` : ''}`, scoreCell(row.f_score, 7, 3), 'f_score')}
       ${stat('Z-score', scoreCell(row.z_score, 2.99, 1.81), 'z_score')}
       ${stat('P/E', fmtNum(row.pe, 1), 'pe')}
       ${stat('EV/EBIT', fmtNum(row.ev_ebit, 1), 'ev_ebit')}
       ${stat('Earnings yield', fmtRatio(row.earnings_yield), 'earnings_yield')}
       ${stat('Return on capital', fmtRatio(row.return_on_capital), 'return_on_capital')}
-      ${stat('Magic rank', row.greenblatt_rank ? `#${row.greenblatt_rank} of ${ranked.length}` : '—', 'greenblatt_rank')}
+      ${magic}
       ${stat('FCF yield', fmtRatio(row.fcf_yield), 'fcf_yield')}
       ${stat('P/E pct', fmtPctPoints(row.pe_percentile), 'pe_percentile')}
-    </div>`;
+    </div>
+    <p class="home-stats-note">${priced}</p>`;
   }
 
   // Ranking: two above, the company, two below. Names only, no numbers.

@@ -1820,7 +1820,9 @@ def evaluation(ticker: str):
         abort(404, "No evaluation data for that ticker yet.")
 
     history = _csv_records(path)
-    latest = history[-1] if history else None
+    # The latest fiscal year (quarter slots follow the years); today's record apart.
+    years = [row for row in history if str(row.get("fiscal_year") or "").isdigit()]
+    latest = years[-1] if years else (history[-1] if history else None)
 
     transactions: list = []
     insider_generated = None
@@ -1836,6 +1838,7 @@ def evaluation(ticker: str):
     return jsonify(
         ticker=ticker,
         latest=latest,
+        today=_today_record(_ticker_dir(ticker)),
         history=history,
         insiders=transactions,
         insider_generated=insider_generated,
@@ -2186,12 +2189,29 @@ def _greenblatt_ranks(items: list[dict]) -> None:
         for rank, item in enumerate(ranked, 1):
             item[f"_rank_{field}"] = rank
     for item in eligible:
-        item["greenblatt_rank"] = (
+        item["greenblatt_score"] = (
             item.pop("_rank_earnings_yield") + item.pop("_rank_return_on_capital")
         )
+    # The rank is a position (1 = best); equal scores share it.
+    for item in eligible:
+        item["greenblatt_rank"] = 1 + sum(other["greenblatt_score"] < item["greenblatt_score"] for other in eligible)
     for item in items:
         item.pop("_rank_earnings_yield", None)
         item.pop("_rank_return_on_capital", None)
+
+
+TODAY_FIELDS = ("pe", "ev_ebit", "earnings_yield", "return_on_capital", "fcf_yield", "pe_percentile", "z_score",
+                "f_score", "f_score_year", "price", "price_time", "price_source", "price_currency",
+                "earnings_period", "earnings_end", "shares_date", "pe_basis")
+
+
+def _today_record(directory: Path) -> dict | None:
+    """``valuation_today.json`` of a ticker's run, or None."""
+    try:
+        record = json.loads((directory / "valuation_today.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) and record else None
 
 
 def _roc_fallback(directory: Path, fiscal_year) -> float | None:
@@ -2260,10 +2280,19 @@ def _screener_items() -> list[dict]:
             rows = _csv_records(path)
             if not rows:
                 continue
-            latest = rows[-1]
+            # The latest 10-K's row: quarter slots ("Q2'26") follow the fiscal years.
+            years = [row for row in rows if str(row.get("fiscal_year") or "").isdigit()]
+            latest = years[-1] if years else rows[-1]
             item = {"ticker": directory.name, "has_evaluation": True}
             for field in SCREENER_FIELDS:
                 item[field] = latest.get(field)
+            item["earnings_period"] = f"FY{latest.get('fiscal_year')}"
+            # Today's valuation (the latest price over the newest TTM) replaces
+            # the price-based numbers; runs before 1.22 have none.
+            today = _today_record(directory)
+            if today:
+                for field in TODAY_FIELDS:
+                    item[field] = today.get(field)
             if item.get("return_on_capital") is None:
                 item["return_on_capital"] = _roc_fallback(directory, latest.get("fiscal_year"))
             item["modified"] = datetime.fromtimestamp(

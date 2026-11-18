@@ -558,6 +558,7 @@
   .home-grid .home-block { margin-top:4px; padding-top:0; border-top:0; }   /* first row: the head's line is enough */
   .home-block h3 { margin:0 0 10px; }
   .home-stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:0 20px; }
+  .home-stats-note { margin:10px 0 0; color:var(--muted); font-size:calc(var(--fs) * 13); }
   .home-rank { list-style:none; margin:0 0 8px; padding:0; }
   .home-rank li { display:flex; gap:12px; padding:6px 10px; border-radius:var(--radius); }
   .home-rank li .r { color:var(--muted); min-width:3.5em; font-variant-numeric:tabular-nums; }

@@ -1005,3 +1005,50 @@ class LimitTests(AppTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TodayCardTests(AppTestCase):
+    def results(self, ticker, evaluation, today=None):
+        folder = app._ticker_dir(ticker, self.uid())
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "evaluation.csv").write_text(evaluation)
+        if today is not None:
+            (folder / "valuation_today.json").write_text(json.dumps(today))
+
+    def items(self):
+        return {item["ticker"]: item for item in self.client.get("/api/screener").get_json()["items"]}
+
+    def test_screener_uses_today_record(self):
+        self.results("AAA", "fiscal_year,pe,earnings_yield,return_on_capital,f_score\n"
+                            "2025,15.9,0.076,0.134,5\nQ2'26,14.0,0.08,0.14,\n",
+                     {"pe": 17.4, "ev_ebit": 14.0, "earnings_yield": 0.071, "return_on_capital": 0.14,
+                      "fcf_yield": 0.03, "pe_percentile": 70.0, "z_score": 3.1, "f_score": 5, "f_score_year": 2025,
+                      "price": 167.77, "price_time": "2026-11-18T15:10:00Z", "price_source": "quote",
+                      "earnings_period": "TTM Q2'26"})
+        item = self.items()["AAA"]
+        self.assertEqual(item["pe"], 17.4)
+        self.assertEqual(item["earnings_period"], "TTM Q2'26")
+        self.assertEqual(item["price"], 167.77)
+        self.assertEqual(item["fiscal_year"], "2025")          # the latest 10-K, never a quarter slot
+        self.assertEqual(item["f_score_year"], 2025)
+
+    def test_home_falls_back_to_latest_fy(self):
+        self.results("AAA", "fiscal_year,pe,earnings_yield,return_on_capital,f_score\n"
+                            "2024,10.8,0.1,0.15,7\n2025,15.9,0.076,0.134,5\nQ2'26,14.0,0.08,0.14,\n")
+        item = self.items()["AAA"]
+        self.assertEqual(item["pe"], 15.9)
+        self.assertEqual(item["earnings_period"], "FY2025")
+        self.assertNotIn("price", item)
+
+    def test_magic_rank_is_position(self):
+        self.results("AAA", "fiscal_year,earnings_yield,return_on_capital\n2025,0.10,0.10\n")
+        self.results("BBB", "fiscal_year,earnings_yield,return_on_capital\n2025,0.05,0.20\n")
+        items = self.items()
+        # Scores 1 + 2 = 3 each: a tie shares the first place.
+        self.assertEqual((items["AAA"]["greenblatt_score"], items["AAA"]["greenblatt_rank"]), (3, 1))
+        self.assertEqual((items["BBB"]["greenblatt_score"], items["BBB"]["greenblatt_rank"]), (3, 1))
+        self.results("CCC", "fiscal_year,earnings_yield,return_on_capital\n2025,0.20,0.30\n")
+        items = self.items()
+        self.assertEqual(items["CCC"]["greenblatt_rank"], 1)          # 1 + 1 = 2
+        self.assertEqual(items["AAA"]["greenblatt_rank"], 2)          # 2 + 3 = 5
+        self.assertEqual(items["BBB"]["greenblatt_rank"], 2)          # 3 + 2 = 5
