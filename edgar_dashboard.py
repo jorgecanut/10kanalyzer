@@ -450,6 +450,18 @@ def clean_and_derive(df: pd.DataFrame) -> pd.DataFrame:
     for col in value_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce") / USD_TO_MILLIONS
 
+    df = derive(df)
+    sort_col = "period_of_report" if "period_of_report" in df.columns else "fiscal_year"
+    df = df.sort_values(sort_col).reset_index(drop=True)
+    return df
+
+
+def derive(df: pd.DataFrame) -> pd.DataFrame:
+    """Fill gross profit and operating income from their parts and add the ratios (values in millions).
+
+    Shared by the fiscal years and the quarters' TTM rows (``quarters.py``),
+    so both follow the same rules.
+    """
     # Netflix only tags GrossProfit quarterly in its notes for the earlier
     # filings, so fall back to the standard definition Revenue - Cost of
     # Revenue, which is consistent across the whole window.
@@ -487,9 +499,6 @@ def clean_and_derive(df: pd.DataFrame) -> pd.DataFrame:
     df["FreeCashFlow"] = df["OperatingCashFlow"] - df["CapEx"]
     df["CurrentRatio"] = _safe_div(df["AssetsCurrent"], df["LiabilitiesCurrent"])
     df["DebtToEquity"] = _safe_div(df["LongTermDebt"], df["StockholdersEquity"])
-
-    sort_col = "period_of_report" if "period_of_report" in df.columns else "fiscal_year"
-    df = df.sort_values(sort_col).reset_index(drop=True)
     return df
 
 
