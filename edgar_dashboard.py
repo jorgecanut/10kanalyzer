@@ -147,6 +147,35 @@ def list_annual(company, forms=ANNUAL_FORMS, log=print) -> list:
 
 
 QUARTERLY_FORM = "10-Q"
+# A run that cannot analyse the company at all (no annual report of a kind it
+# reads) exits with this code and a plain message, not a traceback.
+NOT_ANALYSABLE_EXIT = 20
+# Forms only investment companies file (Investment Company Act).
+FUND_FORM = re.compile(r"^(N-|485|497)")
+
+
+class NoAnnualReports(RuntimeError):
+    """The company files no 10-K, 20-F or 40-F: there are no company financial statements to read."""
+
+
+def no_annual_reports(ticker: str, company) -> NoAnnualReports:
+    """The error for a company with no annual report, naming what it files instead."""
+    counts: dict[str, int] = {}
+    try:
+        for position, filing in enumerate(company.get_filings()):
+            if position >= 200:
+                break
+            counts[filing.form] = counts.get(filing.form, 0) + 1
+    except Exception:  # noqa: BLE001 - the message only loses its list of forms
+        pass
+    name = getattr(company, "name", "") or ticker
+    listed = ", ".join(f"{form} ({n})" for form, n in sorted(counts.items(), key=lambda item: -item[1])[:6])
+    fund = any(FUND_FORM.match(form) for form in counts)
+    return NoAnnualReports(
+        f"{ticker} ({name}) files no 10-K, 20-F or 40-F, so there are no company financial statements to read"
+        + (f". Its recent filings: {listed}" if listed else "")
+        + (". Those are an investment fund's reports (holdings, not a business's accounts); Stocky analyses "
+           "operating companies" if fund else ""))
 
 
 def list_quarterly(company, after: str, log=print) -> list:
@@ -423,6 +452,8 @@ def build_dataset(ticker: str, n_filings: int | None, cache_dir: str | None = No
         print(f"[*] Filing dump: {filing_cache.explain_reader()}")
     print("[*] Listing annual filings (10-K, 20-F, 40-F)")
     all_filings = list_annual(company)
+    if not all_filings:
+        raise no_annual_reports(ticker, company)
     if quarters is not None:
         latest = _report_date(all_filings[0]) if all_filings else ""
         quarterly = list_quarterly(company, latest)
@@ -801,6 +832,9 @@ def main(argv: list[str] | None = None) -> None:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     try:
         _run(args, n_filings, cache_dir, live_dir)
+    except NoAnnualReports as exc:
+        print(f"[!] {exc}")
+        sys.exit(NOT_ANALYSABLE_EXIT)
     finally:
         shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
 
