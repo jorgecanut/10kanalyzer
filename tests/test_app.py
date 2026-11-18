@@ -1081,7 +1081,7 @@ class CompanySearchTests(AppTestCase):
             found = self.search("targ")
         self.assertTrue(found["available"])
         self.assertEqual([item["ticker"] for item in found["items"]], ["TGT", "TRGP", "STAR"])
-        self.assertEqual(found["items"][0], {"ticker": "TGT", "name": "TARGET CORP", "exchange": "NYSE"})
+        self.assertEqual(found["items"][0], {"ticker": "TGT", "name": "TARGET CORP", "exchange": "NYSE", "cik": 27419})
         with unittest.mock.patch.object(app, "_download_companies", return_value=COMPANIES):
             # An exact ticker first, then tickers starting with it; case and punctuation ignored.
             self.assertEqual([i["ticker"] for i in self.search("tgt")["items"]], ["TGT", "TGTX"])
@@ -1135,3 +1135,56 @@ class NotAnalysableTests(AppTestCase):
         self.assertEqual(status["status"], "error")
         self.assertIn("files no 10-K", status["error"])
         self.assertNotIn("[!]", status["error"])
+
+
+def _submissions(sic, description, forms, entity="operating"):
+    return {"sic": sic, "sicDescription": description, "entityType": entity,
+            "filings": {"recent": {"form": forms}}}
+
+
+class CompanyCategoryTests(AppTestCase):
+    def test_categories(self):
+        cases = {
+            "5331": ("Retail-Variety Stores", ["10-K", "10-Q", "4"], "Retail-Variety Stores", False),
+            "6798": ("Real Estate Investment Trusts", ["10-K"], "REIT", True),
+            "6021": ("National Commercial Banks", ["10-K"], "Bank", True),
+            "6211": ("Security Brokers, Dealers & Flotation Companies", ["10-K"], "Broker / asset manager", True),
+            "6311": ("Life Insurance", ["10-K"], "Insurance", True),
+            "6770": ("Blank Checks", ["10-K"], "Blank check (SPAC)", True),
+            "6512": ("Operators of Nonresidential Buildings", ["10-K"], "Operators of Nonresidential Buildings", False),
+            "": ("", ["N-CSRS", "NPORT-P", "4"], "Fund: no company accounts", True),
+            "3674": ("Semiconductors & Related Devices", ["20-F", "6-K"], "Semiconductors & Related Devices", False),
+            "2834": ("Pharmaceutical Preparations", ["8-K", "S-1"], "No 10-K, 20-F or 40-F", True),
+        }
+        for sic, (description, forms, label, warn) in cases.items():
+            info = app._classify_company(_submissions(sic, description, forms))
+            self.assertEqual((info["category"], info["warn"]), (label, warn), sic)
+
+    def test_info_is_fetched_once_and_kept(self):
+        calls = []
+
+        def download(cik, identity):
+            calls.append((cik, identity))
+            return _submissions("6798", "Real Estate Investment Trusts", ["10-K"])
+        with unittest.mock.patch.object(app, "_download_submissions", side_effect=download):
+            first = self.client.get("/api/company-info", query_string={"ciks": "1705696,27419"}).get_json()
+            again = self.client.get("/api/company-info", query_string={"ciks": "1705696"}).get_json()
+        self.assertEqual(first["items"]["1705696"]["category"], "REIT")
+        self.assertTrue(first["items"]["1705696"]["warn"])
+        self.assertEqual(again["items"]["1705696"]["category"], "REIT")
+        self.assertEqual(sorted(c for c, _ in calls), [27419, 1705696])           # the second call used the copy
+        self.assertIn("ada@example.com", calls[0][1])
+
+    def test_unreachable_is_unknown_not_cached(self):
+        with unittest.mock.patch.object(app, "_download_submissions", side_effect=URLError("down")):
+            found = self.client.get("/api/company-info", query_string={"ciks": "27419"}).get_json()
+        self.assertEqual(found["items"], {})
+        with unittest.mock.patch.object(app, "_download_submissions",
+                                        return_value=_submissions("5331", "Retail-Variety Stores", ["10-K"])):
+            found = self.client.get("/api/company-info", query_string={"ciks": "27419"}).get_json()
+        self.assertEqual(found["items"]["27419"]["category"], "Retail-Variety Stores")
+
+    def test_suggestions_carry_the_cik(self):
+        with unittest.mock.patch.object(app, "_download_companies", return_value=COMPANIES):
+            items = self.client.get("/api/companies", query_string={"q": "tgt"}).get_json()["items"]
+        self.assertEqual(items[0]["cik"], 27419)

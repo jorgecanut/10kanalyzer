@@ -364,6 +364,7 @@ Routes:
 | `DELETE` | `/api/account` | `{"confirm":"DELETE","password"}` → deletes the account and all its data |
 | `DELETE` | `/api/data` | `{"confirm":"DELETE"}` → deletes all of the user's results; the account stays |
 | `GET` | `/api/companies?q=` | Up to 8 companies whose ticker or name matches `q` (2+ characters): `{"items":[{"ticker","name","exchange"}],"available":true}`; `available` false when SEC's company list could not be downloaded and no copy is kept |
+| `GET` | `/api/company-info?ciks=` | Up to 8 CIKs (comma-separated) → `{"items":{"<cik>":{"category","warn","sic"}}}`; a company SEC could not answer for is left out |
 | `POST` | `/api/run` | `{"ticker":"NFLX","filings":10,"fresh":false}` (`filings` 1–20 or `"max"`, the default) → queues a run, or `status: "cached"` |
 | `POST` | `/api/cancel` | Cancels the user's queued/running jobs; keeps all files |
 | `GET` | `/api/status/<ticker>` | queued / running / done / error + log tail |
@@ -430,6 +431,14 @@ server downloads the list at most once a day, with the signed-in account as
 the SEC contact (as runs do), into `data/company_tickers.json`, shared by
 every account; when SEC is unreachable the last copy is used, and with no
 copy the list says names cannot be searched.
+Each suggestion also shows the company's industry, from SEC's submissions file
+(its SIC code and its filings; one request per company shown, kept a month in
+`data/company_info.json`). It is **red** when Stocky's ratios do not fit the
+company: no 10-K, 20-F or 40-F among its filings (a fund's holdings reports,
+or none), a bank or credit company (SIC 6000–6199), a broker or asset manager
+(6200–6299), an insurer (6300–6499), an investment or holding office
+(6700–6799), a REIT (6798) or a blank check company (6770). Red is a warning:
+the company can still be run.
 Running a single ticker switches to Home; the run's progress is in the Charts
 tab and its log in the Logs tab.
 

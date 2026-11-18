@@ -164,8 +164,14 @@
   .toolbar { --ctl:40px; --ctl-icon:20px; }
   .tk-field { position:relative; flex:0 1 300px; width:300px; min-width:160px; }
   #ticker { width:100%; height:var(--ctl); border-color:var(--line-strong); }
-  .tk-results { right:auto; width:min(460px, calc(100vw - 32px)); }
+  .tk-results { right:auto; }
   .tk-results .cs-tag { min-width:52px; text-align:center; font-weight:600; color:var(--text); }
+  .tk-results { width:min(620px, calc(100vw - 32px)); }
+  .tk-cat { flex:none; max-width:42%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+            color:var(--muted); font-size:calc(var(--fs) * 13); }
+  .tk-cat.is-warn { padding:1px 8px; border-radius:999px; color:var(--badge-error-fg);
+                    background:var(--badge-error-bg); font-weight:600; }
+  .tk-cat.is-loading { color:var(--muted); }
   #filings { height:var(--ctl); padding:0 10px; border-color:var(--field-line); font-size:calc(var(--fs) * 17); }
   #run-btn { height:var(--ctl); min-width:96px; padding:0 22px; font-size:calc(var(--fs) * 17); }
   .toolbar .tabs button, .toolbar .nav-btn { height:var(--ctl); display:flex; align-items:center; padding:0 12px; }
