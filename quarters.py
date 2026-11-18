@@ -100,15 +100,28 @@ def _restated(facts: pd.DataFrame, fy: pd.Series, fy_end: str, currency, slot, p
     return issues
 
 
-def build(annual: pd.DataFrame, annual_sources: dict, entries: list[dict]) -> tuple[pd.DataFrame, list[dict]]:
+FLOW_STATEMENTS = ("income", "cashflow")      # TTM per line; the balance sheet is taken as it is
+
+
+def build(annual: pd.DataFrame, annual_sources: dict, entries: list[dict],
+          annual_statements: pd.DataFrame | None = None,
+          annual_facts: pd.DataFrame | None = None) -> tuple[pd.DataFrame, list[dict], dict]:
     """One row per 10-Q after the latest fiscal year in ``annual`` (financial_data.csv, millions).
 
     ``annual_sources`` is the latest fiscal year's ``extract_filing(...)["sources"]``;
-    ``entries`` the 10-Qs' dumps, oldest first. Returns the rows and their issues.
+    ``entries`` the 10-Qs' dumps, oldest first; ``annual_statements`` and
+    ``annual_facts`` the run's statements.csv and facts.csv rows. Returns the
+    rows, their issues and ``{"statements", "facts"}``: each slot's statement
+    lines (income and cash flow as TTM, balance sheet as at the quarter end)
+    and facts, with ``fiscal_year`` = the slot, for the valuation and charts.
     """
+    empty = {"statements": pd.DataFrame(), "facts": pd.DataFrame()}
     if annual is None or annual.empty or not entries:
-        return pd.DataFrame(), []
+        return pd.DataFrame(), [], empty
     import edgar_dashboard     # its run imports this module
+    import valuation
+    slot_statements: list[dict] = []
+    slot_facts: list[dict] = []
 
     fy = annual.sort_values("period_of_report").iloc[-1]
     fy_end = str(fy["period_of_report"])[:10]
@@ -209,6 +222,18 @@ def build(annual: pd.DataFrame, annual_sources: dict, entries: list[dict]) -> tu
             if np.isnan(value) and pd.notna(pd.to_numeric(fy.get(metric), errors="coerce")):
                 missing(metric, f"the fiscal year has it but this 10-Q's balance sheet at {period} does not")
 
+        # Diluted EPS: TTM the same way (the valuation's P/E is price / diluted EPS).
+        eps_year = valuation._fact_eps(annual_facts, fy_year)
+        eps_now = extract.extract_metric(facts, valuation.EPS_DILUTED, period, "duration", currency=currency,
+                                         min_days=min_days, max_days=max_days)
+        eps_before = extract.extract_metric(facts, valuation.EPS_DILUTED, prior_date, "duration", currency=currency,
+                                            min_days=min_days, max_days=max_days) if prior_date else np.nan
+        out["EpsDiluted__ytd"], out["EpsDiluted__ytd_prior"] = eps_now, eps_before
+        out["EpsDiluted"] = eps_year + eps_now - eps_before if not overdue else np.nan
+        slot_statements.extend(_slot_lines(annual_statements, fy_year, ytd, prior, slot, period, accession,
+                                           issues, overdue))
+        slot_facts.extend({**fact, "fiscal_year": slot} for fact in ytd.get("facts") or [])
+
         issues.extend(_restated(facts, fy, fy_end, currency, slot, period, accession))
         issues.extend(_filing_issues(ytd, slot, period, accession))
         rows.append(out)
@@ -217,7 +242,50 @@ def build(annual: pd.DataFrame, annual_sources: dict, entries: list[dict]) -> tu
     frame = pd.DataFrame(rows)
     if not frame.empty:
         frame = edgar_dashboard.derive(frame)
-    return frame, issues
+    return frame, issues, {"statements": pd.DataFrame(slot_statements), "facts": pd.DataFrame(slot_facts)}
+
+
+def _slot_lines(annual_statements: pd.DataFrame | None, fy_year: int, ytd: dict, prior: dict | None, slot,
+                period: str, accession, issues: list, overdue: bool) -> list[dict]:
+    """The 10-Q's statement lines for its slot: balance sheet as is, income and cash flow as TTM.
+
+    TTM per line = the fiscal year's line + YTD - the prior year's YTD, matched
+    by statement and concept. A YTD line that cannot be made a TTM (the 10-K or
+    the comparative lacks it) is left out and reported (info: most are detail
+    lines a condensed 10-Q merges; the key metrics have their own issues).
+    """
+    def by_concept(rows) -> dict:
+        out = {}
+        for row in rows or []:
+            out.setdefault((row.get("statement"), row.get("concept")), row)
+        return out
+
+    year_lines: dict = {}
+    if annual_statements is not None and not annual_statements.empty and "fiscal_year" in annual_statements.columns:
+        year_rows = annual_statements[pd.to_numeric(annual_statements["fiscal_year"], errors="coerce") == fy_year]
+        year_lines = by_concept(year_rows.to_dict("records"))
+    before = by_concept(prior["statements"] if prior else [])
+    lines, lost = [], []
+    for row in ytd.get("statements") or []:
+        if row.get("statement") not in FLOW_STATEMENTS:
+            if row.get("statement") == "balance":
+                lines.append({**row, "fiscal_year": slot})
+            continue
+        key = (row.get("statement"), row.get("concept"))
+        year_line, prior_line = year_lines.get(key), before.get(key)
+        values = [pd.to_numeric(line.get("value"), errors="coerce") if line else np.nan
+                  for line in (year_line, row, prior_line)]
+        if overdue or any(pd.isna(value) for value in values):
+            lost.append(str(row.get("concept")))
+            continue
+        lines.append({**row, "fiscal_year": slot, "value": float(values[0] + values[1] - values[2]),
+                      "ytd_value": float(values[1])})
+    for concept in lost:
+        issues.append(_issue("quarter_metric_missing", "info", slot, period, accession, concept=concept,
+                             detail="no TTM for this statement line: the 10-K's line or the 10-Q's prior-year "
+                                    "comparative for it was not found" if not overdue else
+                                    "no TTM: the 10-K is overdue"))
+    return lines
 
 
 def _compare_sources(issues: list, metric: str, year: str | None, now: str | None, before: str | None,

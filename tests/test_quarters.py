@@ -86,8 +86,9 @@ Q2 = dict(period_end="2026-08-01", start="2026-02-01", prior_end="2025-08-02", p
 
 def build(entries, frame=None, sources=None):
     with redirect_stdout(io.StringIO()):
-        return quarters.build(annual() if frame is None else frame, SOURCES if sources is None else sources,
-                              entries)
+        frame, issues, _ = quarters.build(annual() if frame is None else frame,
+                                          SOURCES if sources is None else sources, entries)
+        return frame, issues
 
 
 def kinds(issues, kind):
@@ -137,6 +138,32 @@ class TtmTests(unittest.TestCase):
         frame, _ = build([entry(**Q2)])
         self.assertAlmostEqual(frame.iloc[0]["StockholdersEquity"], 17.0)
         self.assertNotIn("StockholdersEquity__q", frame.columns)      # a balance has no three months
+
+    def test_slot_statement_lines_and_eps(self):
+        income = lambda value, end: {"statement": "income", "concept": "us-gaap_OperatingIncomeLoss",  # noqa: E731
+                                     "value": value, "period_of_report": end}
+        annual_lines = pd.DataFrame([{**income(5e6, FY_END), "fiscal_year": 2025}])
+        eps = [fact("us-gaap:EarningsPerShareDiluted", 1.6, "2026-02-01", "2026-08-01"),
+               fact("us-gaap:EarningsPerShareDiluted", 1.5, "2025-02-02", "2025-08-02")]
+        annual_facts = pd.DataFrame([{"concept": "us-gaap:EarningsPerShareDiluted", "fiscal_year": 2025, "value": 8.0,
+                                      "period_start": "2025-02-02", "period_end": FY_END, "is_dimensioned": False}])
+        q = entry(**Q2, extra=eps)
+        q["statements"] = {}
+        with redirect_stdout(io.StringIO()):
+            frame, issues, extra = quarters.build(annual(), SOURCES, [q], annual_lines, annual_facts)
+        self.assertAlmostEqual(frame.iloc[0]["EpsDiluted"], 8.0 + 1.6 - 1.5)
+        self.assertTrue(extra["facts"]["fiscal_year"].eq("Q2'26").all())
+
+    def test_slot_lines_ttm(self):
+        line = lambda statement, value: {"statement": statement, "concept": "x_Line", "value": value}  # noqa: E731
+        annual_lines = pd.DataFrame([{**line("cashflow", 30.0), "fiscal_year": 2025}])
+        ytd = {"statements": [line("cashflow", 16.0), line("balance", 9.0),
+                              {**line("cashflow", 4.0), "concept": "x_OnlyInQuarter"}]}
+        prior = {"statements": [line("cashflow", 14.0)]}
+        issues = []
+        lines = quarters._slot_lines(annual_lines, 2025, ytd, prior, "Q2'26", "2026-08-01", "q2", issues, False)
+        self.assertEqual([(l["statement"], l["value"]) for l in lines], [("cashflow", 32.0), ("balance", 9.0)])
+        self.assertEqual([i["concept"] for i in issues], ["x_OnlyInQuarter"])
 
     def test_no_quarters_ttm_is_fy(self):
         frame, issues = build([])

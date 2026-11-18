@@ -68,7 +68,7 @@ STAGING_DIRNAME = ".staging"
 # Yahoo was down, no statements) is removed, never left over from an earlier
 # run to pass for current. The chart files only count for a run with charts.
 RESULT_FILES = ("financial_data.csv", "data_issues.csv", "statements.csv", "facts.csv", "notes.csv",
-                "calc_check.csv", "evaluation.csv", "insider.json", "quarters.csv")
+                "calc_check.csv", "evaluation.csv", "insider.json", "quarters.csv", "valuation_today.json")
 CHART_FILES = (charts.SPEC_FILE, "data_quality.csv")
 
 # Resolved at runtime in main(): each ticker gets its own sub-directory so that
@@ -591,15 +591,17 @@ MAX_QUARTERS = 3
 QUARTERS_CSV = "quarters.csv"
 
 
-def quarter_step(df: pd.DataFrame, filed: dict, entries: list[dict],
-                 failures: list[dict]) -> tuple[pd.DataFrame, list[dict]]:
+def quarter_step(df: pd.DataFrame, filed: dict, entries: list[dict], failures: list[dict],
+                 statements: pd.DataFrame | None = None,
+                 facts: pd.DataFrame | None = None) -> tuple[pd.DataFrame, list[dict], dict]:
     """The quarters since the latest annual report (``quarters.py``), written to quarters.csv, and their issues.
 
     ``filed`` is the run's period -> {sources, ...}; ``entries`` the 10-Qs'
     dumps and ``failures`` the ones that could not be obtained.
     """
     latest = str(df.sort_values("period_of_report").iloc[-1]["period_of_report"]) if not df.empty else ""
-    frame, issues = quarters.build(df, (filed.get(latest) or {}).get("sources") or {}, entries)
+    frame, issues, extra = quarters.build(df, (filed.get(latest) or {}).get("sources") or {}, entries,
+                                          statements, facts)
     for failure in failures:
         issues.append(data_issues._issue("quarter_unread", "warning", fiscal_year=None, period=failure.get("period"),
                                          form=failure.get("form") or QUARTERLY_FORM, accession=failure.get("accession"),
@@ -610,11 +612,11 @@ def quarter_step(df: pd.DataFrame, filed: dict, entries: list[dict],
                                                 f"({latest}): the next 10-K is overdue"))
     if frame.empty:
         print("[*] Quarters: none since the latest annual report" + (f" ({latest})" if latest else ""))
-        return frame, issues
+        return frame, issues, extra
     frame.to_csv(os.path.join(OUTPUT_DIR, QUARTERS_CSV), index=False)
     print(f"[+] Quarters: {', '.join(frame['slot'])} (TTM to {frame.iloc[-1]['period_end']}); "
           f"wrote {QUARTERS_CSV}")
-    return frame, issues
+    return frame, issues, extra
 
 
 def publish(staging: str, live: str, with_charts: bool) -> None:
@@ -824,7 +826,8 @@ def _run(args, n_filings: int | None, cache_dir: str | None, live_dir: str) -> N
     raw, statements, facts, checks = build_dataset(TICKER, n_filings, cache_dir, on_filing=on_filing,
                                                    quarters=quarter_entries, quarter_failures=quarter_failures)
     df = clean_and_derive(raw)
-    quarter_frame, quarter_issues = quarter_step(df, filed, quarter_entries, quarter_failures)
+    quarter_frame, quarter_issues, quarter_extra = quarter_step(df, filed, quarter_entries, quarter_failures,
+                                                                statements, facts)
     quarter_entries.clear()
 
     df.to_csv(DATA_CSV, index=False)
@@ -863,13 +866,25 @@ def _run(args, n_filings: int | None, cache_dir: str | None, live_dir: str) -> N
             print(f"[*] Valuation: {note}")
         evaluation = valuation.build_evaluation(TICKER, df, statements, facts, history,
                                                 price_scale=scale, price_currency=price_currency,
-                                                splits=splits, issues=valuation_issues)
+                                                splits=splits, issues=valuation_issues,
+                                                quarters=quarter_frame,
+                                                quarter_statements=quarter_extra.get("statements"),
+                                                quarter_facts=quarter_extra.get("facts"))
         if evaluation.empty:
             print("[!] valuation skipped: no fiscal years to value")
             valuation_issues.append(skipped("no fiscal years to value"))
         else:
             valuation.write_evaluation(TICKER, evaluation, OUTPUT_DIR)
-            print(f"[+] Wrote valuation data ({len(evaluation)} years)")
+            print(f"[+] Wrote valuation data ({len(evaluation)} rows: fiscal years"
+                  + (f" and {len(quarter_frame)} quarters" if not quarter_frame.empty else "") + ")")
+            # Today's numbers for the Home card: the latest price over the newest TTM.
+            all_facts = pd.concat([frame for frame in (facts, quarter_extra.get("facts")) if frame is not None
+                                   and not frame.empty], ignore_index=True) if not facts.empty else facts
+            today = valuation.build_today(evaluation, valuation.fetch_quote(TICKER),
+                                          valuation.latest_shares(all_facts), history, valuation_issues)
+            valuation.write_today(today, OUTPUT_DIR)
+            print(f"[+] Today: price {today.get('price')} ({today.get('price_source')}, {today.get('price_time')}), "
+                  f"earnings {today.get('earnings_period')}, P/E {today.get('pe')}")
     except Exception as exc:  # noqa: BLE001 - optional artifact must never abort
         print(f"[!] valuation skipped: {type(exc).__name__}: {exc}")
         valuation_issues = [skipped(f"{type(exc).__name__}: {exc}")]
