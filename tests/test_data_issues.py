@@ -224,3 +224,32 @@ class StatementProblemTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QuarterSlotWarningTests(unittest.TestCase):
+    def test_chart_warnings_match_slots(self):
+        issues = [
+            {"kind": "quarter_metric_missing", "severity": "warning", "fiscal_year": "Q2'26", "concept": "Revenues",
+             "detail": "b"},
+            {"kind": "quarter_metric_missing", "severity": "warning", "fiscal_year": "Q3'25", "concept": "Revenues",
+             "detail": "a"},
+            {"kind": "missing_metric", "severity": "warning", "fiscal_year": "2025", "concept": "Revenues",
+             "detail": "c"},          # read back from data_issues.csv: a year is text
+            {"kind": "quarter_metric_missing", "severity": "warning", "fiscal_year": "Q1'27", "concept": "Revenues",
+             "detail": "not drawn"},
+        ]
+        warnings = data_issues.chart_warnings({"Revenues"}, [2024, 2025, "Q3'25", "Q2'26"], issues)
+        by_kind = {w["kind"]: w for w in warnings}
+        self.assertEqual(by_kind["quarter_metric_missing"]["years"], ["Q3'25", "Q2'26"])
+        self.assertEqual(by_kind["missing_metric"]["years"], [2025])
+
+    def test_slot_order(self):
+        self.assertEqual(sorted(["Q1'27", 2025, "Q3'26", 2024], key=data_issues.slot_order),
+                         [2024, 2025, "Q3'26", "Q1'27"])
+
+    def test_titles_cover_quarter_kinds(self):
+        page = (Path(__file__).resolve().parent.parent / "static" / "app.js").read_text(encoding="utf-8")
+        for kind in ("quarter_unread", "quarter_metric_missing", "quarter_concept_differs", "quarter_restated",
+                     "quarter_label_mismatch"):
+            self.assertIn(kind, data_issues.TITLES)
+            self.assertIn(f"{kind}:", page)

@@ -210,6 +210,7 @@ def build(annual: pd.DataFrame, annual_sources: dict, entries: list[dict]) -> tu
                 missing(metric, f"the fiscal year has it but this 10-Q's balance sheet at {period} does not")
 
         issues.extend(_restated(facts, fy, fy_end, currency, slot, period, accession))
+        issues.extend(_filing_issues(ytd, slot, period, accession))
         rows.append(out)
         previous = out
 
@@ -228,3 +229,24 @@ def _compare_sources(issues: list, metric: str, year: str | None, now: str | Non
         issues.append(_issue("quarter_concept_differs", "warning", slot, period, accession, concept=metric,
                              detail="the TTM adds values read from different tags: "
                                     + ", ".join(f"{where} {source}" for where, source in named.items())))
+
+
+def _filing_issues(ytd: dict, slot, period: str, accession) -> list[dict]:
+    """The 10-Q's own totals that do not add up and statements not read, as for a 10-K."""
+    import calc_check
+
+    issues = []
+    for check in ytd.get("checks") or []:
+        if check["status"] != calc_check.STATUS_MISMATCH:
+            continue
+        issues.append(_issue("check_mismatch", "warning" if check["kind"] == "statement" else "info", slot, period,
+                             accession, statement=check["statement"], concept=check["concept"],
+                             label=check["label"], reported=check["reported"], computed=check["computed"],
+                             difference=check["difference"],
+                             detail=check.get("hint") or f"{check['parts']} parts; tolerance {check['tolerance']:g}"))
+    for problem in ytd.get("statement_problems") or []:
+        name = data_issues.STATEMENT_NAMES.get(problem["statement"], problem["statement"])
+        issues.append(_issue("statement_unread", "warning", slot, period, accession, statement=name,
+                             concept=data_issues.STATEMENT_CONCEPTS.get(problem["statement"], problem["statement"]),
+                             detail=f"no line of the 10-Q's {name} was read: {problem['detail']}"))
+    return issues

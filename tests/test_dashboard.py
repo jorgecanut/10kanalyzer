@@ -283,3 +283,37 @@ class ObtainQuartersTest(unittest.TestCase):
         self.assertEqual(failures[0]["accession"], "q1")
         self.assertEqual(failures[0]["period"], "2026-05-02")
         self.assertIn("503", failures[0]["error"])
+
+
+class QuarterStepTest(unittest.TestCase):
+    def test_run_writes_quarters_csv_and_reports(self):
+        frame = pd.DataFrame([{"slot": "Q2'26", "label": "TTM Q2'26", "period_end": "2026-08-01", "Revenues": 1.0}])
+        issue = {"kind": "quarter_metric_missing", "severity": "warning", "fiscal_year": "Q2'26"}
+        with tempfile.TemporaryDirectory() as out, \
+                unittest.mock.patch.object(edgar_dashboard, "OUTPUT_DIR", out), \
+                unittest.mock.patch("quarters.build", return_value=(frame, [issue])) as build, \
+                redirect_stdout(io.StringIO()) as log:
+            df = pd.DataFrame([{"period_of_report": "2026-01-31", "fiscal_year": 2025}])
+            filed = {"2026-01-31": {"sources": {"Revenues": "Revenues"}}}
+            failures = [{"accession": "q1", "form": "10-Q", "period": "2026-05-02", "error": "ConnectionError: 503"}]
+            got, issues = edgar_dashboard.quarter_step(df, filed, [{"x": 1}] * 4, failures)
+            written = pd.read_csv(Path(out) / "quarters.csv")
+        build.assert_called_once()
+        self.assertEqual(build.call_args.args[1], {"Revenues": "Revenues"})
+        self.assertEqual(list(written["slot"]), ["Q2'26"])
+        kinds = [i["kind"] for i in issues]
+        self.assertIn("quarter_metric_missing", kinds)
+        self.assertIn("quarter_unread", kinds)           # the download that failed
+        self.assertIn("overdue_10k", kinds)              # 5 10-Qs after the 10-K
+        self.assertIn("Quarters: Q2'26", log.getvalue())
+
+    def test_no_quarters_says_so(self):
+        with tempfile.TemporaryDirectory() as out, \
+                unittest.mock.patch.object(edgar_dashboard, "OUTPUT_DIR", out), \
+                redirect_stdout(io.StringIO()) as log:
+            df = pd.DataFrame([{"period_of_report": "2026-01-31", "fiscal_year": 2025}])
+            got, issues = edgar_dashboard.quarter_step(df, {}, [], [])
+            self.assertFalse((Path(out) / "quarters.csv").exists())
+        self.assertTrue(got.empty)
+        self.assertEqual(issues, [])
+        self.assertIn("none since the latest annual report", log.getvalue())

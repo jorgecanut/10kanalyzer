@@ -3317,6 +3317,9 @@ const MK_KINDS = {
   analysis_failed: 'Filing unreadable', dump_part_failed: 'Part of a filing unread', company_failed: 'Company failed',
   overdue_10k: '10-K overdue', statement_unread: 'Statement not read', valuation_input_missing: 'Valuation input missing',
   valuation_assumed: 'Valuation uses an assumption', valuation_skipped: 'Valuation not computed',
+  quarter_unread: '10-Q not read', quarter_metric_missing: 'Quarter metric not read',
+  quarter_concept_differs: 'Quarter read from another tag', quarter_restated: 'Restated in the 10-Q',
+  quarter_label_mismatch: 'Quarter label disagrees',
 };
 const MK_RESULTS = { ok: 'OK', partial: 'Partial', failed: 'Failed', no_filings: 'No annual reports', no_xbrl: 'No XBRL' };
 const MK_VIEWS = { issues: 'Issues', companies: 'Companies', log: 'Log' };
