@@ -317,3 +317,41 @@ class QuarterStepTest(unittest.TestCase):
         self.assertTrue(got.empty)
         self.assertEqual(issues, [])
         self.assertIn("none since the latest annual report", log.getvalue())
+
+
+class _AnyForm:
+    def __init__(self, form):
+        self.form, self.report_date, self.accession_no = form, "2026-06-30", f"x-{form}"
+
+
+class _Fund:
+    """A closed-end fund (GGT): fund reports only, no 10-K, 20-F or 40-F."""
+    name, cik = "GABELLI MULTIMEDIA TRUST INC.", 921671
+
+    def get_filings(self, form=None, amendments=True):
+        everything = [_AnyForm(f) for f in ["N-CSR", "N-CSRS", "N-CEN", "N-CSR", "N-PX", "N-CSRS", "N-PORT"]]
+        return everything if form is None else [f for f in everything if f.form == form]
+
+
+class NoAnnualReportTests(unittest.TestCase):
+    def test_a_fund_stops_with_what_it_files_instead(self):
+        with unittest.mock.patch.object(edgar_dashboard, "Company", return_value=_Fund()), \
+                redirect_stdout(io.StringIO()) as log:
+            with self.assertRaises(edgar_dashboard.NoAnnualReports) as raised:
+                edgar_dashboard.build_dataset("GGT", None, None, quarters=[], quarter_failures=[])
+        message = str(raised.exception)
+        self.assertIn("no 10-K, 20-F or 40-F", message)
+        self.assertIn("N-CSR", message)
+        self.assertIn("fund", message)
+        self.assertNotIn("10-Qs after", log.getvalue())          # no pointless 10-Q listing
+
+    def test_main_reports_it_without_a_traceback(self):
+        with tempfile.TemporaryDirectory() as out, \
+                unittest.mock.patch.object(edgar_dashboard, "_run",
+                                           side_effect=edgar_dashboard.NoAnnualReports("GGT files no 10-K")), \
+                unittest.mock.patch.object(edgar_dashboard, "_start_insiders", return_value=None), \
+                redirect_stdout(io.StringIO()) as log, self.assertRaises(SystemExit) as stopped:
+            edgar_dashboard.main(["--ticker", "GGT", "--output-dir", out])
+        self.assertEqual(stopped.exception.code, edgar_dashboard.NOT_ANALYSABLE_EXIT)
+        self.assertIn("[!] GGT files no 10-K", log.getvalue())
+        self.assertNotIn("Traceback", log.getvalue())

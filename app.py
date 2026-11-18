@@ -756,6 +756,14 @@ def _worker(key: str, filings: int | str, job_id: str) -> None:
                     log.write(f"[{_now()}] cancelled by user; files kept\n")
                     log.flush()
             status = "done" if code == 0 else "error"
+            if code == NOT_ANALYSABLE_EXIT:
+                # The company has nothing a run can read (a fund's reports, no
+                # 10-K): the run's own "[!]" line is the reason, not a crash.
+                reason = _last_warning(log_path)
+                with JOBS_LOCK:
+                    job = JOBS.get(key)
+                    if job and job.get("id") == job_id and reason:
+                        job["error"] = reason
         except Exception as exc:  # noqa: BLE001 - surface any launch failure in the UI
             status, code = "error", -1
             message = f"Failed to launch dashboard: {type(exc).__name__}: {exc}"
@@ -781,7 +789,7 @@ def _worker(key: str, filings: int | str, job_id: str) -> None:
                     job.update(status="cancelled", finished=_now(), returncode=code)
                 else:
                     job.update(status=status, finished=_now(), returncode=code)
-                    if status == "error":
+                    if status == "error" and code != NOT_ANALYSABLE_EXIT:
                         _diag(uid, "pipeline", "error", f"{ticker} run failed (exit {code})",
                               ticker=ticker, filings=filings, charts=with_charts,
                               error=job.get("error"), log_tail=_log_tail(ticker, 60, uid))
@@ -794,6 +802,22 @@ def _worker(key: str, filings: int | str, job_id: str) -> None:
                         JOBS[key] = _new_job(uid, ticker, followup_id, charts=True)
     if followup:
         threading.Thread(target=_worker, args=(key, followup, followup_id), daemon=True).start()
+
+
+# edgar_dashboard.NOT_ANALYSABLE_EXIT: the company has no report a run can read.
+NOT_ANALYSABLE_EXIT = 20
+
+
+def _last_warning(log_path: Path) -> str:
+    """The last "[!]" line of a run's log, without its time and marker ("" when none)."""
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines):
+        if "[!]" in line:
+            return line.split("[!]", 1)[1].strip()
+    return ""
 
 
 def _new_job(uid: str, ticker: str, job_id: str, charts: bool) -> dict:

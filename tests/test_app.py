@@ -38,6 +38,10 @@ FAKE_DASHBOARD = textwrap.dedent("""
     args = sys.argv[1:]
     time.sleep(0.3)
     out, ticker = args[args.index("--output-dir") + 1], args[args.index("--ticker") + 1]
+    if ticker == "FUND":
+        print("[*] Looking up FUND")
+        print("[!] FUND (A FUND TRUST) files no 10-K, 20-F or 40-F; its filings are an investment fund's")
+        sys.exit(20)
     if "--no-charts" not in args:
         open(os.path.join(out, ticker, "charts.json"), "w").write(%r)
     print("ARGS", " ".join(args))
@@ -1121,3 +1125,13 @@ class CompanySearchTests(AppTestCase):
         with unittest.mock.patch.object(app, "_download_companies", side_effect=URLError("down")):
             found = self.search("targ")
         self.assertEqual(found, {"items": [], "available": False})
+
+
+class NotAnalysableTests(AppTestCase):
+    def test_a_fund_run_ends_with_its_reason_as_the_error(self):
+        self.client.post("/api/run", json={"ticker": "FUND", "filings": 3})
+        self.wait_idle("FUND")
+        status = self.client.get("/api/status/FUND").get_json()
+        self.assertEqual(status["status"], "error")
+        self.assertIn("files no 10-K", status["error"])
+        self.assertNotIn("[!]", status["error"])

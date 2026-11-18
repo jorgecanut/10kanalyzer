@@ -256,6 +256,12 @@ P/E is price over **diluted EPS** (on Yahoo's split basis, like the price) when
 the filing reports it; otherwise market cap over net income, reported as
 `valuation_assumed` (`EarningsPerShareDiluted`).
 
+A company that files no 10-K, 20-F or 40-F (a closed-end fund such as GGT
+files N-CSR and N-PORT reports: holdings, not a business's accounts) cannot be
+analysed: the run stops with a plain message naming what it files instead,
+exit code 20, which the page shows as the run's error (no traceback, and no
+pipeline diagnostic, since nothing broke).
+
 **The quarters since the latest 10-K.** A run also reads the 10-Qs whose
 period ends after the latest annual report (0–3; more only when the 10-K is
 overdue, reported as `overdue_10k`); `--filings` limits annual reports only.
