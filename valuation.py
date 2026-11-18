@@ -35,6 +35,7 @@ from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 import numpy as np
 import pandas as pd
 
+import extract
 from extract import snap_ratio
 
 # --------------------------------------------------------------------------- #
@@ -58,7 +59,17 @@ OUTPUT_COLUMNS = [
     # Money columns are in ``currency``; ``price`` is as quoted, in
     # ``price_currency``, per traded share (an ADS for foreign filers).
     "currency", "price_currency",
+    # The inputs today's record (``build_today``) needs, and how the P/E was made:
+    # ``pe_basis`` is ``diluted_eps`` (price / diluted EPS) or ``net_income``
+    # (market cap / net income, when no diluted EPS was read). ``eps_diluted``
+    # is on Yahoo's split basis. ``z_partial`` is the Z-score without its
+    # market-value term. A quarter slot's ``fiscal_year`` is its label ("Q2'26").
+    "period_end", "eps_diluted", "pe_basis", "enterprise_value", "ebit", "net_income", "fcf",
+    "total_liabilities", "z_partial", "price_scale",
 ]
+# Diluted earnings per share, US GAAP then IFRS.
+EPS_DILUTED = ("EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted", "DilutedEarningsLossPerShare",
+               "BasicAndDilutedEarningsLossPerShare")
 # NICE_RATIOS and snap_ratio live in extract.py: the filing cache keeps the ratio they give.
 # The usual ratios only, for the rough Yahoo estimate (Toyota's 11.5 is 10, not 12).
 COMMON_RATIOS = (0.1, 0.2, 0.25, 0.5, 1, 2, 3, 4, 5, 10, 20, 25, 50, 100)
@@ -217,9 +228,13 @@ def fetch_quote(ticker: str) -> dict | None:
             price = closes[-1] if closes else None
         if price is None:
             return None
+        stamp = meta.get("regularMarketTime")
+        when = (dt.datetime.fromtimestamp(int(stamp), dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                if stamp else None)
         return {
             "price": float(price),
             "currency": str(meta.get("currency") or "USD"),
+            "time": when,
         }
     except Exception:  # noqa: BLE001 - best effort
         return None
@@ -407,7 +422,8 @@ def _period_dates(data: pd.DataFrame, statements: pd.DataFrame) -> dict[int, pd.
             if pd.notna(date) and int(year) not in mapping:
                 mapping[int(year)] = date
     for year in data["fiscal_year"]:
-        mapping.setdefault(int(year), pd.Timestamp(f"{int(year)}-12-31"))
+        if int(year) not in mapping:
+            mapping[int(year)] = pd.Timestamp(f"{int(year)}-12-31")
     return mapping
 
 
@@ -790,8 +806,17 @@ def build_evaluation(
     price_currency: str | None = None,
     splits: list[dict] | None = None,
     issues: list[dict] | None = None,
+    quarters: pd.DataFrame | None = None,
+    quarter_statements: pd.DataFrame | None = None,
+    quarter_facts: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """One row per fiscal year with valuation ratios and quality scores.
+    """One row per fiscal year with valuation ratios and quality scores, then one per quarter slot.
+
+    ``quarters`` (``quarters.build``: TTM flows, quarter-end balances, a
+    ``slot`` per row) adds a row per quarter after the fiscal years, priced at
+    the quarter end by the same rules; ``quarter_statements`` and
+    ``quarter_facts`` are its statement lines and facts, ``fiscal_year`` = the
+    slot. A slot has no F-score (two full years) and no P/E percentile.
 
     ``price_scale`` turns a year's quoted price into a price per ordinary
     share in the reporting currency (see ``market_scale``); a year missing
@@ -818,6 +843,24 @@ def build_evaluation(
         .drop_duplicates("fiscal_year", keep="last")
         .reset_index(drop=True)
     )
+    # Quarter slots ride through the same code under a sort key after every
+    # fiscal year (fiscal year x 10 + quarter); the output gives back their label.
+    slots: dict[int, str] = {}
+    if quarters is not None and not quarters.empty:
+        keys = {row["slot"]: int(row["fiscal_year"]) * 10 + int(row["quarter"])
+                for row in quarters.to_dict("records")}
+        slots = {key: slot for slot, key in keys.items()}
+        rows_q = quarters.assign(fiscal_year=quarters["slot"].map(keys))
+        data = pd.concat([data, rows_q[[c for c in rows_q.columns if not str(c).startswith(("slot", "label"))]]],
+                         ignore_index=True)
+
+        def keyed(frame: pd.DataFrame | None, base: pd.DataFrame) -> pd.DataFrame:
+            if frame is None or frame.empty:
+                return base
+            frame = frame.assign(fiscal_year=frame["fiscal_year"].map(keys))
+            return frame if base is None or base.empty else pd.concat([base, frame], ignore_index=True)
+        statements = keyed(quarter_statements, statements)
+        facts = keyed(quarter_facts, facts)
     years = [int(year) for year in data["fiscal_year"]]
     currency = _reporting_currency(data)
 
@@ -893,7 +936,7 @@ def build_evaluation(
     def note(kind: str, severity: str, year: int, concept: str, detail: str) -> None:
         if issues is not None:
             when = period_dates.get(year)
-            issues.append({"kind": kind, "severity": severity, "fiscal_year": year,
+            issues.append({"kind": kind, "severity": severity, "fiscal_year": slots.get(year, year),
                            "period": None if when is None or pd.isna(when) else str(when.date()),
                            "concept": concept, "label": None, "detail": detail})
 
@@ -967,7 +1010,21 @@ def build_evaluation(
                 note("valuation_assumed", "info", year, "LongTermDebt",
                      "no long-term debt was read, so enterprise value adds none (right only if there is none)")
 
-        pe = _safe_div(market_cap, net_income_value, positive_only=True)
+        eps = _finite(_numeric(data, "EpsDiluted").iloc[position]) if "EpsDiluted" in data.columns else np.nan
+        if not np.isfinite(eps):
+            eps = _fact_eps(facts, year)
+        raw_count, count = _finite(raw_shares.get(year, np.nan)), _finite(share_counts.get(year, np.nan))
+        if np.isfinite(eps) and np.isfinite(raw_count) and np.isfinite(count) and count > 0:
+            eps = eps * raw_count / count            # on Yahoo's split basis, like the price
+        if np.isfinite(eps):
+            pe_basis = "diluted_eps"
+            pe = _safe_div(share_price, eps, positive_only=True)
+        else:
+            pe_basis = "net_income"
+            pe = _safe_div(market_cap, net_income_value, positive_only=True)
+            note("valuation_assumed", "info", year, "EarningsPerShareDiluted",
+                 "no diluted EPS was read, so P/E is market cap / net income (year-end shares, not the "
+                 "weighted diluted count)")
         pb = _safe_div(market_cap, equity_value, positive_only=True)
         pfcf = _safe_div(market_cap, fcf_value, positive_only=True)
         ev_ebit = _safe_div(enterprise_value, ebit_value, positive_only=True)
@@ -986,6 +1043,7 @@ def build_evaluation(
 
         # Altman Z-score (public-manufacturer form).
         z_score = np.nan
+        z_partial = np.nan
         retained_value = _finite(retained_earnings.iloc[position])
         if (
             np.isfinite(assets_value) and assets_value > 0
@@ -998,13 +1056,13 @@ def build_evaluation(
             and np.isfinite(revenue_value)
         ):
             working_capital = current_assets_value - current_liabilities_value
-            z_score = (
+            z_partial = (
                 1.2 * working_capital / assets_value
                 + 1.4 * retained_value / assets_value
                 + 3.3 * ebit_value / assets_value
-                + 0.6 * market_cap / liabilities_value
                 + 1.0 * revenue_value / assets_value
             )
+            z_score = z_partial + 0.6 * market_cap / liabilities_value
 
         accruals_ratio = np.nan
         if np.isfinite(assets_value) and assets_value > 0:
@@ -1025,8 +1083,19 @@ def build_evaluation(
             "revenue": revenue_value,
         }
 
+        when = period_dates.get(year)
         rows.append({
             "fiscal_year": year,
+            "period_end": None if when is None or pd.isna(when) else str(when.date()),
+            "eps_diluted": eps,
+            "pe_basis": pe_basis,
+            "enterprise_value": enterprise_value,
+            "ebit": ebit_value,
+            "net_income": net_income_value,
+            "fcf": fcf_value,
+            "total_liabilities": liabilities_value,
+            "z_partial": z_partial,
+            "price_scale": share_price / price if np.isfinite(share_price) and np.isfinite(price) and price else np.nan,
             "price": price,
             "shares": shares,
             "market_cap": market_cap,
@@ -1040,7 +1109,7 @@ def build_evaluation(
             "fcf_yield": fcf_yield,
             "pe_median_hist": np.nan,
             "pe_percentile": np.nan,
-            "f_score": _f_score(year, metrics, share_counts),
+            "f_score": np.nan if year in slots else _f_score(year, metrics, share_counts),
             "z_score": z_score,
             "accruals_ratio": accruals_ratio,
             "currency": currency,
@@ -1048,17 +1117,148 @@ def build_evaluation(
         })
 
     evaluation = pd.DataFrame(rows, columns=OUTPUT_COLUMNS)
-    pe_series = pd.to_numeric(evaluation["pe"], errors="coerce").dropna()
+    evaluation["fiscal_year"] = evaluation["fiscal_year"].astype(int)
+    evaluation = evaluation.sort_values("fiscal_year").reset_index(drop=True)
+    is_year = ~evaluation["fiscal_year"].isin(list(slots))
+    pe_series = pd.to_numeric(evaluation.loc[is_year, "pe"], errors="coerce").dropna()
     if len(pe_series):
         evaluation["pe_median_hist"] = float(pe_series.median())
-        if len(pe_series) >= 3:
-            for index, value in evaluation["pe"].items():
-                if pd.notna(value):
-                    evaluation.at[index, "pe_percentile"] = (
-                        (pe_series < value).sum() + 0.5 * (pe_series == value).sum()
-                    ) / len(pe_series) * 100.0
-    evaluation["fiscal_year"] = evaluation["fiscal_year"].astype(int)
-    return evaluation.sort_values("fiscal_year").reset_index(drop=True)
+        for index, value in evaluation.loc[is_year, "pe"].items():
+            evaluation.at[index, "pe_percentile"] = pe_percentile(value, pe_series)
+    evaluation["fiscal_year"] = evaluation["fiscal_year"].map(lambda year: slots.get(int(year), int(year))).astype(object)
+    return evaluation
+
+
+def pe_percentile(value, history: pd.Series) -> float:
+    """Where ``value`` sits among the fiscal years' P/Es (0-100); nan with fewer than three."""
+    history = pd.to_numeric(history, errors="coerce").dropna()
+    value = _finite(value)
+    if len(history) < 3 or not np.isfinite(value):
+        return np.nan
+    return float(((history < value).sum() + 0.5 * (history == value).sum()) / len(history) * 100.0)
+
+
+def _fact_eps(facts: pd.DataFrame, year: int) -> float:
+    """The year's diluted EPS from its facts: a dimension-free fact spanning the whole year."""
+    if facts is None or facts.empty or not {"concept", "value"} <= set(facts.columns):
+        return np.nan
+    frame = facts[pd.to_numeric(facts.get("fiscal_year"), errors="coerce") == year] \
+        if "fiscal_year" in facts.columns else facts
+    if frame.empty:
+        return np.nan
+    if "is_dimensioned" in frame.columns:
+        frame = frame[~frame["is_dimensioned"].astype(str).str.lower().isin(["true", "1"])]
+    names = frame["concept"].astype(str).str.split(":").str[-1]
+    start = pd.to_datetime(frame.get("period_start"), errors="coerce")
+    end = pd.to_datetime(frame.get("period_end"), errors="coerce")
+    whole_year = (end - start).dt.days >= extract.ANNUAL_MIN_DAYS
+    for concept in EPS_DILUTED:
+        hit = pd.to_numeric(frame.loc[(names == concept) & whole_year, "value"], errors="coerce").dropna()
+        if not hit.empty:
+            return float(hit.iloc[0])
+    return np.nan
+
+
+TODAY_FILE = "valuation_today.json"
+
+
+def latest_shares(facts: pd.DataFrame) -> tuple[float, str] | None:
+    """The newest cover-page share count (``dei:EntityCommonStockSharesOutstanding``) and its date."""
+    if facts is None or facts.empty or not {"concept", "value"} <= set(facts.columns):
+        return None
+    frame = facts[facts["concept"].astype(str).str.endswith("EntityCommonStockSharesOutstanding")]
+    if "is_dimensioned" in frame.columns:
+        frame = frame[~frame["is_dimensioned"].astype(str).str.lower().isin(["true", "1"])]
+    frame = frame.assign(_when=pd.to_datetime(frame.get("period_instant"), errors="coerce"),
+                         _value=pd.to_numeric(frame["value"], errors="coerce")).dropna(subset=["_when", "_value"])
+    if frame.empty:
+        return None
+    # Several share classes on one date: their sum is the company's count.
+    when = frame["_when"].max()
+    return float(frame.loc[frame["_when"] == when, "_value"].sum()), str(when.date())
+
+
+def build_today(evaluation: pd.DataFrame, quote: dict | None, shares: tuple[float, str] | None,
+                price_history: list[dict], issues: list[dict] | None = None) -> dict:
+    """Today's valuation: the latest price over the newest TTM (or fiscal year), for the Home card.
+
+    Fundamentals are the last row of ``evaluation`` (the newest quarter slot,
+    else the latest fiscal year): EBIT, net income, FCF, diluted EPS, net debt
+    and the Z-score's other terms. The price is ``quote`` (Yahoo, now); without
+    one, the last monthly close, and an issue says so. Shares are the newest
+    cover-page count (``latest_shares``), else the row's. The F-score is the
+    latest fiscal year's; the P/E percentile compares with the fiscal years' P/Es.
+    """
+    def note(concept: str, detail: str) -> None:
+        if issues is not None:
+            issues.append({"kind": "valuation_assumed", "severity": "warning", "fiscal_year": None,
+                           "period": None, "concept": concept, "label": None, "detail": detail})
+
+    if evaluation is None or evaluation.empty:
+        return {}
+    last = evaluation.iloc[-1]
+    is_year = evaluation["fiscal_year"].map(lambda v: isinstance(v, (int, np.integer)) or str(v).isdigit())
+    years = evaluation[is_year]
+    fy = years.iloc[-1] if not years.empty else None
+    slot = str(last["fiscal_year"])
+    earnings_period = f"FY{slot}" if slot.isdigit() else f"TTM {slot}"
+
+    if quote and np.isfinite(_finite(quote.get("price"))):
+        price, price_time, source = float(quote["price"]), quote.get("time"), "quote"
+    else:
+        bars = [bar for bar in price_history or [] if np.isfinite(_finite(bar.get("close")))]
+        price = float(bars[-1]["close"]) if bars else np.nan
+        price_time = bars[-1]["date"] if bars else None
+        source = "month_close"
+        note("Price", "today's quote could not be fetched, so the card uses the last monthly close"
+             + (f" ({price_time})" if price_time else " (none either: price-based numbers are blank)"))
+
+    count, shares_date = (shares if shares else (_finite(last.get("shares")), last.get("period_end")))
+    scale = _finite(last.get("price_scale"))
+    share_price = price * (scale if np.isfinite(scale) else 1.0)
+    market_cap = share_price * count / USD_TO_MILLIONS if np.isfinite(share_price) and np.isfinite(_finite(count)) \
+        else np.nan
+    net_debt = _finite(last.get("enterprise_value")) - _finite(last.get("market_cap"))
+    enterprise_value = market_cap + net_debt if np.isfinite(net_debt) else np.nan
+    ebit, fcf = _finite(last.get("ebit")), _finite(last.get("fcf"))
+    if last.get("pe_basis") == "diluted_eps":
+        pe = _safe_div(share_price, _finite(last.get("eps_diluted")), positive_only=True)
+    else:
+        pe = _safe_div(market_cap, _finite(last.get("net_income")), positive_only=True)
+    z_partial, liabilities = _finite(last.get("z_partial")), _finite(last.get("total_liabilities"))
+    z_score = z_partial + 0.6 * market_cap / liabilities if np.isfinite(z_partial) and liabilities and \
+        np.isfinite(liabilities) else np.nan
+
+    def clean(value):
+        value = _finite(value)
+        return float(value) if np.isfinite(value) else None
+
+    f_year = fy["fiscal_year"] if fy is not None else None
+    return {
+        "price": clean(price), "price_time": price_time, "price_source": source,
+        "price_currency": str(last.get("price_currency") or "USD"), "currency": str(last.get("currency") or "USD"),
+        "shares": clean(count), "shares_date": None if shares_date is None else str(shares_date),
+        "market_cap": clean(market_cap), "enterprise_value": clean(enterprise_value),
+        "earnings_period": earnings_period, "earnings_end": last.get("period_end"),
+        "pe": clean(pe), "pe_basis": last.get("pe_basis"),
+        "ev_ebit": clean(_safe_div(enterprise_value, ebit, positive_only=True)),
+        "earnings_yield": clean(_safe_div(ebit, enterprise_value, positive_only=True)),
+        "fcf_yield": clean(_safe_div(fcf, enterprise_value, positive_only=True)),
+        "return_on_capital": clean(last.get("return_on_capital")),
+        "pe_percentile": clean(pe_percentile(pe, years["pe"])),
+        "z_score": clean(z_score),
+        "f_score": clean(fy["f_score"]) if fy is not None else None,
+        "f_score_year": None if f_year is None else int(f_year),
+    }
+
+
+def write_today(today: dict, output_dir: str) -> str:
+    """Write ``valuation_today.json`` (atomically) and return its path."""
+    path = os.path.join(output_dir, TODAY_FILE)
+    with open(path + ".tmp", "w", encoding="utf-8") as fh:
+        json.dump(today, fh, ensure_ascii=False, allow_nan=False, default=str)
+    os.replace(path + ".tmp", path)
+    return path
 
 
 def write_evaluation(ticker: str, evaluation: pd.DataFrame, output_dir: str) -> str:

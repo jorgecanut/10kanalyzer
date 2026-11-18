@@ -291,12 +291,12 @@ class QuarterStepTest(unittest.TestCase):
         issue = {"kind": "quarter_metric_missing", "severity": "warning", "fiscal_year": "Q2'26"}
         with tempfile.TemporaryDirectory() as out, \
                 unittest.mock.patch.object(edgar_dashboard, "OUTPUT_DIR", out), \
-                unittest.mock.patch("quarters.build", return_value=(frame, [issue])) as build, \
+                unittest.mock.patch("quarters.build", return_value=(frame, [issue], {})) as build, \
                 redirect_stdout(io.StringIO()) as log:
             df = pd.DataFrame([{"period_of_report": "2026-01-31", "fiscal_year": 2025}])
             filed = {"2026-01-31": {"sources": {"Revenues": "Revenues"}}}
             failures = [{"accession": "q1", "form": "10-Q", "period": "2026-05-02", "error": "ConnectionError: 503"}]
-            got, issues = edgar_dashboard.quarter_step(df, filed, [{"x": 1}] * 4, failures)
+            got, issues, _ = edgar_dashboard.quarter_step(df, filed, [{"x": 1}] * 4, failures)
             written = pd.read_csv(Path(out) / "quarters.csv")
         build.assert_called_once()
         self.assertEqual(build.call_args.args[1], {"Revenues": "Revenues"})
@@ -312,7 +312,7 @@ class QuarterStepTest(unittest.TestCase):
                 unittest.mock.patch.object(edgar_dashboard, "OUTPUT_DIR", out), \
                 redirect_stdout(io.StringIO()) as log:
             df = pd.DataFrame([{"period_of_report": "2026-01-31", "fiscal_year": 2025}])
-            got, issues = edgar_dashboard.quarter_step(df, {}, [], [])
+            got, issues, _ = edgar_dashboard.quarter_step(df, {}, [], [])
             self.assertFalse((Path(out) / "quarters.csv").exists())
         self.assertTrue(got.empty)
         self.assertEqual(issues, [])

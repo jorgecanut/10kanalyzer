@@ -121,7 +121,13 @@ def kinds(issues, concept):
 
 class ValuationIssueTests(unittest.TestCase):
     def test_a_complete_year_has_no_issue(self):
-        out, issues = evaluate(*company(), splits=[])
+        # With its diluted EPS: without one the P/E falls back to net income, and says so.
+        df, statements, frame = company()
+        frame = pd.concat([frame, pd.DataFrame([{"concept": "us-gaap:EarningsPerShareDiluted", "fiscal_year": y,
+                                                 "value": 1.0, "period_start": f"{y}-01-01",
+                                                 "period_end": f"{y}-12-31", "period_instant": None,
+                                                 "is_dimensioned": False} for y in (2024, 2025)])])
+        out, issues = evaluate(df, statements, frame, splits=[])
         self.assertEqual(issues, [])
         self.assertAlmostEqual(out.loc[2025, "ev_ebitda"], (1000.0 + 200.0 - 50.0) / 180.0)
 
@@ -260,3 +266,147 @@ class TotalLiabilitiesTests(unittest.TestCase):
     def test_no_totals_gives_nan_not_a_random_liability_line(self):
         frame = balance(("OtherNonOperatingCurrentLiabilities", "Accrued interest", 533e6))
         self.assertTrue(pd.isna(valuation._total_liabilities(frame, [2025])[2025]))
+
+
+# --------------------------------------------------------------------------- #
+# Diluted EPS, quarter rows and today's record.
+# --------------------------------------------------------------------------- #
+def eps_fact(year, value, start=None, end=None):
+    return {"concept": "us-gaap:EarningsPerShareDiluted", "fiscal_year": year, "value": value,
+            "period_instant": None, "period_start": start or f"{year}-01-01", "period_end": end or f"{year}-12-31",
+            "is_dimensioned": False, "currency": "USD", "unit": "usdPerShare"}
+
+
+def with_eps(eps=(1.0, 1.0)):
+    df, statements, frame = company()
+    frame = pd.concat([frame, pd.DataFrame([eps_fact(2024, eps[0]), eps_fact(2025, eps[1])])], ignore_index=True)
+    return df, statements, frame
+
+
+def quarter_inputs():
+    """One quarter slot after FY2025: TTM rows, its statements and facts, as quarters.build gives them."""
+    q = pd.DataFrame([{"slot": "Q2'26", "label": "TTM Q2'26", "period_end": "2026-06-30", "fiscal_year": 2026,
+                       "quarter": 2, "period_of_report": "2026-06-30", "currency": "USD",
+                       "Revenues": 1100.0, "NetIncomeLoss": 120.0, "OperatingIncomeLoss": 170.0,
+                       "OperatingCashFlow": 170.0, "CapEx": 40.0, "FreeCashFlow": 130.0, "GrossProfit": 440.0,
+                       "StockholdersEquity": 520.0, "LongTermDebt": 200.0, "AssetsCurrent": 310.0,
+                       "LiabilitiesCurrent": 150.0, "EpsDiluted": 1.2}])
+    st = pd.DataFrame([
+        {**line("balance", "us-gaap_Assets", "Total assets", 1000e6, standard="Assets"), "fiscal_year": "Q2'26",
+         "period_of_report": "2026-06-30"},
+        {**line("balance", "us-gaap_Liabilities", "Total liabilities", 500e6, standard="Liabilities"),
+         "fiscal_year": "Q2'26", "period_of_report": "2026-06-30"},
+        {**line("balance", "us-gaap_RetainedEarningsAccumulatedDeficit", "Retained earnings", 300e6),
+         "fiscal_year": "Q2'26", "period_of_report": "2026-06-30"},
+        {**line("balance", "us-gaap_CashAndCashEquivalentsAtCarryingValue", "Cash and cash equivalents", 50e6),
+         "fiscal_year": "Q2'26", "period_of_report": "2026-06-30"},
+        {**line("cashflow", "us-gaap_DepreciationDepletionAndAmortization", "Depreciation and amortization", 30e6),
+         "fiscal_year": "Q2'26", "period_of_report": "2026-06-30"}])
+    fa = pd.DataFrame([{"concept": "dei:EntityCommonStockSharesOutstanding", "fiscal_year": "Q2'26", "value": 100e6,
+                        "period_instant": "2026-07-20", "period_end": None, "is_dimensioned": False}])
+    return q, st, fa
+
+
+PRICES_Q = PRICES + [{"date": "2026-06-01", "close": 18.0}]
+
+
+class DilutedEpsTests(unittest.TestCase):
+    def test_pe_uses_diluted_eps(self):
+        out, issues = evaluate(*with_eps((1.0, 0.8)), splits=[])
+        self.assertAlmostEqual(out.loc[2025, "pe"], 10.0 / 0.8)
+        self.assertEqual(out.loc[2025, "pe_basis"], "diluted_eps")
+        self.assertAlmostEqual(out.loc[2025, "eps_diluted"], 0.8)
+        self.assertEqual(kinds(issues, "EarningsPerShareDiluted"), [])
+
+    def test_pe_falls_back_and_reports(self):
+        out, issues = evaluate(*company(), splits=[])
+        self.assertAlmostEqual(out.loc[2025, "pe"], 10.0 * 100e6 / 1e6 / 100.0)     # market cap / net income
+        self.assertEqual(out.loc[2025, "pe_basis"], "net_income")
+        self.assertEqual(kinds(issues, "EarningsPerShareDiluted"),
+                         [("valuation_assumed", 2024), ("valuation_assumed", 2025)])
+
+    def test_eps_follows_a_split(self):
+        # A 2-for-1 split after FY2024: Yahoo's 2024 price is halved, so is its EPS.
+        df, statements, frame = with_eps((2.0, 1.0))
+        frame.loc[(frame["concept"] == "us-gaap:CommonStockSharesOutstanding") & (frame["fiscal_year"] == 2024),
+                  "value"] = 50e6
+        out, _ = evaluate(df, statements, frame, splits=[{"date": "2025-06-01", "ratio": 2.0}])
+        self.assertAlmostEqual(out.loc[2024, "eps_diluted"], 1.0)
+        self.assertAlmostEqual(out.loc[2024, "pe"], 20.0)
+
+
+class QuarterRowTests(unittest.TestCase):
+    def evaluate_q(self, prices=PRICES_Q):
+        q, st, fa = quarter_inputs()
+        df, statements, frame = with_eps()
+        issues = []
+        out = valuation.build_evaluation("TEST", df, statements, frame, prices, issues=issues, splits=[],
+                                         quarters=q, quarter_statements=st, quarter_facts=fa)
+        return out, issues
+
+    def test_quarter_rows_after_years(self):
+        out, issues = self.evaluate_q()
+        self.assertEqual(list(out["fiscal_year"]), [2024, 2025, "Q2'26"])
+        slot = out.iloc[-1]
+        self.assertEqual(slot["period_end"], "2026-06-30")
+        self.assertAlmostEqual(slot["price"], 18.0)
+        self.assertAlmostEqual(slot["pe"], 18.0 / 1.2)
+        self.assertAlmostEqual(slot["ev_ebit"], (18.0 * 100 + 200 - 50) / 170.0)
+        self.assertTrue(pd.isna(slot["f_score"]))                    # two full years only
+        self.assertTrue(pd.isna(slot["pe_percentile"]))
+        self.assertEqual([i for i in issues if i["fiscal_year"] == "Q2'26"], [])
+
+    def test_pe_percentile_vs_fiscal_years_only(self):
+        out, _ = self.evaluate_q()
+        years = out[out["fiscal_year"].apply(lambda v: isinstance(v, int))]
+        self.assertEqual(float(out.iloc[0]["pe_median_hist"]), float(pd.to_numeric(years["pe"]).median()))
+
+
+class TodayTests(unittest.TestCase):
+    def setUp(self):
+        q, st, fa = quarter_inputs()
+        df, statements, frame = with_eps()
+        self.evaluation = valuation.build_evaluation("TEST", df, statements, frame, PRICES_Q, splits=[],
+                                                     quarters=q, quarter_statements=st, quarter_facts=fa)
+        self.fy_only = valuation.build_evaluation("TEST", df, statements, frame, PRICES_Q, splits=[])
+
+    def test_today_uses_quote_and_ttm(self):
+        issues = []
+        today = valuation.build_today(self.evaluation, {"price": 24.0, "time": "2026-11-18T15:10:00Z",
+                                                        "currency": "USD"}, (100e6, "2026-07-20"), PRICES_Q, issues)
+        self.assertAlmostEqual(today["pe"], 24.0 / 1.2)
+        self.assertEqual(today["earnings_period"], "TTM Q2'26")
+        self.assertEqual(today["price_source"], "quote")
+        self.assertEqual(today["price_time"], "2026-11-18T15:10:00Z")
+        ev = 24.0 * 100 + 200 - 50
+        self.assertAlmostEqual(today["ev_ebit"], ev / 170.0)
+        self.assertAlmostEqual(today["earnings_yield"], 170.0 / ev)
+        self.assertAlmostEqual(today["fcf_yield"], 130.0 / ev)
+        self.assertEqual(today["f_score_year"], 2025)
+        self.assertEqual(today["shares_date"], "2026-07-20")
+        self.assertEqual(issues, [])
+        # A percentile needs three fiscal-year P/Es, as for the years themselves; there are two.
+        self.assertIsNone(today["pe_percentile"])
+
+    def test_today_without_quote(self):
+        issues = []
+        today = valuation.build_today(self.evaluation, None, (100e6, "2026-07-20"), PRICES_Q, issues)
+        self.assertEqual(today["price_source"], "month_close")
+        self.assertAlmostEqual(today["price"], 18.0)
+        self.assertEqual(today["price_time"], "2026-06-01")
+        self.assertEqual([i["kind"] for i in issues], ["valuation_assumed"])
+        self.assertEqual(issues[0]["concept"], "Price")
+
+    def test_today_no_quarters_uses_fy(self):
+        today = valuation.build_today(self.fy_only, {"price": 24.0, "time": "t", "currency": "USD"}, None,
+                                      PRICES_Q, [])
+        self.assertEqual(today["earnings_period"], "FY2025")
+        self.assertAlmostEqual(today["pe"], 24.0 / 1.0)
+
+    def test_latest_shares_from_the_newest_cover_page(self):
+        _, _, fa = quarter_inputs()
+        older = pd.DataFrame([{"concept": "dei:EntityCommonStockSharesOutstanding", "fiscal_year": 2025,
+                               "value": 99e6, "period_instant": "2026-03-10", "period_end": None,
+                               "is_dimensioned": False}])
+        self.assertEqual(valuation.latest_shares(pd.concat([older, fa])), (100e6, "2026-07-20"))
+        self.assertIsNone(valuation.latest_shares(pd.DataFrame()))
