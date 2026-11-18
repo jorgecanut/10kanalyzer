@@ -164,12 +164,15 @@
   .toolbar { --ctl:40px; --ctl-icon:20px; }
   .tk-field { position:relative; flex:0 1 300px; width:300px; min-width:160px; }
   #ticker { width:100%; height:var(--ctl); border-color:var(--line-strong); }
-  .tk-results { right:auto; }
+  .tk-results { right:auto; width:min(460px, calc(100vw - 32px)); }
+  /* Two lines: the name, then the industry; both cut with … rather than widen the list. */
+  .cs-results.tk-results li { display:grid; grid-template-columns:auto minmax(0, 1fr) auto; align-items:center; gap:4px 10px; }
   .tk-results .cs-tag { min-width:52px; text-align:center; font-weight:600; color:var(--text); }
-  .tk-results { width:min(620px, calc(100vw - 32px)); }
-  .tk-cat { flex:none; max-width:42%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-            color:var(--muted); font-size:calc(var(--fs) * 13); }
-  .tk-cat.is-warn { padding:1px 8px; border-radius:999px; color:var(--badge-error-fg);
+  .tk-main { display:flex; flex-direction:column; align-items:flex-start; gap:2px; min-width:0; }
+  .tk-main .cs-label { max-width:100%; }
+  .tk-cat { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+            color:var(--muted); font-size:calc(var(--fs) * 12); line-height:1.4; }
+  .tk-cat.is-warn { padding:0 7px; border-radius:999px; color:var(--badge-error-fg);
                     background:var(--badge-error-bg); font-weight:600; }
   .tk-cat.is-loading { color:var(--muted); }
   #filings { height:var(--ctl); padding:0 10px; border-color:var(--field-line); font-size:calc(var(--fs) * 17); }
