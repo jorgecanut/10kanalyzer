@@ -1851,6 +1851,108 @@ _NAME_SUFFIX = re.compile(
     r"holdings?|n\.v\.|s\.a\.|ag|se|l\.p\.)$", re.IGNORECASE)
 
 
+# SEC's list of every filer with a ticker: what the run bar suggests by name.
+COMPANIES_URL = "https://www.sec.gov/files/company_tickers_exchange.json"
+COMPANIES_MAX_AGE = 86400           # downloaded again at most once a day
+COMPANY_SUGGESTIONS = 8
+_COMPANIES: dict = {}               # {"mtime": float, "rows": [...]}: the file as last read
+_COMPANIES_LOCK = threading.Lock()
+
+
+def _download_companies(identity: str) -> list[dict]:
+    """SEC's company list, one row per company (its main ticker first), with ``identity`` as the contact."""
+    request = Request(COMPANIES_URL, headers={"User-Agent": identity, "Accept-Encoding": "identity"})
+    with urlopen(request, timeout=30) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    rows: dict[int, dict] = {}
+    for values in payload["data"]:
+        item = dict(zip(payload["fields"], values))
+        ticker = str(item.get("ticker") or "").upper()
+        if ticker:
+            rows.setdefault(int(item["cik"]), {"cik": int(item["cik"]), "ticker": ticker,
+                                               "name": str(item.get("name") or ""),
+                                               "exchange": str(item.get("exchange") or "")})
+    return list(rows.values())
+
+
+def _companies(identity: str) -> list[dict] | None:
+    """The company list: ``data/company_tickers.json``, downloaded again when a day old.
+
+    SEC unreachable: the last copy, however old; no copy at all: None.
+    """
+    path = DATA_DIR / "company_tickers.json"
+    with _COMPANIES_LOCK:
+        mtime = path.stat().st_mtime if path.is_file() else None
+        if mtime is None or time.time() - mtime > COMPANIES_MAX_AGE:
+            try:
+                rows = _download_companies(identity)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = path.with_suffix(".tmp")
+                tmp.write_text(json.dumps(rows, separators=(",", ":")), encoding="utf-8")
+                os.replace(tmp, path)
+                mtime = path.stat().st_mtime
+                _COMPANIES.update(mtime=mtime, rows=rows, path=path)
+            except (OSError, ValueError, KeyError) as exc:   # URLError is an OSError
+                app.logger.warning("company list download failed: %s", exc)
+        if mtime is None:
+            return None
+        if _COMPANIES.get("mtime") != mtime or _COMPANIES.get("path") != path:
+            try:
+                _COMPANIES.update(mtime=mtime, rows=json.loads(path.read_text(encoding="utf-8")), path=path)
+            except (OSError, ValueError):
+                return None
+        return _COMPANIES["rows"]
+
+
+def _plain(text: str) -> str:
+    """Lower case, letters and digits only, without a legal suffix (Inc, Corp, ...)."""
+    text = _NAME_SUFFIX.sub("", str(text).strip())
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", text.lower()).split())
+
+
+def _match_companies(rows: list[dict], query: str, limit: int = COMPANY_SUGGESTIONS) -> list[dict]:
+    """Companies by ticker or name: exact ticker, ticker prefix, whole name, name prefix, word prefix, contains."""
+    def bare(ticker: str) -> str:              # BRK.B, BRK-B and BRKB are one ticker
+        return re.sub(r"[^A-Z0-9]", "", ticker.upper())
+
+    wanted_ticker = bare(query)
+    wanted = _plain(query)
+    if not wanted or not wanted_ticker:
+        return []
+    ranked = []
+    for row in rows:
+        ticker, name = bare(row["ticker"]), _plain(row["name"])
+        if ticker == wanted_ticker:
+            rank = 0
+        elif ticker.startswith(wanted_ticker):
+            rank = 1
+        elif name == wanted:                    # the whole name (Target Corp for "target")
+            rank = 2
+        elif name.startswith(wanted):
+            rank = 3
+        elif f" {wanted}" in f" {name}":
+            rank = 4
+        elif wanted in name:
+            rank = 5
+        else:
+            continue
+        ranked.append((rank, len(ticker), ticker, row))
+    ranked.sort(key=lambda item: item[:3])
+    return [{"ticker": row["ticker"], "name": row["name"], "exchange": row["exchange"]}
+            for *_, row in ranked[:limit]]
+
+
+@app.get("/api/companies")
+def companies():
+    query = request.args.get("q", "")[:80]
+    if len(query.strip()) < 2:
+        return jsonify(items=[], available=True)
+    rows = _companies(_identity(g.user))
+    if rows is None:
+        return jsonify(items=[], available=False)
+    return jsonify(items=_match_companies(rows, query), available=True)
+
+
 def _search_quote(ticker: str) -> dict:
     """Yahoo's search hit for ``ticker`` ({} when unreachable); hits are cached per process."""
     with _YAHOO_LOCK:

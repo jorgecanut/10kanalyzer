@@ -794,6 +794,86 @@ function suggestTickers() {
   $('#ticker').placeholder = `Try ${shuffled(picks).join(', ')}`;
 }
 
+/* Company names in the run bar ----------------------------------------------- */
+// From two characters, the part being typed (after the last comma) is looked
+// up in SEC's company list by ticker or name; a pick puts the ticker in its
+// place. Enter without moving to a suggestion runs what was typed, as before.
+const TK = { items: [], active: -1, timer: null, seq: 0 };
+
+const tickerParts = () => $('#ticker').value.split(',');
+
+function suggestCompanies() {
+  clearTimeout(TK.timer);
+  const query = tickerParts().pop().trim();
+  if (query.length < 2) { closeCompanies(); return; }
+  TK.timer = setTimeout(async () => {
+    const seq = ++TK.seq;
+    try {
+      const res = await fetch(`/api/companies?q=${encodeURIComponent(query)}`);
+      const data = res.ok ? await res.json() : { items: [], available: false };
+      if (seq !== TK.seq) return;            // a newer keystroke won
+      TK.items = data.items || [];
+      TK.active = -1;
+      renderCompanies(data.available !== false, query);
+    } catch {
+      if (seq === TK.seq) { TK.items = []; renderCompanies(false, query); }
+    }
+  }, 150);
+}
+
+function renderCompanies(available, query) {
+  const list = $('#tk-results');
+  if (document.activeElement !== $('#ticker')) return;
+  list.innerHTML = !available
+    ? '<li class="cs-none">Names cannot be searched: SEC\'s company list could not be downloaded. Tickers still run.</li>'
+    : TK.items.length
+      ? TK.items.map((c, i) => `<li id="tk-opt-${i}" role="option" aria-selected="${i === TK.active}"
+            onmousedown="event.preventDefault(); pickCompany(${i})">
+            <span class="cs-tag">${esc(c.ticker)}</span><span class="cs-label">${esc(c.name)}</span>
+            <span class="cs-where">${esc(c.exchange || '')}</span></li>`).join('')
+      : `<li class="cs-none">No company or ticker matches “${esc(query)}”</li>`;
+  list.hidden = false;
+  $('#ticker').setAttribute('aria-expanded', 'true');
+  $('#ticker').setAttribute('aria-activedescendant', TK.active >= 0 ? `tk-opt-${TK.active}` : '');
+}
+
+function closeCompanies() {
+  clearTimeout(TK.timer);
+  TK.seq++;
+  TK.items = [];
+  TK.active = -1;
+  $('#tk-results').hidden = true;
+  $('#ticker').setAttribute('aria-expanded', 'false');
+}
+
+function pickCompany(i) {
+  const company = TK.items[i];
+  if (!company) return;
+  const parts = tickerParts();
+  parts[parts.length - 1] = (parts.length > 1 ? ' ' : '') + company.ticker;
+  $('#ticker').value = parts.join(',');
+  closeCompanies();
+  updateMode();
+}
+
+function tickerKey(event) {
+  const open = !$('#tk-results').hidden && TK.items.length;
+  if (event.key === 'Escape') { closeCompanies(); return; }
+  if (open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+    event.preventDefault();
+    const step = event.key === 'ArrowDown' ? 1 : -1;
+    TK.active = (TK.active + step + TK.items.length) % TK.items.length;
+    renderCompanies(true, tickerParts().pop().trim());
+    $(`#tk-opt-${TK.active}`)?.scrollIntoView({ block: 'nearest' });
+    return;
+  }
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  if (open && TK.active >= 0) { pickCompany(TK.active); return; }
+  closeCompanies();
+  handlePrimary();
+}
+
 /* Logs tab ------------------------------------------------------------------ */
 // The terminal icon in the tab row (/#logs; the live status badges open it
 // too): the whole log of one run, timestamped and polled while it runs.

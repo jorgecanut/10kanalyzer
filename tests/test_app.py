@@ -10,7 +10,9 @@ import sys
 import tempfile
 import textwrap
 import threading
+import os
 import time
+from urllib.error import URLError
 import unittest
 import unittest.mock
 import zipfile
@@ -1052,3 +1054,70 @@ class TodayCardTests(AppTestCase):
         self.assertEqual(items["CCC"]["greenblatt_rank"], 1)          # 1 + 1 = 2
         self.assertEqual(items["AAA"]["greenblatt_rank"], 2)          # 2 + 3 = 5
         self.assertEqual(items["BBB"]["greenblatt_rank"], 2)          # 3 + 2 = 5
+
+
+COMPANIES = [
+    {"cik": 27419, "ticker": "TGT", "name": "TARGET CORP", "exchange": "NYSE"},
+    {"cik": 1, "ticker": "TGTX", "name": "TG THERAPEUTICS, INC.", "exchange": "Nasdaq"},
+    {"cik": 2, "ticker": "TRGP", "name": "Targa Resources Corp.", "exchange": "NYSE"},
+    {"cik": 3, "ticker": "VICI", "name": "VICI PROPERTIES INC.", "exchange": "NYSE"},
+    {"cik": 4, "ticker": "STAR", "name": "Big Star Target Holdings", "exchange": "NYSE"},
+    {"cik": 5, "ticker": "AAPL", "name": "Apple Inc.", "exchange": "Nasdaq"},
+]
+
+
+class CompanySearchTests(AppTestCase):
+    def search(self, q):
+        res = self.client.get("/api/companies", query_string={"q": q})
+        self.assertEqual(res.status_code, 200)
+        return res.get_json()
+
+    def test_matches_ticker_then_name(self):
+        with unittest.mock.patch.object(app, "_download_companies", return_value=COMPANIES):
+            found = self.search("targ")
+        self.assertTrue(found["available"])
+        self.assertEqual([item["ticker"] for item in found["items"]], ["TGT", "TRGP", "STAR"])
+        self.assertEqual(found["items"][0], {"ticker": "TGT", "name": "TARGET CORP", "exchange": "NYSE"})
+        with unittest.mock.patch.object(app, "_download_companies", return_value=COMPANIES):
+            # An exact ticker first, then tickers starting with it; case and punctuation ignored.
+            self.assertEqual([i["ticker"] for i in self.search("tgt")["items"]], ["TGT", "TGTX"])
+            self.assertEqual([i["ticker"] for i in self.search("vici properties")["items"]], ["VICI"])
+            self.assertEqual([i["ticker"] for i in self.search("Apple, Inc")["items"]], ["AAPL"])
+
+    def test_whole_name_first_and_ticker_punctuation(self):
+        rows = COMPANIES + [{"cik": 6, "ticker": "TH", "name": "Target Hospitality Corp.", "exchange": "Nasdaq"},
+                            {"cik": 7, "ticker": "BRK-B", "name": "BERKSHIRE HATHAWAY INC", "exchange": "NYSE"}]
+        self.assertEqual([c["ticker"] for c in app._match_companies(rows, "target")][:2], ["TGT", "TH"])
+        self.assertEqual([c["ticker"] for c in app._match_companies(rows, "brk.b")], ["BRK-B"])
+        self.assertEqual([c["ticker"] for c in app._match_companies(rows, "BRKB")], ["BRK-B"])
+
+    def test_short_query_gives_nothing(self):
+        with unittest.mock.patch.object(app, "_download_companies", return_value=COMPANIES) as download:
+            self.assertEqual(self.search("t")["items"], [])
+        download.assert_not_called()
+
+    def test_downloaded_once_a_day_with_the_account_as_contact(self):
+        with unittest.mock.patch.object(app, "_download_companies", return_value=COMPANIES) as download:
+            self.search("targ")
+            self.search("vici")
+        download.assert_called_once()
+        self.assertIn("ada@example.com", download.call_args.args[0])
+        self.assertTrue((app.DATA_DIR / "company_tickers.json").is_file())
+
+    def test_sec_down_uses_the_last_copy(self):
+        with unittest.mock.patch.object(app, "_download_companies", return_value=COMPANIES):
+            self.search("targ")
+        path = app.DATA_DIR / "company_tickers.json"
+        old = time.time() - 3 * 86400
+        os.utime(path, (old, old))
+        app._COMPANIES.clear()
+        with unittest.mock.patch.object(app, "_download_companies", side_effect=URLError("down")):
+            found = self.search("targ")
+        self.assertTrue(found["available"])
+        self.assertEqual(found["items"][0]["ticker"], "TGT")
+
+    def test_no_copy_and_sec_down_says_so(self):
+        app._COMPANIES.clear()
+        with unittest.mock.patch.object(app, "_download_companies", side_effect=URLError("down")):
+            found = self.search("targ")
+        self.assertEqual(found, {"items": [], "available": False})
