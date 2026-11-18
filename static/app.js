@@ -798,7 +798,7 @@ function suggestTickers() {
 // From two characters, the part being typed (after the last comma) is looked
 // up in SEC's company list by ticker or name; a pick puts the ticker in its
 // place. Enter without moving to a suggestion runs what was typed, as before.
-const TK = { items: [], active: -1, timer: null, seq: 0 };
+const TK = { items: [], active: -1, timer: null, seq: 0, info: {} };
 
 const tickerParts = () => $('#ticker').value.split(',');
 
@@ -815,6 +815,7 @@ function suggestCompanies() {
       TK.items = data.items || [];
       TK.active = -1;
       renderCompanies(data.available !== false, query);
+      loadCategories(seq, query);
     } catch {
       if (seq === TK.seq) { TK.items = []; renderCompanies(false, query); }
     }
@@ -830,11 +831,32 @@ function renderCompanies(available, query) {
       ? TK.items.map((c, i) => `<li id="tk-opt-${i}" role="option" aria-selected="${i === TK.active}"
             onmousedown="event.preventDefault(); pickCompany(${i})">
             <span class="cs-tag">${esc(c.ticker)}</span><span class="cs-label">${esc(c.name)}</span>
-            <span class="cs-where">${esc(c.exchange || '')}</span></li>`).join('')
+            ${categoryHtml(c)}<span class="cs-where">${esc(c.exchange || '')}</span></li>`).join('')
       : `<li class="cs-none">No company or ticker matches “${esc(query)}”</li>`;
   list.hidden = false;
   $('#ticker').setAttribute('aria-expanded', 'true');
   $('#ticker').setAttribute('aria-activedescendant', TK.active >= 0 ? `tk-opt-${TK.active}` : '');
+}
+
+// The company's industry from SEC, red when Stocky's ratios do not fit it
+// (banks, insurers, REITs, funds...): a warning, the company can still be run.
+function categoryHtml(company) {
+  const info = TK.info[company.cik];
+  if (!info) return company.cik ? '<span class="tk-cat is-loading" aria-hidden="true">…</span>' : '';
+  const why = info.warn ? 'Stocky cannot analyse this kind of company well' : 'Industry (SEC)';
+  return `<span class="tk-cat${info.warn ? ' is-warn' : ''}" title="${esc(why)}">${esc(info.category)}</span>`;
+}
+
+async function loadCategories(seq, query) {
+  const wanted = TK.items.map(c => c.cik).filter(cik => cik && !TK.info[cik]);
+  if (!wanted.length) return;
+  try {
+    const res = await fetch(`/api/company-info?ciks=${wanted.join(',')}`);
+    const data = res.ok ? await res.json() : { items: {} };
+    Object.assign(TK.info, data.items || {});
+  } catch { /* the categories stay unknown; the list still works */ }
+  for (const cik of wanted) if (!TK.info[cik]) TK.info[cik] = null;
+  if (seq === TK.seq) renderCompanies(true, query);
 }
 
 function closeCompanies() {

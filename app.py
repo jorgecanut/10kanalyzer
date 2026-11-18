@@ -1962,7 +1962,7 @@ def _match_companies(rows: list[dict], query: str, limit: int = COMPANY_SUGGESTI
             continue
         ranked.append((rank, len(ticker), ticker, row))
     ranked.sort(key=lambda item: item[:3])
-    return [{"ticker": row["ticker"], "name": row["name"], "exchange": row["exchange"]}
+    return [{"ticker": row["ticker"], "name": row["name"], "exchange": row["exchange"], "cik": row.get("cik")}
             for *_, row in ranked[:limit]]
 
 
@@ -1975,6 +1975,105 @@ def companies():
     if rows is None:
         return jsonify(items=[], available=False)
     return jsonify(items=_match_companies(rows, query), available=True)
+
+
+# A company's industry (SEC's SIC code) and whether it files an annual report a
+# run can read, for the run bar's suggestions. From SEC's submissions file, one
+# request per company, kept COMPANY_INFO_MAX_AGE in data/company_info.json.
+SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
+COMPANY_INFO_MAX_AGE = 30 * 86400
+COMPANY_INFO_MAX = 8                 # suggestions shown at once
+_COMPANY_INFO_LOCK = threading.Lock()
+ANNUAL_REPORT_FORMS = {"10-K", "20-F", "40-F", "10-K405", "10-KT"}
+FUND_FORMS = re.compile(r"^(N-|NPORT|485|497)")
+# SIC ranges whose statements Stocky's ratios do not fit (shown in red), most specific first.
+WARN_SIC = (
+    ((6798, 6798), "REIT"),
+    ((6770, 6770), "Blank check (SPAC)"),
+    ((6000, 6199), "Bank"),
+    ((6200, 6299), "Broker / asset manager"),
+    ((6300, 6499), "Insurance"),
+    ((6700, 6799), "Investment / holding office"),
+)
+
+
+def _download_submissions(cik: int, identity: str) -> dict:
+    """SEC's submissions file of one company (industry, entity type, recent filings)."""
+    request = Request(SUBMISSIONS_URL.format(cik=int(cik)),
+                      headers={"User-Agent": identity, "Accept-Encoding": "identity"})
+    with urlopen(request, timeout=15) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _classify_company(submissions: dict) -> dict:
+    """``{"category", "warn", "sic"}``: what the company is, and whether a run can analyse it well.
+
+    Red (``warn``): no 10-K, 20-F or 40-F among its filings (a fund's holdings
+    reports, or none at all), or a financial industry whose statements the
+    ratios do not fit (banks, brokers, insurers, REITs, holding offices, SPACs).
+    """
+    sic_text = str(submissions.get("sic") or "").strip()
+    description = str(submissions.get("sicDescription") or "").strip()
+    forms = [str(form) for form in ((submissions.get("filings") or {}).get("recent") or {}).get("form") or []]
+    has_annual = any(form in ANNUAL_REPORT_FORMS for form in forms)
+    sic = int(sic_text) if sic_text.isdigit() else None
+    if not has_annual:
+        fund = any(FUND_FORMS.match(form) for form in forms) or \
+            str(submissions.get("entityType") or "").lower() not in ("", "operating")
+        category = "Fund: no company accounts" if fund else "No 10-K, 20-F or 40-F"
+        return {"category": category, "warn": True, "sic": sic}
+    for (low, high), label in WARN_SIC:
+        if sic is not None and low <= sic <= high:
+            return {"category": label, "warn": True, "sic": sic}
+    return {"category": description or "Industry unknown", "warn": False, "sic": sic}
+
+
+def _company_info(ciks: list[int], identity: str) -> dict[str, dict]:
+    """Category per CIK, from data/company_info.json or SEC (in parallel); one SEC cannot answer is left out."""
+    path = DATA_DIR / "company_info.json"
+    with _COMPANY_INFO_LOCK:
+        try:
+            stored = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        except (OSError, ValueError):
+            stored = {}
+    now = time.time()
+    fresh = {str(cik): stored[str(cik)] for cik in ciks
+             if str(cik) in stored and now - stored[str(cik)].get("fetched", 0) <= COMPANY_INFO_MAX_AGE}
+    missing = [cik for cik in ciks if str(cik) not in fresh]
+
+    def fetch(cik: int):
+        try:
+            return cik, {**_classify_company(_download_submissions(cik, identity)), "fetched": now}
+        except (OSError, ValueError, KeyError) as exc:      # URLError is an OSError
+            app.logger.warning("company info for CIK %s failed: %s", cik, exc)
+            return cik, None
+
+    if missing:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=4) as pool:      # SEC allows 10 requests a second
+            got = {str(cik): info for cik, info in pool.map(fetch, missing) if info}
+        if got:
+            fresh.update(got)
+            with _COMPANY_INFO_LOCK:
+                try:
+                    stored = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+                except (OSError, ValueError):
+                    stored = {}
+                stored.update(got)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = path.with_suffix(".tmp")
+                tmp.write_text(json.dumps(stored, separators=(",", ":")), encoding="utf-8")
+                os.replace(tmp, path)
+    return {cik: {key: value for key, value in info.items() if key != "fetched"} for cik, info in fresh.items()}
+
+
+@app.get("/api/company-info")
+def company_info():
+    ciks = []
+    for token in request.args.get("ciks", "").split(","):
+        if token.strip().isdigit() and len(ciks) < COMPANY_INFO_MAX:
+            ciks.append(int(token))
+    return jsonify(items=_company_info(ciks, _identity(g.user)) if ciks else {})
 
 
 def _search_quote(ticker: str) -> dict:
