@@ -1676,7 +1676,6 @@ function panelOption(panel, t, { mini = false, width = 800, full = false, span =
   const text = (size, color = t.muted) => ({ fontFamily: t.font, fontSize: size * fs, color });
   const years = panel.years.map(String);
   const fiscal = panel.fiscalCount ?? years.length;
-  const slots = panel.quarters || [];
   const barAxes = new Set(panel.series.filter(s => s.kind === 'bar').map(s => s.axis));
   const hasBars = barAxes.size > 0;
   const byName = {};
@@ -1738,10 +1737,7 @@ function panelOption(panel, t, { mini = false, width = 800, full = false, span =
   // The zero line: a rule at 0 like matplotlib's axhline, not part of the legend.
   series.push({ type: 'line', name: '', data: [], silent: true, z: 1,
                 markLine: { silent: true, symbol: 'none', label: { show: false },
-                            lineStyle: { type: 'solid', width: 1, color: t.ink }, data: [{ yAxis: 0 }] },
-                // The quarters since the latest 10-K sit on a shaded band.
-                ...(slots.length && fiscal < years.length ? { markArea: { silent: true, itemStyle: { color: t.soft },
-                  data: [[{ xAxis: years[fiscal] }, { xAxis: years[years.length - 1] }]] } } : {}) });
+                            lineStyle: { type: 'solid', width: 1, color: t.ink }, data: [{ yAxis: 0 }] } });
 
   const visible = mini ? years.length
     : span ? Math.max(Math.min(MIN_YEARS, years.length), Math.min(span, years.length))
