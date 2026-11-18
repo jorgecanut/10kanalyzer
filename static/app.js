@@ -830,12 +830,22 @@ function renderCompanies(available, query) {
     : TK.items.length
       ? TK.items.map((c, i) => `<li id="tk-opt-${i}" role="option" aria-selected="${i === TK.active}"
             onmousedown="event.preventDefault(); pickCompany(${i})">
-            <span class="cs-tag">${esc(c.ticker)}</span><span class="cs-label">${esc(c.name)}</span>
-            ${categoryHtml(c)}<span class="cs-where">${esc(c.exchange || '')}</span></li>`).join('')
+            <span class="cs-tag">${esc(c.ticker)}</span>
+            <span class="tk-main"><span class="cs-label">${esc(c.name)}</span>${categoryHtml(c)}</span>
+            <span class="cs-where">${esc(c.exchange || '')}</span></li>`).join('')
       : `<li class="cs-none">No company or ticker matches “${esc(query)}”</li>`;
   list.hidden = false;
+  fitOnScreen(list);
   $('#ticker').setAttribute('aria-expanded', 'true');
   $('#ticker').setAttribute('aria-activedescendant', TK.active >= 0 ? `tk-opt-${TK.active}` : '');
+}
+
+// The list starts under the box but never runs off the window: it moves left
+// by what would stick out on the right (16px gutter).
+function fitOnScreen(list) {
+  list.style.left = '';
+  const overflow = list.getBoundingClientRect().right - (document.documentElement.clientWidth - 16);
+  if (overflow > 0) list.style.left = `${-overflow}px`;
 }
 
 // The company's industry from SEC, red when Stocky's ratios do not fit it
