@@ -187,8 +187,13 @@
       </button>
       {% endif %}
       <div class="bar">
-        <input id="ticker" type="text" placeholder="AAPL, MSFT, NVDA" maxlength="120" aria-label="Tickers"
-               oninput="updateMode()" onkeydown="if(event.key==='Enter')handlePrimary()">
+        <div class="tk-field">
+          <input id="ticker" type="text" placeholder="AAPL, MSFT, NVDA" maxlength="120"
+                 aria-label="Tickers or company names" autocomplete="off" role="combobox" aria-controls="tk-results"
+                 aria-expanded="false" aria-autocomplete="list"
+                 oninput="updateMode(); suggestCompanies()" onkeydown="tickerKey(event)" onblur="closeCompanies()">
+          <ul id="tk-results" class="cs-results tk-results" role="listbox" aria-label="Matching companies" hidden></ul>
+        </div>
         <select id="filings" title="Number of 10-K filings" aria-label="Number of 10-K filings">
           <option value="3">3</option>
           <option value="5">5</option>

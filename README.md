@@ -340,6 +340,7 @@ Routes:
 | `DELETE` | `/api/account/avatar` | Removes the profile picture |
 | `DELETE` | `/api/account` | `{"confirm":"DELETE","password"}` → deletes the account and all its data |
 | `DELETE` | `/api/data` | `{"confirm":"DELETE"}` → deletes all of the user's results; the account stays |
+| `GET` | `/api/companies?q=` | Up to 8 companies whose ticker or name matches `q` (2+ characters): `{"items":[{"ticker","name","exchange"}],"available":true}`; `available` false when SEC's company list could not be downloaded and no copy is kept |
 | `POST` | `/api/run` | `{"ticker":"NFLX","filings":10,"fresh":false}` (`filings` 1–20 or `"max"`, the default) → queues a run, or `status: "cached"` |
 | `POST` | `/api/cancel` | Cancels the user's queued/running jobs; keeps all files |
 | `GET` | `/api/status/<ticker>` | queued / running / done / error + log tail |
@@ -393,6 +394,19 @@ Formula ranking with the two tickers above and below (names only, click one to
 switch to it), then one small thumbnail per chart (its last five years) that
 opens in the Charts tab, the top five market headlines (see the News tab
 below) and the five latest insider trades (with a link to the Insiders tab).
+The ticker box also takes **company names**: from two characters, the part
+being typed (after the last comma) is looked up in SEC's company list
+(`company_tickers_exchange.json`: every filer with a ticker) by ticker or
+name, and up to eight matches drop down as ticker · name · exchange (exact
+ticker first, then tickers starting with it, the whole name, names starting
+with it, a word starting with it, names containing it; case, punctuation and
+Inc/Corp endings ignored; BRK.B, BRK-B and BRKB are one ticker). The arrows
+and Enter, or a click, put the ticker in its place; Enter without moving to a
+suggestion runs what was typed, so a name never starts a run by itself. The
+server downloads the list at most once a day, with the signed-in account as
+the SEC contact (as runs do), into `data/company_tickers.json`, shared by
+every account; when SEC is unreachable the last copy is used, and with no
+copy the list says names cannot be searched.
 Running a single ticker switches to Home; the run's progress is in the Charts
 tab and its log in the Logs tab.
 
