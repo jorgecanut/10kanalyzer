@@ -235,6 +235,19 @@ their own **Insiders** tab.
 `charts.py` charts them as `08_valuation`: P/E history against its median,
 annotated with the percentile, plus F-score and Z-score bars.
 
+**Enterprise value** = market cap + every borrowing − cash. The debt is the
+balance sheet's own lines, each counted once: debt due after a year, debt due
+within a year (short-term borrowings, current portion of long-term debt,
+commercial paper…) and lease liabilities (`EV_INCLUDES_LEASES` in
+`valuation.py`, on for now: Yahoo's way; off is the Magic Formula's usual EV).
+A tagged total is used only when the sheet has no long-term debt line: us-gaap
+`LongTermDebt` can already include the current maturities. The operating-lease
+total fact covers the lease's current part, which often sits inside accrued
+liabilities. A line with the company's own tag whose label reads like debt
+due within a year is counted and reported (`valuation_assumed`, info,
+`ShortTermDebt`). `evaluation.csv` shows the parts: `debt_long`,
+`debt_short`, `leases`.
+
 P/E is price over **diluted EPS** (on Yahoo's split basis, like the price) when
 the filing reports it; otherwise market cap over net income, reported as
 `valuation_assumed` (`EarningsPerShareDiluted`).

@@ -66,6 +66,8 @@ OUTPUT_COLUMNS = [
     # market-value term. A quarter slot's ``fiscal_year`` is its label ("Q2'26").
     "period_end", "eps_diluted", "pe_basis", "enterprise_value", "ebit", "net_income", "fcf",
     "total_liabilities", "z_partial", "price_scale",
+    # Enterprise value's debt: long-term, due within a year, leases (counted when EV_INCLUDES_LEASES).
+    "debt_long", "debt_short", "leases",
 ]
 # Diluted earnings per share, US GAAP then IFRS.
 EPS_DILUTED = ("EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted", "DilutedEarningsLossPerShare",
@@ -124,6 +126,50 @@ CURRENT_ASSETS = (
     ["CurrentAssetsTotal", "AssetsCurrent", "CurrentAssets"],
     ["total current assets"],
 )
+# Enterprise value counts every borrowing: long-term debt (above), the debt due
+# within a year, and (``EV_INCLUDES_LEASES``) lease liabilities. Matched by tag
+# or edgartools' standard concept, one balance-sheet line each.
+SHORT_TERM_DEBT = {
+    "ShortTermBorrowings", "LongTermDebtCurrent", "DebtCurrent", "CommercialPaper",
+    "LongTermDebtAndCapitalLeaseObligationsCurrent", "ShortTermBankLoansAndNotesPayable",
+    "OtherShortTermBorrowings", "BankOverdrafts", "NotesPayableCurrent", "LinesOfCreditCurrent",
+    "SecuredDebtCurrent", "UnsecuredDebtCurrent", "ConvertibleNotesPayableCurrent",
+    "LongTermDebtCurrentMaturitiesAndShortTermBorrowings",
+    # IFRS spellings.
+    "CurrentPortionOfLongtermBorrowings", "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings",
+    "ShorttermBorrowings", "CurrentPortionOfNoncurrentBorrowings", "CurrentBorrowings",
+    # edgartools' standard concepts.
+    "ShortTermDebt", "CurrentPortionOfLongTermDebt",
+}
+# Debt due after a year, as balance-sheet lines (tag or edgartools' standard concept).
+LONG_DEBT_LINES = {
+    "LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations", "LongTermDebt", "LongtermBorrowings",
+    "NoncurrentBorrowings", "NoncurrentPortionOfNoncurrentBorrowings", "BondsIssued", "OtherLongTermDebtNoncurrent",
+    "LongTermNotesPayable", "SeniorLongTermNotes", "LongTermLineOfCredit", "SecuredLongTermDebt",
+    "UnsecuredLongTermDebt", "ConvertibleNotesPayable", "ConvertibleDebtNoncurrent", "LongTermLoansPayable",
+}
+# A line with the company's own tag whose label reads like debt due within a
+# year is counted as short-term debt, and reported as counted by its label.
+SHORT_TERM_DEBT_LABEL = re.compile(
+    r"borrowing|short[- ]term debt|commercial paper|notes payable|bank (loan|overdraft)|"
+    r"current (portion|maturities) of|credit facilit", re.IGNORECASE)
+# Due after a year: "non-current", "net of current portion", or "long-term" unless
+# it is the current portion (or maturities) of long-term debt.
+NONCURRENT_LABEL = re.compile(r"non-?current|net of current|^(?!.*current (portion|maturities)).*long[- ]term",
+                              re.IGNORECASE)
+OPERATING_LEASE_TOTAL = ("OperatingLeaseLiability",)
+LEASE_LINES = {
+    "OperatingLeaseLiabilityCurrent", "OperatingLeaseLiabilityNoncurrent", "FinanceLeaseLiabilityCurrent",
+    "FinanceLeaseLiabilityNoncurrent", "FinanceLeaseLiability", "OperatingLeaseLiability",
+    # IFRS: every lease is on the balance sheet.
+    "LeaseLiabilities", "CurrentLeaseLiabilities", "NoncurrentLeaseLiabilities",
+    "OperatingLeaseNonCurrentDebtEquivalent",
+}
+OPERATING_LEASE_LINES = {"OperatingLeaseLiabilityCurrent", "OperatingLeaseLiabilityNoncurrent",
+                         "OperatingLeaseLiability", "OperatingLeaseNonCurrentDebtEquivalent"}
+# Leases in enterprise value (Yahoo's way). Off: the Magic Formula's usual EV.
+EV_INCLUDES_LEASES = True
+
 CURRENT_LIABILITIES = (
     ["CurrentLiabilitiesTotal", "LiabilitiesCurrent", "CurrentLiabilities"],
     ["total current liabilities"],
@@ -351,6 +397,64 @@ def _statement_metric(
                     break
         out[year] = _finite(value) / USD_TO_MILLIONS
     return out
+
+
+def _debt_parts(statements: pd.DataFrame, facts: pd.DataFrame, years: list[int]
+                ) -> tuple[pd.Series, pd.Series, pd.Series, dict[int, list[str]]]:
+    """Per year (millions): long-term debt and short-term debt on the balance sheet, lease liabilities,
+    and the company-tagged lines counted as short-term debt by their label.
+
+    Debt is taken from the balance sheet's own lines, each counted once: a
+    tagged total can include the current maturities (us-gaap ``LongTermDebt``
+    does: TGT's 14,398 against its sheet's 14,326 due later and 2,130 due within
+    a year), and adding both would count them twice. Long-term debt is NaN
+    when the sheet has no such line (the caller falls back to the tagged
+    figure). A line with the company's own tag whose label reads like debt due
+    within a year (TGT's 2013-2015 "Current portion of long-term debt and other
+    borrowings") is counted, and named so it can be reported. Leases: the
+    operating-lease total fact when the filing has one (its current part often
+    sits inside accrued liabilities), else the operating-lease lines; plus
+    finance-lease lines that are not inside a debt line.
+    """
+    long_debt = pd.Series(np.nan, index=years, dtype="float64")
+    short = pd.Series(0.0, index=years, dtype="float64")
+    leases = pd.Series(0.0, index=years, dtype="float64")
+    by_label: dict[int, list[str]] = {}
+    operating_lines = pd.Series(dtype="float64")
+    if statements is not None and not statements.empty and {"fiscal_year", "value", "concept"} <= set(statements.columns):
+        frame = statements[statements["statement"] == "balance"] if "statement" in statements.columns else statements
+        frame = frame.assign(_fy=pd.to_numeric(frame["fiscal_year"], errors="coerce"),
+                             _value=pd.to_numeric(frame["value"], errors="coerce"))
+        frame = frame[frame["_fy"].isin(years) & frame["_value"].notna()]
+        concept = frame["concept"].astype(str)
+        tag = concept.str.split(r"[:_]", n=1, regex=True).str[-1]
+        own_tag = ~concept.str.match(r"(us-gaap|ifrs-full|dei)[:_]")
+        std = frame["standard_concept"].fillna("").astype(str) if "standard_concept" in frame.columns \
+            else pd.Series("", index=frame.index)
+        labels = frame["label"].fillna("").astype(str) if "label" in frame.columns \
+            else pd.Series("", index=frame.index)
+        is_short = tag.isin(SHORT_TERM_DEBT) | std.isin(SHORT_TERM_DEBT)
+        by_its_label = own_tag & ~is_short & labels.str.contains(SHORT_TERM_DEBT_LABEL) \
+            & ~labels.str.contains(NONCURRENT_LABEL)
+        is_lease = (tag.isin(LEASE_LINES) | std.isin(LEASE_LINES)) & ~is_short
+        is_long = (tag.isin(LONG_DEBT_LINES) | std.isin(LONG_DEBT_LINES)) & ~is_short & ~is_lease & ~by_its_label
+        is_operating = tag.isin(OPERATING_LEASE_LINES) | std.isin(OPERATING_LEASE_LINES)
+        for year, group in frame[is_long].groupby("_fy"):
+            long_debt[int(year)] = float(group["_value"].abs().sum()) / USD_TO_MILLIONS
+        for year, group in frame[is_short | by_its_label].groupby("_fy"):
+            short[int(year)] = float(group["_value"].abs().sum()) / USD_TO_MILLIONS
+        for year, group in frame[by_its_label & (frame["_value"] != 0)].groupby("_fy"):
+            by_label[int(year)] = sorted(set(group["label"].astype(str)))
+        for year, group in frame[is_lease].groupby("_fy"):
+            leases[int(year)] = float(group["_value"].abs().sum()) / USD_TO_MILLIONS
+        operating_lines = frame[is_lease & is_operating].groupby("_fy")["_value"].sum().abs() / USD_TO_MILLIONS
+    # The operating-lease total, when tagged, replaces the operating-lease lines.
+    totals = _fact_metric(facts, years, list(OPERATING_LEASE_TOTAL))
+    for year in years:
+        total = totals.get(year, np.nan)
+        if np.isfinite(total):
+            leases[year] = leases[year] - float(operating_lines.get(year, 0.0)) + total
+    return long_debt, short, leases, by_label
 
 
 def _total_liabilities(statements: pd.DataFrame, years: list[int]) -> pd.Series:
@@ -943,6 +1047,8 @@ def build_evaluation(
     total_liabilities = by_year(statement_metrics["total_liabilities"])
     retained_earnings = by_year(statement_metrics["retained_earnings"])
     cash = by_year(statement_metrics["cash"])
+    sheet_long_debt, short_debt, lease_debt, debt_by_label = _debt_parts(statements, facts, years)
+    sheet_long_debt, short_debt, lease_debt = by_year(sheet_long_debt), by_year(short_debt), by_year(lease_debt)
     depreciation = by_year(statement_metrics["depreciation"])
 
     period_dates = _period_dates(data, statements)
@@ -1012,12 +1118,25 @@ def build_evaluation(
         assets_value = _finite(total_assets.iloc[position])
         liabilities_value = _finite(total_liabilities.iloc[position])
         cash_value = _finite(cash.iloc[position])
+        short_value = _finite(short_debt.iloc[position])
+        lease_value = _finite(lease_debt.iloc[position])
+        # Enterprise value's debt is the balance sheet's own lines; the tagged
+        # figure only when the sheet has no long-term debt line.
+        sheet_debt = _finite(sheet_long_debt.iloc[position])
+        if np.isfinite(sheet_debt):
+            debt_value = sheet_debt
+        if debt_by_label.get(year):
+            note("valuation_assumed", "info", year, "ShortTermDebt",
+                 "counted in enterprise value as debt due within a year by its label, as the company tags it "
+                 "with its own concept: " + ", ".join(f"'{label}'" for label in debt_by_label[year]))
         current_assets_value = _finite(current_assets.iloc[position])
         current_liabilities_value = _finite(current_liabilities.iloc[position])
 
         enterprise_value = np.nan
         if np.isfinite(market_cap):
             enterprise_value = market_cap + (debt_value if np.isfinite(debt_value) else 0.0) \
+                + (short_value if np.isfinite(short_value) else 0.0) \
+                + (lease_value if EV_INCLUDES_LEASES and np.isfinite(lease_value) else 0.0) \
                 - (cash_value if np.isfinite(cash_value) else 0.0)
             if not np.isfinite(cash_value):
                 note("valuation_assumed", "warning", year, "Cash",
@@ -1110,6 +1229,9 @@ def build_evaluation(
         rows.append({
             "fiscal_year": year,
             "period_end": None if when is None or pd.isna(when) else str(when.date()),
+            "debt_long": debt_value,
+            "debt_short": short_value,
+            "leases": lease_value,
             "eps_diluted": eps,
             "pe_basis": pe_basis,
             "enterprise_value": enterprise_value,
