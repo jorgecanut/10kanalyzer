@@ -221,3 +221,65 @@ class PublishTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _Quarterly:
+    def __init__(self, form, report_date, accession):
+        self.form, self.report_date, self.accession_no = form, report_date, accession
+
+
+class _QuarterCompany:
+    cik = 99
+
+    def __init__(self, quarterly):
+        self.quarterly = quarterly
+        self.asked = []
+
+    def get_filings(self, form, amendments=False):
+        self.asked.append((form, amendments))
+        return self.quarterly if form == "10-Q" else []
+
+
+class ListQuarterlyTest(unittest.TestCase):
+    def test_list_quarterly_after_latest(self):
+        # Newest first, as edgartools lists them; the listing stops at the first older one.
+        later = [_Quarterly("10-Q", "2026-08-01", "q2"), _Quarterly("10-Q", "2026-05-02", "q1")]
+        older = _Quarterly("10-Q", "2025-11-01", "q3-old")
+        poison = _Quarterly("10-Q", None, "never-read")      # after the break: never looked at
+        company = _QuarterCompany(later + [older, poison])
+        found = edgar_dashboard.list_quarterly(company, "2026-01-31", log=lambda *_: None)
+        self.assertEqual([f.accession_no for f in found], ["q1", "q2"])
+        self.assertEqual(company.asked, [("10-Q", False)])
+
+    def test_other_forms_and_a_failed_listing(self):
+        company = _QuarterCompany([_Quarterly("10-Q/A", "2026-08-01", "amended")])
+        self.assertEqual(edgar_dashboard.list_quarterly(company, "2026-01-31", log=lambda *_: None), [])
+
+        class Broken:
+            def get_filings(self, form, amendments=False):
+                raise ConnectionError("SEC down")
+        lines = []
+        self.assertEqual(edgar_dashboard.list_quarterly(Broken(), "2026-01-31", log=lines.append), [])
+        self.assertTrue(any("10-Q list failed" in line for line in lines))
+
+    def test_no_annual_report_means_no_quarters(self):
+        company = _QuarterCompany([_Quarterly("10-Q", "2026-08-01", "q2")])
+        self.assertEqual(edgar_dashboard.list_quarterly(company, "", log=lambda *_: None), [])
+
+
+class ObtainQuartersTest(unittest.TestCase):
+    def test_build_dataset_quarter_failure_is_recorded(self):
+        filings = [_Quarterly("10-Q", "2026-05-02", "q1"), _Quarterly("10-Q", "2026-08-01", "q2")]
+
+        def entry_of(filing):
+            if filing.accession_no == "q1":
+                raise ConnectionError("SEC returned 503")
+            return {"xbrl": True, "filing": {"accession": filing.accession_no}}, "read"
+
+        failures = []
+        with redirect_stdout(io.StringIO()):
+            entries = edgar_dashboard.obtain_quarters(filings, entry_of, failures)
+        self.assertEqual([e["filing"]["accession"] for e in entries], ["q2"])
+        self.assertEqual(failures[0]["accession"], "q1")
+        self.assertEqual(failures[0]["period"], "2026-05-02")
+        self.assertIn("503", failures[0]["error"])

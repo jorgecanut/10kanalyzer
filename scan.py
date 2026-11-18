@@ -277,21 +277,8 @@ def _record_filing(db, cik: int, filing, kind: str) -> None:
 def list_filings(db, company, cik: int, log) -> dict:
     """Record the company's annual reports and the 10-Qs after the latest one; the live filings by accession."""
     annual = _pipeline().list_annual(company, forms=ANNUAL_FORMS, log=log)
-    quarterly = []
     latest = _pipeline()._report_date(annual[0]) if annual else ""
-    if latest:
-        try:
-            for filing in company.get_filings(form=QUARTERLY_FORM, amendments=False):
-                if filing.form != QUARTERLY_FORM:
-                    continue
-                period = _pipeline()._report_date(filing)
-                if period and period > latest:
-                    quarterly.append(filing)
-                elif period and period <= latest:
-                    break                         # newest first: the rest are older
-        except Exception as exc:  # noqa: BLE001 - quarterly reports never sink the company
-            log(f"    [!] 10-Q list failed ({type(exc).__name__}: {exc})")
-            log.trace()
+    quarterly = _pipeline().list_quarterly(company, latest, log=log)
     with db:
         for filing in annual:
             _record_filing(db, cik, filing, "transition" if filing.form == "10-KT" else "annual")

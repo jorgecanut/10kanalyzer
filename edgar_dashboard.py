@@ -145,6 +145,58 @@ def list_annual(company, forms=ANNUAL_FORMS, log=print) -> list:
     return [filing for _, filing in dated]
 
 
+QUARTERLY_FORM = "10-Q"
+
+
+def list_quarterly(company, after: str, log=print) -> list:
+    """The 10-Qs whose period ends after ``after`` (the latest annual report), oldest first.
+
+    Only these are read: they give the trailing twelve months and the quarters
+    since the last 10-K. SEC lists newest first, so the listing stops at the
+    first 10-Q at or before ``after``. Amendments are skipped, as for 10-Ks.
+    A failed listing is logged and gives no quarters; it never sinks the run.
+    """
+    if not after:
+        return []
+    found: list = []
+    try:
+        for filing in company.get_filings(form=QUARTERLY_FORM, amendments=False):
+            if filing.form != QUARTERLY_FORM:
+                continue
+            period = _report_date(filing)
+            if period and period > after:
+                found.append(filing)
+            elif period:
+                break
+    except Exception as exc:  # noqa: BLE001 - quarterly reports never sink the company
+        log(f"    [!] 10-Q list failed ({type(exc).__name__}: {exc})")
+        if hasattr(log, "trace"):               # the scan's log keeps the traceback
+            log.trace()
+    found.reverse()
+    return found
+
+
+def obtain_quarters(filings: list, entry_of, failures: list | None = None, log=print) -> list[dict]:
+    """The dump of each 10-Q in ``filings`` (oldest first); one that fails is logged and recorded."""
+    entries: list[dict] = []
+    for position, filing in enumerate(filings, 1):
+        period = _report_date(filing)
+        log(f"[*] Quarter {position}/{len(filings)}: {filing.form} for the period ended {period} "
+            f"({filing.accession_no})")
+        try:
+            entry, source = entry_of(filing)
+        except Exception as exc:  # noqa: BLE001 - a quarter never sinks the run; it is reported
+            log(f"    [!] {filing.accession_no}: not read ({exc.__class__.__name__}: {exc})")
+            if failures is not None:
+                failures.append({"accession": filing.accession_no, "form": filing.form, "period": period,
+                                 "error": f"{exc.__class__.__name__}: {exc}"})
+            continue
+        if source == "read":
+            release_memory()
+        entries.append(entry)
+    return entries
+
+
 def filing_period(entry: dict, index_date: str) -> str:
     """The period a dumped filing covers: SEC's index date, unless the filing disagrees.
 
@@ -342,7 +394,8 @@ def assemble(filings: list, n_filings: int | None, entry_of, ticker: str = "", l
 
 
 def build_dataset(ticker: str, n_filings: int | None, cache_dir: str | None = None,
-                  on_filing=None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+                  on_filing=None, quarters: list | None = None,
+                  quarter_failures: list | None = None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Fetch the last ``n_filings`` annual filings (``None``: all) and assemble the datasets.
 
     Each filing is dumped once into ``cache_dir`` (see ``filing_cache``), so a
@@ -357,6 +410,10 @@ def build_dataset(ticker: str, n_filings: int | None, cache_dir: str | None = No
     - ``statements`` — long-form, every dimension-free primary-statement line.
     - ``facts`` — long-form, every fact for the period, dimensions included.
     - ``checks`` — the calculation-linkbase check, one row per total.
+
+    ``quarters``, when a list, receives the dumps of the 10-Qs filed after the
+    latest annual report, oldest first (always all of them: ``n_filings``
+    limits annual reports only); a 10-Q that fails goes to ``quarter_failures``.
     """
     print(f"[*] Looking up {ticker} on SEC EDGAR")
     company = Company(ticker)
@@ -365,6 +422,12 @@ def build_dataset(ticker: str, n_filings: int | None, cache_dir: str | None = No
         print(f"[*] Filing dump: {filing_cache.explain_reader()}")
     print("[*] Listing annual filings (10-K, 20-F, 40-F)")
     all_filings = list_annual(company)
+    if quarters is not None:
+        latest = _report_date(all_filings[0]) if all_filings else ""
+        quarterly = list_quarterly(company, latest)
+        print(f"[+] Found {len(quarterly)} 10-Qs after the latest annual report" + (f" ({latest})" if latest else ""))
+        quarters.extend(obtain_quarters(quarterly, lambda filing: obtain(filing, company.cik, cache_dir),
+                                        quarter_failures))
     filings = all_filings[:n_filings]  # [:None] keeps them all
     summary = [filing.form for filing in all_filings]
     all_filings.clear()
