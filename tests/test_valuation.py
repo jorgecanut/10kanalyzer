@@ -478,3 +478,79 @@ class ReviewFixTests(unittest.TestCase):
         self.assertIsNone(today["pe"])
         self.assertIsNone(today["market_cap"])
         self.assertTrue(any(i["concept"] == "Price" for i in issues))
+
+
+class EnterpriseValueDebtTests(unittest.TestCase):
+    """EV = market cap + long-term debt + short-term debt + leases - cash (MSI's 10-Q shape)."""
+
+    def build(self, extra_lines=(), extra_facts=(), **options):
+        df, statements, frame = with_eps()
+        statements = pd.concat([statements, pd.DataFrame(list(extra_lines))], ignore_index=True)
+        frame = pd.concat([frame, pd.DataFrame(list(extra_facts))], ignore_index=True)
+        issues = []
+        out = valuation.build_evaluation("TEST", df, statements, frame, PRICES, issues=issues, splits=[], **options)
+        return out.set_index("fiscal_year"), issues
+
+    def test_short_term_debt_and_leases_are_counted(self):
+        lines = [line("balance", "us-gaap_ShortTermBorrowings", "Short-term borrowings", 75e6, 2025, "ShortTermDebt"),
+                 line("balance", "us-gaap_LongTermDebtCurrent", "Current portion of long-term debt", 0.0, 2025,
+                      "CurrentPortionOfLongTermDebt"),
+                 line("balance", "us-gaap_OperatingLeaseLiabilityNoncurrent", "Operating lease liabilities", 40e6,
+                      2025, "OperatingLeaseNonCurrentDebtEquivalent")]
+        # The lease total fact also covers the current part, which sits inside accrued liabilities.
+        facts = [{"concept": "us-gaap:OperatingLeaseLiability", "fiscal_year": 2025, "value": 55e6,
+                  "period_instant": "2025-12-31", "period_end": None, "is_dimensioned": False}]
+        out, issues = self.build(lines, facts)
+        row = out.loc[2025]
+        self.assertAlmostEqual(row["debt_short"], 75.0)
+        self.assertAlmostEqual(row["leases"], 55.0)
+        self.assertAlmostEqual(row["enterprise_value"], 1000.0 + 200.0 + 75.0 + 55.0 - 50.0)
+        self.assertEqual([i for i in issues if i["concept"] == "ShortTermDebt"], [])
+        # 2024 has neither: EV as before.
+        self.assertAlmostEqual(out.loc[2024, "enterprise_value"], 2000.0 + 200.0 - 50.0)
+
+    def test_leases_can_be_left_out(self):
+        facts = [{"concept": "us-gaap:OperatingLeaseLiability", "fiscal_year": 2025, "value": 55e6,
+                  "period_instant": "2025-12-31", "period_end": None, "is_dimensioned": False}]
+        original = valuation.EV_INCLUDES_LEASES
+        valuation.EV_INCLUDES_LEASES = False
+        try:
+            out, _ = self.build((), facts)
+        finally:
+            valuation.EV_INCLUDES_LEASES = original
+        self.assertAlmostEqual(out.loc[2025, "leases"], 55.0)                    # still shown
+        self.assertAlmostEqual(out.loc[2025, "enterprise_value"], 1000.0 + 200.0 - 50.0)
+
+    def test_a_company_tagged_short_term_line_is_counted_and_said(self):
+        # TGT 2013-2015: its own tag for "Current portion of long-term debt and other borrowings".
+        lines = [line("balance", "abc_DebtDueNextYear", "Current portion of long-term debt", 12e6, 2025)]
+        out, issues = self.build(lines)
+        self.assertAlmostEqual(out.loc[2025, "debt_short"], 12.0)
+        said = [i for i in issues if i["concept"] == "ShortTermDebt" and i["fiscal_year"] == 2025]
+        self.assertEqual(len(said), 1)
+        self.assertIn("Current portion of long-term debt", said[0]["detail"])
+        self.assertIn("by its label", said[0]["detail"])
+
+    def test_a_standard_tag_that_is_not_debt_is_not_counted_by_label(self):
+        lines = [line("balance", "us-gaap_AccountsPayableCurrent", "Accounts payable and borrowings", 9e6, 2025)]
+        out, issues = self.build(lines)
+        self.assertAlmostEqual(out.loc[2025, "debt_short"], 0.0)
+        self.assertEqual([i for i in issues if i["concept"] == "ShortTermDebt"], [])
+
+    def test_long_term_debt_comes_from_the_balance_sheet_lines(self):
+        # financial_data's LongTermDebt (200) can be the us-gaap total that already includes the
+        # current maturities (TGT FY2025); the sheet's own lines are 180 due later and 20 due within a year.
+        lines = [line("balance", "us-gaap_LongTermDebtAndCapitalLeaseObligations", "Long-term debt", 180e6, 2025,
+                      "LongTermDebt"),
+                 line("balance", "us-gaap_LongTermDebtAndCapitalLeaseObligationsCurrent", "Current portion", 20e6,
+                      2025, "CurrentPortionOfLongTermDebt")]
+        out, _ = self.build(lines)
+        self.assertAlmostEqual(out.loc[2025, "debt_long"], 180.0)
+        self.assertAlmostEqual(out.loc[2025, "debt_short"], 20.0)
+        self.assertAlmostEqual(out.loc[2025, "enterprise_value"], 1000.0 + 180.0 + 20.0 - 50.0)
+        self.assertAlmostEqual(out.loc[2024, "debt_long"], 200.0)      # no line on the sheet: financial_data's
+
+    def test_a_long_term_line_is_not_taken_for_short_term_debt(self):
+        lines = [line("balance", "abc_TermLoanNoncurrent", "Long-term borrowings, net of current portion", 30e6, 2025)]
+        _, issues = self.build(lines)
+        self.assertEqual([i for i in issues if i["concept"] == "ShortTermDebt"], [])

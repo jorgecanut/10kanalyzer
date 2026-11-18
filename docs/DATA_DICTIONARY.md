@@ -361,7 +361,8 @@ columns `period_end`, `eps_diluted` (Yahoo's split basis), `pe_basis`
 (`diluted_eps` or `net_income`), `enterprise_value`, `ebit`, `net_income`,
 `fcf`, `total_liabilities`, `z_partial` (the Z-score without its market-value
 term) and `price_scale` (price per ordinary share in the reporting currency ÷
-quoted price).
+quoted price), and `debt_long`, `debt_short`, `leases`: the enterprise value's debt,
+from the balance sheet's own lines (leases counted while `EV_INCLUDES_LEASES`).
 
 **`valuation_today.json`**: `price`, `price_time`, `price_source` (`quote` or
 `month_close`), `price_currency`, `shares` and `shares_date` (newest cover
