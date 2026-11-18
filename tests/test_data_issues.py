@@ -247,6 +247,12 @@ class QuarterSlotWarningTests(unittest.TestCase):
         self.assertEqual(sorted(["Q1'27", 2025, "Q3'26", 2024], key=data_issues.slot_order),
                          [2024, 2025, "Q3'26", "Q1'27"])
 
+    def test_issue_years_name_slots_without_fy(self):
+        page = (Path(__file__).resolve().parent.parent / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("const fyLabel", page)
+        self.assertNotIn("years.map(y => `FY${y}`)", page)
+        self.assertNotIn("<li>FY${d.year}", page)
+
     def test_titles_cover_quarter_kinds(self):
         page = (Path(__file__).resolve().parent.parent / "static" / "app.js").read_text(encoding="utf-8")
         for kind in ("quarter_unread", "quarter_metric_missing", "quarter_concept_differs", "quarter_restated",

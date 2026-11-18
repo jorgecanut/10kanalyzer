@@ -180,6 +180,14 @@ class QuarterSlotTests(unittest.TestCase):
         self.assertEqual(charts._window_keys(panel, [2024, 2025]), [2024, 2025, "Q2'26"])
         self.assertEqual(charts._window_keys(panel, [2024]), [2024])
 
+    def test_a_derived_slot_is_starred(self):
+        df = pd.DataFrame([{"fiscal_year": 2025, "Revenues": 1000.0, "OperatingIncomeLoss": 300.0,
+                            "operating_income_derived": False},
+                           {"fiscal_year": "Q2'26", "Revenues": 1100.0, "OperatingIncomeLoss": 310.0,
+                            "operating_income_derived": True}])
+        self.assertTrue(charts._any_flag(df, "operating_income_derived", [2025, "Q2'26"]))
+        self.assertFalse(charts._any_flag(df, "operating_income_derived", [2025]))
+
     def test_valuation_chart_slots(self):
         with tempfile.TemporaryDirectory() as folder:
             pd.DataFrame([{"fiscal_year": 2024, "pe": 10.0, "f_score": 6, "z_score": 3.0, "pe_median_hist": 11.0},

@@ -861,7 +861,9 @@ def _run(args, n_filings: int | None, cache_dir: str | None, live_dir: str) -> N
         history = valuation.fetch_price_history(TICKER)
         splits = valuation.fetch_splits(TICKER)
         # Foreign filers: the quote is in USD per ADS, the filings in their own currency.
-        scale, price_currency, note = valuation.market_scale(TICKER, df, facts, statements)
+        slot_dates = ({str(row["slot"]): str(row["period_end"]) for row in quarter_frame.to_dict("records")}
+                      if not quarter_frame.empty else None)
+        scale, price_currency, note = valuation.market_scale(TICKER, df, facts, statements, slot_dates)
         if note:
             print(f"[*] Valuation: {note}")
         evaluation = valuation.build_evaluation(TICKER, df, statements, facts, history,
@@ -881,7 +883,8 @@ def _run(args, n_filings: int | None, cache_dir: str | None, live_dir: str) -> N
             all_facts = pd.concat([frame for frame in (facts, quarter_extra.get("facts")) if frame is not None
                                    and not frame.empty], ignore_index=True) if not facts.empty else facts
             today = valuation.build_today(evaluation, valuation.fetch_quote(TICKER),
-                                          valuation.latest_shares(all_facts), history, valuation_issues)
+                                          valuation.latest_shares(all_facts), history, valuation_issues,
+                                          splits=splits, price_scale=scale)
             valuation.write_today(today, OUTPUT_DIR)
             print(f"[+] Today: price {today.get('price')} ({today.get('price_source')}, {today.get('price_time')}), "
                   f"earnings {today.get('earnings_period')}, P/E {today.get('pe')}")

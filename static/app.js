@@ -1807,7 +1807,9 @@ const ISSUE_METRICS = { Revenues: 'Revenue', CostOfRevenue: 'Cost of revenue', G
   StockholdersEquity: 'Equity', CapEx: 'Capital expenditure' };
 const chartIssueCount = chart => (chart.warnings || []).reduce((sum, w) => sum + w.years.length, 0);
 const issueWhat = w => w.label || ISSUE_METRICS[w.concept] || w.concept;
-const issueYears = years => years.map(y => `FY${y}`).join(', ');
+// A fiscal year reads FY2025; a quarter slot since the 10-K is its own label (Q2'26).
+const fyLabel = y => /^\d+$/.test(String(y)) ? `FY${y}` : String(y);
+const issueYears = years => years.map(fyLabel).join(', ');
 const chartIssueLine = chart => (chart.warnings || []).map(w => `${w.title}: ${issueWhat(w)} (${issueYears(w.years)})`).join('; ');
 function chartWarningsHtml(chart) {
   if (chart.warnings === undefined) {
@@ -1817,7 +1819,7 @@ function chartWarningsHtml(chart) {
   if (!count) return '';
   const items = chart.warnings.map(w => `<li class="${w.severity === 'warning' ? '' : 'is-note'}">
       <b>${esc(w.title)}</b>: ${esc(issueWhat(w))}, ${esc(issueYears(w.years))}
-      <ul>${w.details.map(d => `<li>FY${d.year}: ${esc(d.detail)}</li>`).join('')}</ul></li>`).join('');
+      <ul>${w.details.map(d => `<li>${esc(fyLabel(d.year))}: ${esc(d.detail)}</li>`).join('')}</ul></li>`).join('');
   return `<details class="ec-warn">
       <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4l9 16H3z M12 10v4 M12 17v.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
         Something in this chart does not add up: ${fmtInt(count)} data ${count === 1 ? 'issue' : 'issues'}</summary>

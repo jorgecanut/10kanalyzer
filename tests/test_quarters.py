@@ -249,6 +249,23 @@ class FilingShapeTests(unittest.TestCase):
         self.assertTrue(frame.iloc[0]["gross_profit_derived"])
 
 
+class EstimateTests(unittest.TestCase):
+    def test_estimated_operating_income_is_flagged_and_said(self):
+        # The 10-Q tags no operating income: derive() fills an estimate, which must be flagged and said.
+        frame_in = annual(OperatingIncomeLoss=5.0, CostOfRevenue=70.0, SellingGeneralAndAdministrativeExpense=20.0)
+        sources = {**SOURCES, "OperatingIncomeLoss": "OperatingIncomeLoss", "CostOfRevenue": "CostOfRevenue",
+                   "SellingGeneralAndAdministrativeExpense": "SellingGeneralAndAdministrativeExpense"}
+        extra = []
+        for tag, now, before in (("us-gaap:CostOfRevenue", 35.0, 34.0),
+                                 ("us-gaap:SellingGeneralAndAdministrativeExpense", 10.0, 9.0)):
+            extra += [fact(tag, now * M, "2026-02-01", "2026-08-01"), fact(tag, before * M, "2025-02-02", "2025-08-02")]
+        frame, issues = build([entry(**Q2, extra=extra)], frame_in, sources)
+        self.assertTrue(frame.iloc[0]["operating_income_derived"])
+        said = [i for i in kinds(issues, "quarter_metric_missing") if i["concept"] == "OperatingIncomeLoss"]
+        self.assertEqual(len(said), 1)
+        self.assertIn("the value shown is derived", said[0]["detail"])
+
+
 class CalendarTests(unittest.TestCase):
     def test_53_week_prior_period(self):
         # The year before had 53 weeks: its comparative ends 371 days earlier.
