@@ -143,8 +143,9 @@ moves. Each batch takes the next N companies no batch has taken, and for each:
    cannot see that the wrong fact was picked. An operating income filled in
    from gross profit less SG&A and R&D (`operating_income_derived` in
    `financial_data.csv`, starred in the chart) is still reported as not read:
-   an estimate never stands in for the filing's own figure. 10-KTs and 10-Qs
-   are dumped but not analysed yet.
+   an estimate never stands in for the filing's own figure. 10-KTs are dumped
+   but not analysed yet; the scan does not analyse its 10-Qs either (a
+   single-ticker run does: see "The quarters since the latest 10-K").
 
 **Rerun** repeats step 3 for a batch from the dump alone, with no SEC request:
 fix the code, rerun the same batch, compare the issues. **Retry downloads**
@@ -180,7 +181,9 @@ one another:
 financial_graphs/
 ├── NFLX/
 │   ├── financial_data.csv   # per-year ratio inputs/outputs
-│   ├── evaluation.csv       # per-year valuation, quality and distress scores
+│   ├── evaluation.csv       # per-year valuation, quality and distress scores, then one row per quarter slot
+│   ├── valuation_today.json # today's price over the newest TTM: the Home card's numbers
+│   ├── quarters.csv         # the 10-Qs after the latest 10-K: TTM, three-month and quarter-end values
 │   ├── insider.json         # open-market insider buys/sells, last 3 years
 │   ├── statements.csv       # every dimension-free primary-statement line
 │   ├── facts.csv            # every fact for each period, dimensions included
@@ -231,6 +234,41 @@ months — no transaction cap. Both steps are fail-soft, and the trades have
 their own **Insiders** tab.
 `charts.py` charts them as `08_valuation`: P/E history against its median,
 annotated with the percentile, plus F-score and Z-score bars.
+
+P/E is price over **diluted EPS** (on Yahoo's split basis, like the price) when
+the filing reports it; otherwise market cap over net income, reported as
+`valuation_assumed` (`EarningsPerShareDiluted`).
+
+**The quarters since the latest 10-K.** A run also reads the 10-Qs whose
+period ends after the latest annual report (0–3; more only when the 10-K is
+overdue, reported as `overdue_10k`); `--filings` limits annual reports only.
+`quarters.py` reads each with the annual rules, twice: at its own date over
+its year to date, and at the same date a year earlier (its comparative
+columns). Flows get a **TTM** (the fiscal year + the year to date − the same
+months a year earlier) and a three-month value (year to date − the previous
+10-Q's; Q1's is its year to date); balances are the 10-Q's own. Statement
+lines of the income and cash-flow statements get a TTM the same way. Written
+to `quarters.csv`; every chart shows them after the fiscal years as lighter
+slots (`TTM Q2'26`, or `Q2'26` for balances) whose tooltip also gives the
+quarter's own three months, and `evaluation.csv` gets a row per slot, priced
+at the quarter end. Every gap is an issue: `quarter_unread` (a 10-Q not read),
+`quarter_metric_missing` (the year has the metric, the quarter or its
+comparative does not; also "no three-month value" and "no TTM for this
+statement line", as info), `quarter_concept_differs` (the TTM adds values read
+from different tags), `quarter_restated` (the 10-Q's prior year-end balances
+differ from the 10-K's) and `quarter_label_mismatch` (the cover page's quarter
+disagrees with the dates; the dates win). The 10-Qs' own totals that do not
+add up and statements not read are reported as for a 10-K.
+
+**Today's numbers.** `valuation_today.json` puts today's price (Yahoo's quote
+and its time; without one, the last monthly close, reported as
+`valuation_assumed`) and the newest cover-page share count over the newest
+TTM (else the latest fiscal year): P/E, EV/EBIT, earnings yield, FCF yield,
+the Z-score's market-value term, and the P/E percentile against the
+fiscal-year P/Es. Return on capital uses the TTM EBIT and the latest balance
+sheet; the F-score stays on the latest fiscal year (it compares two full
+years). Home and the Screener show these, saying which price and which
+earnings they used.
 
 A run made before `charts.json` existed (PNGs only) is upgraded the first time
 it is opened: the spec is built from its CSVs and the old PNGs are removed.
@@ -463,7 +501,8 @@ ratios, and caches each ticker's result for 7 days. Tickers with no cached data
 are queued through the same serialized worker as `/api/run`. It ranks the
 watchlist with Joel Greenblatt's Magic Formula: **earnings yield** (EBIT / EV)
 and **return on capital** (EBIT / (total assets − current liabilities)); the
-combined rank is 1 + 1 for the best of both, lower is better. Each row has a
+score is the sum of the two ranks (1 + 1 for the best of both) and the Magic
+rank is the place by that score (#1 of 5; equal scores share a place). Each row has a
 **charts** button that opens the ticker in the Charts tab, running the full
 pipeline first only if it has no charts yet. Older `evaluation.csv` files without `return_on_capital` are repaired
 on the fly from `financial_data.csv` + `statements.csv`.

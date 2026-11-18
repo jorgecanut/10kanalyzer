@@ -213,6 +213,42 @@ class IssueTests(unittest.TestCase):
         self.assertEqual(kinds(issues, "quarter_unread")[0]["accession"], "q-bad")
 
 
+class FilingShapeTests(unittest.TestCase):
+    def test_restated_needs_the_same_tag(self):
+        # The 10-K read LongTermDebt (14.398); the 10-Q tags only LongTermDebtAndCapitalLeaseObligations,
+        # which the 10-K also showed as 14.326 at the year end. Not a restatement: another tag.
+        frame_in = annual(LongTermDebt=14.398)
+        sources = {**SOURCES, "LongTermDebt": "LongTermDebt"}
+        lt = "us-gaap:LongTermDebtAndCapitalLeaseObligations"
+        q = entry(**Q2, extra=[fact(lt, 14.326 * M, instant=FY_END), fact(lt, 14.221 * M, instant="2026-08-01")])
+        frame, issues = build([q], frame_in, sources)
+        self.assertEqual(kinds(issues, "quarter_restated"), [])
+        differs = [i for i in kinds(issues, "quarter_concept_differs") if i["concept"] == "LongTermDebt"]
+        self.assertEqual(len(differs), 1)
+        self.assertIn("LongTermDebtAndCapitalLeaseObligations", differs[0]["detail"])
+        self.assertAlmostEqual(frame.iloc[0]["LongTermDebt"], 14.221)
+
+    def test_restated_same_tag_is_reported(self):
+        frame_in = annual(LongTermDebt=14.398)
+        sources = {**SOURCES, "LongTermDebt": "LongTermDebt"}
+        q = entry(**Q2, extra=[fact("us-gaap:LongTermDebt", 14.0 * M, instant=FY_END),
+                               fact("us-gaap:LongTermDebt", 13.9 * M, instant="2026-08-01")])
+        _, issues = build([q], frame_in, sources)
+        self.assertEqual([i["concept"] for i in kinds(issues, "quarter_restated")], ["LongTermDebt"])
+
+    def test_derived_gross_profit_follows_the_year(self):
+        # Neither the 10-K nor the 10-Q tags gross profit: the year's is revenue - cost, so is the TTM.
+        frame_in = annual(GrossProfit=30.0, CostOfRevenue=70.0, gross_profit_derived=True)
+        sources = {**SOURCES, "CostOfRevenue": "CostOfRevenue"}
+        cost = "us-gaap:CostOfRevenue"
+        q = entry(**Q2, extra=[fact(cost, 35.0 * M, "2026-02-01", "2026-08-01"),
+                               fact(cost, 34.0 * M, "2025-02-02", "2025-08-02")])
+        frame, issues = build([q], frame_in, sources)
+        self.assertEqual([i for i in kinds(issues, "quarter_metric_missing") if i["concept"] == "GrossProfit"], [])
+        self.assertAlmostEqual(frame.iloc[0]["GrossProfit"], 102.0 - 71.0)
+        self.assertTrue(frame.iloc[0]["gross_profit_derived"])
+
+
 class CalendarTests(unittest.TestCase):
     def test_53_week_prior_period(self):
         # The year before had 53 weeks: its comparative ends 371 days earlier.

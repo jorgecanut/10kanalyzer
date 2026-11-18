@@ -335,3 +335,41 @@ Still open:
 
 1. Tune every threshold and both floors on the pilot results.
 2. Which *verify* tags hold up in the pilot, and which need fallbacks.
+
+## 11. Single-ticker run: quarters and today's valuation (1.22)
+
+A web or command-line run (not the scan yet) reads the 10-Qs after the latest
+annual report and writes, beside its other files:
+
+**`quarters.csv`**: one row per 10-Q, oldest first, in millions of the reporting currency.
+
+| Column | Meaning |
+| --- | --- |
+| `slot` | `Q2'26`: the quarter (from the dates since the fiscal year end) and the two-digit fiscal year it belongs to |
+| `label` | `TTM Q2'26` |
+| `period_end`, `accession`, `fiscal_year`, `quarter` | the 10-Q's period end and accession; the fiscal year and quarter of the slot |
+| `<metric>` | a flow: TTM = latest FY + year to date − the same months a year earlier; a balance: the 10-Q's value at its date |
+| `<metric>__q` | a flow's own three months (year to date − the previous 10-Q's; Q1: its year to date) |
+| `<metric>__ytd`, `<metric>__ytd_prior` | the year to date and the same months a year earlier, as read |
+| `<metric>__source` | the tag the year-to-date value came from (`statement:…` for a statement line) |
+| `EpsDiluted` (+ `__ytd`, `__ytd_prior`) | diluted EPS, TTM the same way |
+| `GrossMargin` … `DebtToEquity` | the ratios of `financial_data.csv`, on the TTM and quarter-end values |
+
+**`evaluation.csv`** gains a row per slot after the fiscal years (`fiscal_year`
+= the slot, priced at the quarter end, no F-score or P/E percentile) and the
+columns `period_end`, `eps_diluted` (Yahoo's split basis), `pe_basis`
+(`diluted_eps` or `net_income`), `enterprise_value`, `ebit`, `net_income`,
+`fcf`, `total_liabilities`, `z_partial` (the Z-score without its market-value
+term) and `price_scale` (price per ordinary share in the reporting currency ÷
+quoted price).
+
+**`valuation_today.json`**: `price`, `price_time`, `price_source` (`quote` or
+`month_close`), `price_currency`, `shares` and `shares_date` (newest cover
+page), `market_cap`, `enterprise_value`, `earnings_period` (`TTM Q2'26` or
+`FY2025`), `earnings_end`, `pe`, `pe_basis`, `ev_ebit`, `earnings_yield`,
+`fcf_yield`, `return_on_capital`, `pe_percentile` (against the fiscal-year
+P/Es; needs three), `z_score`, `f_score` and `f_score_year` (latest fiscal year).
+
+Issue kinds: `quarter_unread`, `quarter_metric_missing`,
+`quarter_concept_differs`, `quarter_restated`, `quarter_label_mismatch`, and
+`overdue_10k` (more than three 10-Qs after the 10-K).
