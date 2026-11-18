@@ -677,6 +677,7 @@
   .ec-tip-head { margin-bottom:4px; font-weight:700; }
   .ec-tip-row { display:flex; align-items:center; gap:4px; line-height:1.6; }
   .ec-tip-row b { margin-left:auto; padding-left:16px; font-variant-numeric:tabular-nums; }
+  .ec-tip-sub { padding-left:14px; color:var(--muted); font-size:.92em; line-height:1.4; }
   .ec-mini { height:110px; pointer-events:none; }
 
   /* Search over the charted series and every fact of the filings. */

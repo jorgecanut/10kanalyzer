@@ -1583,6 +1583,8 @@ function panelOption(panel, t, { mini = false, width = 800, full = false, span =
   const fs = t.fs;
   const text = (size, color = t.muted) => ({ fontFamily: t.font, fontSize: size * fs, color });
   const years = panel.years.map(String);
+  const fiscal = panel.fiscalCount ?? years.length;
+  const slots = panel.quarters || [];
   const barAxes = new Set(panel.series.filter(s => s.kind === 'bar').map(s => s.axis));
   const hasBars = barAxes.size > 0;
   const byName = {};
@@ -1599,7 +1601,9 @@ function panelOption(panel, t, { mini = false, width = 800, full = false, span =
     if (s.kind === 'bar') {
       series.push({
         type: 'bar', name: s.label, yAxisIndex: s.axis, z: 2,
-        data: s.values.map(v => v == null ? null : { value: v, label: { position: v < 0 ? 'bottom' : 'top' } }),
+        // A quarter slot is drawn lighter: never taken for a 10-K year.
+        data: s.values.map((v, i) => v == null ? null : { value: v, label: { position: v < 0 ? 'bottom' : 'top' },
+                                                          ...(i >= fiscal ? { itemStyle: { opacity: 0.45 } } : {}) }),
         itemStyle: { color, borderColor: t.surface, borderWidth: 1, borderRadius: 4 },
         emphasis: { itemStyle: { borderColor: t.text, borderWidth: 2 } },
         barGap: '0%', barCategoryGap: `${Math.round((1 - panel.group_width) * 100)}%`,
@@ -1642,7 +1646,10 @@ function panelOption(panel, t, { mini = false, width = 800, full = false, span =
   // The zero line: a rule at 0 like matplotlib's axhline, not part of the legend.
   series.push({ type: 'line', name: '', data: [], silent: true, z: 1,
                 markLine: { silent: true, symbol: 'none', label: { show: false },
-                            lineStyle: { type: 'solid', width: 1, color: t.ink }, data: [{ yAxis: 0 }] } });
+                            lineStyle: { type: 'solid', width: 1, color: t.ink }, data: [{ yAxis: 0 }] },
+                // The quarters since the latest 10-K sit on a shaded band.
+                ...(slots.length && fiscal < years.length ? { markArea: { silent: true, itemStyle: { color: t.soft },
+                  data: [[{ xAxis: years[fiscal] }, { xAxis: years[years.length - 1] }]] } } : {}) });
 
   const visible = mini ? years.length
     : span ? Math.max(Math.min(MIN_YEARS, years.length), Math.min(span, years.length))
@@ -1679,7 +1686,7 @@ function panelOption(panel, t, { mini = false, width = 800, full = false, span =
       show: !mini, trigger: 'axis', confine: true, axisPointer: { type: 'shadow', shadowStyle: { color: t.soft } },
       backgroundColor: t.surface2, borderColor: t.line, borderWidth: 1, padding: [8, 12],
       textStyle: text(14, t.text), extraCssText: 'border-radius:8px; box-shadow:var(--shadow-drop);',
-      formatter: params => tooltipHtml(params, byName),
+      formatter: params => tooltipHtml(params, byName, panel),
     },
   };
   if (zoom) {
@@ -1696,19 +1703,30 @@ function panelOption(panel, t, { mini = false, width = 800, full = false, span =
   return { option, index };
 }
 
-function tooltipHtml(params, byName) {
+function tooltipHtml(params, byName, panel = null) {
   const list = (Array.isArray(params) ? params : [params]).filter(p => p.seriesName);
   if (!list.length) return '';
+  // A quarter slot: the bar is the twelve months to the quarter end (or the
+  // balance at it); the quarter's own three months come under each value.
+  const fiscal = panel?.fiscalCount ?? Infinity;
+  const at = list[0].dataIndex;
+  const slot = panel && at >= fiscal ? (panel.quarters || [])[at - fiscal] : null;
   const seen = new Set();
   const rows = list.map(p => {
     const s = byName[p.seriesName];
     if (!s || seen.has(p.seriesName) || p.value == null) return '';
     seen.add(p.seriesName);
+    const three = slot && s.quarter_values ? s.quarter_values[at - fiscal] : null;
     return `<div class="ec-tip-row">${p.marker}<span>${esc(s.label)}${s.derived ? ' *' : ''}</span>`
-      + `<b>${esc(fmtValue(s.format, p.value))}</b></div>`;
+      + `<b>${esc(fmtValue(s.format, p.value))}</b></div>`
+      + (three != null ? `<div class="ec-tip-row ec-tip-sub"><span>its three months</span>`
+        + `<b>${esc(fmtValue(s.format, three))}</b></div>` : '');
   }).join('');
-  return `<div class="ec-tip"><div class="ec-tip-head">${esc(list[0].axisValue)}</div>`
-    + (rows || '<div class="ec-tip-row muted">No values this year</div>') + '</div>';
+  const head = slot
+    ? `${slot.label.startsWith('TTM') ? `Twelve months to ${slot.period_end}` : `At ${slot.period_end}`} · ${slot.id} 10-Q`
+    : list[0].axisValue;
+  return `<div class="ec-tip"><div class="ec-tip-head">${esc(head)}</div>`
+    + (rows || `<div class="ec-tip-row muted">No values ${slot ? 'for this quarter' : 'this year'}</div>`) + '</div>';
 }
 
 // The legend is HTML: it wraps like text and each key toggles its series.
@@ -2017,6 +2035,16 @@ async function loadSpec(data) {
   const res = await fetch(`/api/charts/${encodeURIComponent(data.ticker)}`);
   if (!res.ok) return null;
   const spec = await res.json();
+  // The quarters since the latest 10-K follow the fiscal years on every axis:
+  // ``years`` becomes the categories (the slots by their label) and
+  // ``fiscalCount`` says where the years end.
+  for (const chart of spec.charts || []) {
+    for (const panel of chart.panels) {
+      const slots = panel.quarters || [];
+      panel.fiscalCount = panel.years.length;
+      panel.years = panel.years.concat(slots.map(q => q.label));
+    }
+  }
   EC.spec = spec;
   EC.key = key;
   setCurrency(spec.currency);

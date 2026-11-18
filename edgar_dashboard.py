@@ -902,7 +902,10 @@ def _run(args, n_filings: int | None, cache_dir: str | None, live_dir: str) -> N
 
     # charts.json only: the page draws it, and PNGs are drawn when downloaded.
     print("[*] Building charts")
-    rendered = charts.render_all(TICKER, OUTPUT_DIR, df, statements, facts, log=print, issues=issues)
+    rendered = charts.render_all(TICKER, OUTPUT_DIR, df, statements, facts, log=print, issues=issues,
+                                 quarters=quarter_frame if not quarter_frame.empty else None,
+                                 quarter_statements=quarter_extra.get("statements"),
+                                 quarter_facts=quarter_extra.get("facts"))
     print(f"    [+] {len(rendered)} charts written to charts.json")
 
     publish(OUTPUT_DIR, live_dir, with_charts=True)
