@@ -72,12 +72,13 @@ def _role_name(role: str, definition: str | None = None) -> str:
 
 
 def period_values(facts: pd.DataFrame, period_of_report: str, currency: str | None,
-                  min_days: int = ANNUAL_MIN_DAYS) -> dict[str, dict]:
+                  min_days: int = ANNUAL_MIN_DAYS, max_days: int | None = None) -> dict[str, dict]:
     """Element id -> {value, decimals, label} for the filing's own period.
 
     ``facts`` is edgartools' ``xbrl.facts.to_dataframe()``. Duration facts must
     end on the report date and span a year (``min_days``: less for a first or
-    transition year); instant facts must sit on it. When
+    transition year; at most ``max_days`` when given, for a 10-Q's year to
+    date); instant facts must sit on it. When
     a concept appears twice (a rounded and a precise copy) the precise one wins.
     """
     if facts is None or facts.empty:
@@ -92,7 +93,10 @@ def period_values(facts: pd.DataFrame, period_of_report: str, currency: str | No
     start = pd.to_datetime(frame.get("period_start"), errors="coerce")
     end = pd.to_datetime(frame.get("period_end"), errors="coerce")
     instant = pd.to_datetime(frame.get("period_instant"), errors="coerce")
-    annual = end.eq(target) & ((end - start).dt.days >= min_days)
+    span = (end - start).dt.days
+    annual = end.eq(target) & (span >= min_days)
+    if max_days is not None:
+        annual &= span <= max_days
     frame = frame[annual | instant.eq(target)]
     decimals = frame["decimals"] if "decimals" in frame.columns else pd.Series(None, index=frame.index)
     frame["_decimals"] = pd.to_numeric(decimals, errors="coerce").astype(float)
@@ -114,7 +118,7 @@ def period_values(facts: pd.DataFrame, period_of_report: str, currency: str | No
 
 
 def convenience_values(facts: pd.DataFrame, period_of_report: str, currency: str | None,
-                       min_days: int = ANNUAL_MIN_DAYS) -> dict[str, list[float]]:
+                       min_days: int = ANNUAL_MIN_DAYS, max_days: int | None = None) -> dict[str, list[float]]:
     """Element id -> the filing's own-period values in another currency than ``currency``.
 
     Foreign filers such as TSMC add a USD translation of the latest year; the
@@ -125,7 +129,7 @@ def convenience_values(facts: pd.DataFrame, period_of_report: str, currency: str
     other = facts[facts["currency"].notna() & (facts["currency"].astype(str).str.upper() != currency)]
     out: dict[str, list[float]] = {}
     for code in other["currency"].astype(str).str.upper().unique():
-        for element, item in period_values(other, period_of_report, code, min_days).items():
+        for element, item in period_values(other, period_of_report, code, min_days, max_days).items():
             out.setdefault(element, []).append(item["value"])
     return out
 
@@ -203,9 +207,9 @@ def _sum(parts: list[tuple[str, float]], values: dict[str, dict]) -> tuple[float
 
 
 def check_filing(xbrl, facts: pd.DataFrame, period_of_report: str, currency: str | None = None,
-                 min_days: int = ANNUAL_MIN_DAYS) -> list[dict]:
+                 min_days: int = ANNUAL_MIN_DAYS, max_days: int | None = None) -> list[dict]:
     """One row per total in the filing's calculation linkbase that has parts with values."""
-    values = period_values(facts, period_of_report, currency, min_days)
+    values = period_values(facts, period_of_report, currency, min_days, max_days)
     try:
         trees = xbrl.calculation_trees or {}
     except Exception:  # noqa: BLE001 - a filing without a usable linkbase has nothing to check

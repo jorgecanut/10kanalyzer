@@ -356,8 +356,16 @@ def extract_metric(
     statement_values: dict[str, float] | None = None,
     currency: str | None = None,
     min_days: int = ANNUAL_MIN_DAYS,
+    max_days: int | None = None,
+    sources: dict | None = None,
+    metric: str | None = None,
 ) -> float:
     """Return the value for the first matching concept, else nan.
+
+    ``max_days`` caps a duration's span (a 10-Q read at its year to date must
+    not take a twelve-month fact). ``sources[metric]``, when both are given,
+    gets the concept the value came from, or ``statement:<concept>`` for the
+    filer's statement line.
 
     ``facts`` is the dataframe produced by ``xbrl.facts.to_dataframe()``.
 
@@ -397,7 +405,10 @@ def extract_metric(
         sub = sub.dropna(subset=["period_end"])
         if period_type == "duration":
             span = (sub["period_end"] - sub["period_start"]).dt.days
-            sub = sub[span >= min_days]
+            keep = span >= min_days
+            if max_days is not None:
+                keep &= span <= max_days
+            sub = sub[keep]
         if sub.empty:
             return np.nan
         # Closest period end to the filing's report date is the current year.
@@ -420,12 +431,16 @@ def extract_metric(
         for mask in ((~is_dimensional), scenario_only):
             value = pick(mask)
             if pd.notna(value):
+                if sources is not None and metric:
+                    sources[metric] = concept
                 return float(value)
         # No fact at all for this concept: use the filer's own statement line,
         # which also covers computed totals never tagged as a single fact.
         if statement_values:
             stated = statement_values.get(concept)
             if stated is not None and pd.notna(stated):
+                if sources is not None and metric:
+                    sources[metric] = f"statement:{concept}"
                 return float(stated)
 
     return np.nan
@@ -522,9 +537,11 @@ def _component_metric(
     statement_values: dict[str, float],
     currency: str | None,
     min_days: int = ANNUAL_MIN_DAYS,
+    max_days: int | None = None,
 ) -> float:
     """Sum of the first concept with a value in each group; nan when none has one."""
-    parts = [extract_metric(facts, group, period_of_report, period_type, statement_values, currency, min_days)
+    parts = [extract_metric(facts, group, period_of_report, period_type, statement_values, currency, min_days,
+                            max_days)
              for group in groups]
     found = [part for part in parts if pd.notna(part)]
     return float(sum(found)) if found else np.nan
@@ -784,12 +801,31 @@ def _stated_line(metric: str, statement_rows: list[dict], values: dict[str, dict
     return value
 
 
-def extract_filing(filing, period_key: str) -> dict:
-    """Everything a run takes from one annual filing (a ``FilingView`` or a live filing).
+def _track(row: dict, sources: dict, step: str, change) -> None:
+    """Run ``change(row)`` and name ``step`` as the source of every metric it set or changed."""
+    before = dict(row)
+    change(row)
+    for metric, value in row.items():
+        was = before.get(metric)
+        if pd.isna(value) and not pd.isna(was):
+            sources.pop(metric, None)
+        elif not pd.isna(value) and (pd.isna(was) or value != was):
+            sources[metric] = step
+
+
+def extract_filing(filing, period_key: str, min_days: int | None = None, max_days: int | None = None) -> dict:
+    """Everything a run takes from one filing (a ``FilingView`` or a live filing).
 
     ``{"xbrl": False}`` when the filing has no XBRL (10-Ks before 2009-2011);
     otherwise the ratio ``row`` and the filing's ``statements``, ``facts`` and
-    ``checks`` records. Raises when the filing cannot be read.
+    ``checks`` records, and ``sources``: per metric read, the concept it came
+    from (``statement:...`` for a statement line, ``components`` for a sum of
+    parts, ``statement lines`` for one built from the statement's lines).
+    Raises when the filing cannot be read.
+
+    ``min_days``/``max_days`` pick the duration read: by default a fiscal year
+    (``annual_min_days``); a 10-Q is read at its year to date, at its own date
+    and at the same date a year earlier (``quarters.py``).
     """
     xbrl = filing.xbrl()
     if xbrl is None:
@@ -812,7 +848,9 @@ def extract_filing(filing, period_key: str) -> dict:
         fiscal_year = int(period_key[:4])
 
     currency = reporting_currency(facts)
-    min_days = annual_min_days(facts, period_key)
+    if min_days is None:
+        min_days = annual_min_days(facts, period_key)
+    span_days = None if max_days is None else (min_days + max_days) // 2
     ratio, ratio_source, is_adr = ads_ratio(facts, currency)
     row: dict = {"period_of_report": period_key, "fiscal_year": fiscal_year,
                  "form": filing.form, "currency": currency or "USD",
@@ -821,32 +859,39 @@ def extract_filing(filing, period_key: str) -> dict:
     # renders but never tags as a consolidated fact.
     statement_problems: list[dict] = []
     statement_rows = xbrl_extract.extract_statements(
-        xbrl, period_key, calc_check.period_values(facts, period_key, currency, min_days),
-        calc_check.convenience_values(facts, period_key, currency, min_days), problems=statement_problems)
+        xbrl, period_key, calc_check.period_values(facts, period_key, currency, min_days, max_days),
+        calc_check.convenience_values(facts, period_key, currency, min_days, max_days),
+        problems=statement_problems, span_days=span_days)
     for problem in statement_problems:
         print(f"    [!] {period_key}: the {problem['statement']} statement was not read: {problem['detail']}")
     statement_values = _statement_values(statement_rows)
+    sources: dict[str, str] = {}
     for metric, (concepts, period_type) in METRIC_CONCEPTS.items():
         row[metric] = extract_metric(
-            facts, concepts, period_key, period_type, statement_values, currency, min_days
+            facts, concepts, period_key, period_type, statement_values, currency, min_days, max_days,
+            sources=sources, metric=metric,
         )
     for metric, groups in COMPONENT_METRICS.items():
         if pd.isna(row[metric]):
             row[metric] = _component_metric(facts, groups, period_key, METRIC_CONCEPTS[metric][1],
-                                            statement_values, currency, min_days)
+                                            statement_values, currency, min_days, max_days)
+            if pd.notna(row[metric]):
+                sources[metric] = "components"
     if pd.isna(row["CapEx"]):
-        row["CapEx"] = _capex_line(statement_rows)
-    _statement_revenue(row, statement_rows)
+        _track(row, sources, "statement:capex line", lambda r: r.__setitem__("CapEx", _capex_line(statement_rows)))
+    _track(row, sources, "statement:revenue line", lambda r: _statement_revenue(r, statement_rows))
     if pd.isna(row["Revenues"]):
-        row["Revenues"] = _revenue_line(statement_rows)
-    own_values = calc_check.period_values(facts, period_key, currency, min_days)
+        _track(row, sources, "statement:revenue line",
+               lambda r: r.__setitem__("Revenues", _revenue_line(statement_rows)))
+    own_values = calc_check.period_values(facts, period_key, currency, min_days, max_days)
     for metric in ("OperatingIncomeLoss", "StockholdersEquity"):
         if pd.isna(row[metric]):
-            row[metric] = _stated_line(metric, statement_rows, own_values)
-    _cost_of_revenue(row, statement_rows)
+            _track(row, sources, f"statement:{metric} line",
+                   lambda r, m=metric: r.__setitem__(m, _stated_line(m, statement_rows, own_values)))
+    _track(row, sources, "statement lines", lambda r: _cost_of_revenue(r, statement_rows))
     filing_facts = xbrl_extract.extract_facts(xbrl, period_key)
     try:
-        filing_checks = calc_check.check_filing(xbrl, facts, period_key, currency, min_days)
+        filing_checks = calc_check.check_filing(xbrl, facts, period_key, currency, min_days, max_days)
     except Exception as exc:  # noqa: BLE001 - the check never costs the filing
         print(f"    [!] {period_key}: calculation check skipped ({exc.__class__.__name__}: {exc})")
         filing_checks = []
@@ -859,5 +904,5 @@ def extract_filing(filing, period_key: str) -> dict:
               f"({exc.__class__.__name__}: {exc})")
         evidence = {}
     return {"xbrl": True, "row": row, "statements": statement_rows,
-            "facts": filing_facts, "checks": filing_checks, "evidence": evidence,
+            "facts": filing_facts, "checks": filing_checks, "evidence": evidence, "sources": sources,
             "statement_problems": statement_problems}

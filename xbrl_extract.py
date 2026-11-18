@@ -41,13 +41,37 @@ _FACT_COLUMNS = [
 ]
 
 
-def _period_column(data: pd.DataFrame, period_of_report: str) -> str | None:
+def _span_suffix(span_days: int) -> tuple[str, ...]:
+    """edgartools' column suffix for a duration of ``span_days`` (statements.py: Qn, YTD, FY)."""
+    if span_days <= 100:
+        return ("(Q1)", "(Q2)", "(Q3)", "(Q4)")
+    if span_days <= 285:
+        return ("(YTD)",)
+    return ("(FY)",)
+
+
+def _period_column(data: pd.DataFrame, period_of_report: str, span_days: int | None = None) -> str | None:
     """Pick the dataframe column for this filing's own period.
 
     Column headers look like ``2024-12-28`` (instant) or ``2024-12-28 (FY)``
     (duration). Only the filing's period is used, so restatements in later
     filings do not overwrite the originally reported year.
+
+    ``span_days`` (a 10-Q read at its year to date) picks, among the columns
+    of the date, the one whose suffix matches that length: a 10-Q shows the
+    three months (``(Q2)``) and the year to date (``(YTD)``) side by side, and
+    the first column for the date is the three months. A plain date column
+    (a balance sheet) still matches.
     """
+    if span_days is not None:
+        suffixes = _span_suffix(span_days)
+        for column in data.columns:
+            if isinstance(column, str) and column.startswith(period_of_report) and column.endswith(suffixes):
+                return column
+        for column in data.columns:
+            if isinstance(column, str) and column == period_of_report:
+                return column
+        return None
     for column in data.columns:
         if isinstance(column, str) and column == period_of_report:
             return column
@@ -95,8 +119,11 @@ def extract_statements(
     values: dict[str, dict] | None = None,
     convenience: dict[str, list[float]] | None = None,
     problems: list[dict] | None = None,
+    span_days: int | None = None,
 ) -> list[dict]:
     """Every dimension-free line of the five primary statements, long-form.
+
+    ``span_days``: the duration to read (a 10-Q's year to date); see ``_period_column``.
 
     ``problems``, when a list, gets ``{"statement", "detail"}`` for every
     statement no line was taken from: it failed to render, it has no column
@@ -125,7 +152,7 @@ def extract_statements(
             if problems is not None and key in PRIMARY_STATEMENTS:
                 problems.append({"statement": key, "detail": "it was not found in the filing"})
             continue
-        column = _period_column(data, period_of_report)
+        column = _period_column(data, period_of_report, span_days)
         if column is None:
             if problems is not None:
                 columns = ", ".join(str(c) for c in data.columns if str(c)[:4].isdigit()) or "none"
