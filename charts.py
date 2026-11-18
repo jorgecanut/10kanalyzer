@@ -189,7 +189,7 @@ def _record_quality(metric: str, series: pd.Series, source: str) -> None:
         _QUALITY_ROWS.append(
             {
                 "metric": metric,
-                "fiscal_year": int(year),
+                "fiscal_year": _slot_key(year),
                 "value": float(value) if pd.notna(value) else np.nan,
                 "source": "missing" if pd.isna(value) else source,
             }
@@ -272,6 +272,19 @@ def _ink_color(color: str) -> str:
 # --------------------------------------------------------------------------- #
 # Data helpers.
 # --------------------------------------------------------------------------- #
+def _slot_key(value):
+    """A fiscal year as an int, a quarter slot ("Q2'26") as its text (``data_issues.slot_key``)."""
+    import data_issues
+    return data_issues.slot_key(value)
+
+
+def _keyed(frame: pd.DataFrame) -> pd.DataFrame:
+    """``frame`` with ``fiscal_year`` as years (int) and quarter slots (text); rows with neither dropped."""
+    frame = frame.copy()
+    frame["fiscal_year"] = frame["fiscal_year"].map(_slot_key)
+    return frame.dropna(subset=["fiscal_year"])
+
+
 def _df_series(df: pd.DataFrame, col: str, years: list[int]) -> pd.Series:
     if col not in df.columns:
         return pd.Series(np.nan, index=years)
@@ -297,10 +310,8 @@ def _stmt_series(
 ) -> pd.Series:
     if statements.empty:
         return pd.Series(np.nan, index=years)
-    statements = statements.copy()
+    statements = _keyed(statements)
     statements["value"] = pd.to_numeric(statements["value"], errors="coerce")
-    statements["fiscal_year"] = pd.to_numeric(statements["fiscal_year"], errors="coerce").astype("Int64")
-    statements = statements.dropna(subset=["fiscal_year"])
     concepts = list(concepts)
     # edgartools' standard_concept, or the tag itself (``ifrs-full_Borrowings``
     # -> ``Borrowings``): many IFRS lines carry no standard_concept.
@@ -333,10 +344,11 @@ def _stmt_series(
     priority = {concept: i for i, concept in enumerate(concepts)}
     by_standard = sub["standard_concept"].map(priority)
     by_tag = tag.loc[sub.index].map(priority)
+    # Stable: within a year (or quarter slot), lines of equal priority keep their order.
     sub = sub.assign(
         _priority=pd.concat([by_standard, by_tag], axis=1).min(axis=1).fillna(len(concepts))
-    ).sort_values(["fiscal_year", "_priority"])
-    s = sub.groupby("fiscal_year")["value"].first() / USD_TO_MILLIONS
+    ).sort_values("_priority", kind="mergesort")
+    s = sub.groupby("fiscal_year", sort=False)["value"].first() / USD_TO_MILLIONS
     return s.reindex(years)
 
 
@@ -348,9 +360,7 @@ def _fact_series(
 ) -> pd.Series:
     if facts.empty:
         return pd.Series(np.nan, index=years)
-    facts = facts.copy()
-    facts["fiscal_year"] = pd.to_numeric(facts["fiscal_year"], errors="coerce").astype("Int64")
-    facts = facts.dropna(subset=["fiscal_year"])
+    facts = _keyed(facts)
     concept_name = facts["concept"].str.split(":").str[-1]
     mask = concept_name.isin(concepts) & (~facts["is_dimensioned"].astype(bool))
     sub = facts[mask]
@@ -360,11 +370,11 @@ def _fact_series(
     sub["numeric"] = pd.to_numeric(sub["value"], errors="coerce")
     sub = sub.dropna(subset=["numeric"])
     if agg == "max":
-        s = sub.groupby("fiscal_year")["numeric"].max()
+        s = sub.groupby("fiscal_year", sort=False)["numeric"].max()
     elif agg == "first":
-        s = sub.groupby("fiscal_year")["numeric"].first()
+        s = sub.groupby("fiscal_year", sort=False)["numeric"].first()
     else:
-        s = sub.groupby("fiscal_year")["numeric"].sum()
+        s = sub.groupby("fiscal_year", sort=False)["numeric"].sum()
     s = s / USD_TO_MILLIONS
     return s.reindex(years)
 
@@ -379,10 +389,9 @@ def _shares_series(facts: pd.DataFrame, concepts: Iterable[str], years: list[int
     result = pd.Series(np.nan, index=years, dtype=float)
     if facts.empty:
         return result
-    facts = facts.copy()
-    facts["fiscal_year"] = pd.to_numeric(facts["fiscal_year"], errors="coerce").astype("Int64")
+    facts = _keyed(facts)
     facts["numeric"] = pd.to_numeric(facts["value"], errors="coerce")
-    facts = facts.dropna(subset=["fiscal_year", "numeric"])
+    facts = facts.dropna(subset=["numeric"])
     concept_name = facts["concept"].str.split(":").str[-1]
     dimensioned = facts["is_dimensioned"].astype(bool)
     dimension = facts["dimension"] if "dimension" in facts.columns else pd.Series(None, index=facts.index)
@@ -390,11 +399,13 @@ def _shares_series(facts: pd.DataFrame, concepts: Iterable[str], years: list[int
     class_key = ["fiscal_year", "member"] if "member" in facts.columns else ["fiscal_year", "numeric"]
     for concept in concepts:
         of_concept = concept_name == concept
-        plain = facts[of_concept & ~dimensioned].groupby("fiscal_year")["numeric"].first()
+        plain = facts[of_concept & ~dimensioned].groupby("fiscal_year", sort=False)["numeric"].first()
         classes = (facts[of_concept & by_class].drop_duplicates(class_key)
-                   .groupby("fiscal_year")["numeric"].sum())
-        found = plain.combine_first(classes) / USD_TO_MILLIONS
-        found.index = found.index.astype(int)
+                   .groupby("fiscal_year", sort=False)["numeric"].sum())
+        found = classes.copy()
+        for key, value in plain.items():          # combine_first sorts its index: years and slots do not compare
+            found[key] = value
+        found = found / USD_TO_MILLIONS
         result = result.fillna(found.reindex(years))
     return result
 
@@ -419,7 +430,19 @@ def _year_windows(years: list[int], window: int = CHART_WINDOW) -> Iterable[list
 SPEC_FILE = "charts.json"
 # The run's data issues (data_issues.company_issues), beside its CSVs.
 ISSUES_FILE = "data_issues.csv"
-SPEC_VERSION = 1
+SPEC_VERSION = 2
+# The quarters since the latest 10-K of the run being drawn: slot id -> its entry
+# in a panel's ``quarters`` (set by ``build_spec``, like ``_CURRENCY``).
+_SLOTS: dict[str, dict] = {}
+# Charts of balances: a quarter slot is the value at the quarter end, not a TTM.
+BALANCE_CHARTS = ("03_balance", "04_debt")
+# A flow series' label -> the quarters.csv column of its three-month value.
+QUARTER_COLUMNS = {
+    "Revenue": "Revenues", "Cost of Revenue": "CostOfRevenue", "Gross Profit": "GrossProfit",
+    "SG&A": "SellingGeneralAndAdministrativeExpense", "R&D": "ResearchAndDevelopmentExpense",
+    "Operating Income": "OperatingIncomeLoss", "Net Income": "NetIncomeLoss", "Capital Expenditure": "CapEx",
+    "Operating Cash Flow": "OperatingCashFlow", "Free Cash Flow": "FreeCashFlow",
+}
 # Downloaded PNGs are kept here per theme and window size until the next run.
 PNG_CACHE_DIR = ".png_cache"
 
@@ -472,7 +495,10 @@ def _panel(
     return {
         "title": title,
         "subtitle": subtitle,
-        "years": [int(y) for y in years],
+        # Fiscal years, then the quarter slots since the latest 10-K (``values``
+        # has one entry per year, then one per slot).
+        "years": [int(y) for y in years if isinstance(y, (int, np.integer))],
+        "quarters": [dict(_SLOTS[y]) for y in years if isinstance(y, str) and y in _SLOTS],
         "series": series,
         "axes": axes or [{"format": "money"}],
         "margin": margin,
@@ -754,6 +780,9 @@ def chart_cashflow_operations(
         include_labels=["depreciation and amortization"],
     )
     nwc = (_df_series(df, "AssetsCurrent", years) - _df_series(df, "LiabilitiesCurrent", years)).diff()
+    # A change over a year: a quarter slot's would be over the months since the
+    # 10-K, which is no TTM, so it is not drawn (the tooltip says so).
+    nwc[[year for year in years if isinstance(year, str)]] = np.nan
 
     metrics = [
         ("Revenue", _df_series(df, "Revenues", years), "reported", ["Revenues"]),
@@ -900,13 +929,18 @@ def chart_valuation(ticker: str, output_dir: str) -> dict | None:
     ]
     for col in numeric_cols:
         data[col] = _valuation_column(data, col)
-    data["fiscal_year"] = pd.to_numeric(data["fiscal_year"], errors="coerce")
+    # Fiscal years, then the quarter slots (priced at the quarter end, on their TTM).
+    data["fiscal_year"] = data["fiscal_year"].map(_slot_key)
     data = data.dropna(subset=["fiscal_year"]).copy()
     if data.empty:
         return None
-    data["fiscal_year"] = data["fiscal_year"].astype(int)
-    data = data.sort_values("fiscal_year").reset_index(drop=True)
+    is_year = data["fiscal_year"].map(lambda v: isinstance(v, int))
+    data = pd.concat([data[is_year].sort_values("fiscal_year"), data[~is_year]]).reset_index(drop=True)
+    for row in data[~is_year].to_dict("records"):
+        _SLOTS.setdefault(row["fiscal_year"], {"id": row["fiscal_year"], "label": f"TTM {row['fiscal_year']}",
+                                               "period_end": str(row.get("period_end") or "")[:10]})
     years = data["fiscal_year"].tolist()
+    data = data.set_index("fiscal_year", drop=False)
 
     # Left: P/E per fiscal year with the historical median as reference.
     pe_series = []
@@ -929,7 +963,7 @@ def chart_valuation(ticker: str, output_dir: str) -> dict | None:
         pct_value = float(percentiles.iloc[-1])
         if abs(pct_value) <= 1.0:
             pct_value *= 100
-        pct_year = int(data.loc[percentiles.index[-1], "fiscal_year"])
+        pct_year = data.loc[percentiles.index[-1], "fiscal_year"]
         pe_subtitle = f"FY{pct_year} at the {pct_value:.0f}th percentile · " + pe_subtitle
     pe_panel = _panel(
         f"{ticker} · P/E by fiscal year", pe_subtitle, years, pe_series,
@@ -1175,8 +1209,18 @@ def _declutter(
         )
 
 
-def _window_values(panel: dict, series: dict, years: list[int]) -> np.ndarray:
-    lookup = dict(zip(panel["years"], series["values"]))
+def _window_keys(panel: dict, window: list[int]) -> list:
+    """The window's years, and the quarter slots after them when the window ends on the latest year."""
+    shown = [y for y in window if y in panel["years"]]
+    slots = [slot["id"] for slot in panel.get("quarters", [])]
+    if slots and shown and panel["years"] and shown[-1] == panel["years"][-1]:
+        shown += slots
+    return shown
+
+
+def _window_values(panel: dict, series: dict, years: list) -> np.ndarray:
+    keys = panel["years"] + [slot["id"] for slot in panel.get("quarters", [])]
+    lookup = dict(zip(keys, series["values"]))
     return np.array([np.nan if lookup.get(y) is None else lookup[y] for y in years], dtype=float)
 
 
@@ -1188,7 +1232,9 @@ def _active_bars(panel: dict, years: list[int]) -> int:
 
 
 def _draw_panel(fig: plt.Figure, ax: plt.Axes, panel: dict, window: list[int]) -> None:
-    shown = [y for y in window if y in panel["years"]]
+    shown = _window_keys(panel, window)
+    labels_of = {slot["id"]: slot["label"] for slot in panel.get("quarters", [])}
+    slot_at = [i for i, key in enumerate(shown) if isinstance(key, str)]
     positions = np.arange(len(shown))
     series = panel["series"]
     values = [_window_values(panel, s, shown) for s in series]
@@ -1222,6 +1268,8 @@ def _draw_panel(fig: plt.Figure, ax: plt.Axes, panel: dict, window: list[int]) -
                 continue
             offset = (bars.index(i) - (len(bars) - 1) / 2) * width
             drawn = target.bar(positions + offset, values[i], width, label=s["label"], color=color, **_bar_style())
+            for at in slot_at:                    # a quarter slot: lighter, never taken for a 10-K year
+                drawn[at].set_alpha(0.45)
             for bar, v in zip(drawn, values[i]):
                 _collect_label(queue, bar.get_x() + bar.get_width() / 2, bar.get_height(), v, s["format"])
             continue
@@ -1247,7 +1295,9 @@ def _draw_panel(fig: plt.Figure, ax: plt.Axes, panel: dict, window: list[int]) -
             path_effects=[path_effects.withStroke(linewidth=2.5, foreground=_c("halo"))],
         )
 
-    _style_axes(ax, shown, _AXIS_FORMATS.get(axes[0].get("format")))
+    _style_axes(ax, [labels_of.get(key, key) for key in shown], _AXIS_FORMATS.get(axes[0].get("format")))
+    if slot_at:
+        ax.axvline(slot_at[0] - 0.5, color=_c("muted"), linestyle=":", linewidth=1)
     _apply_axis(ax, axes[0], panel["margin"])
     if twin is not None:
         twin.grid(False)
@@ -1273,14 +1323,16 @@ def _draw_panel(fig: plt.Figure, ax: plt.Axes, panel: dict, window: list[int]) -
         handles, labels = handles + more_handles, labels + more_labels
     derived = {s["label"] for s in series if s["derived"]}
     labels = [f"{label} *" if label in derived else label for label in labels]
-    subtitle = panel["subtitle"].replace("{span}", _span(shown)) if panel["subtitle"] else None
+    years_shown = [key for key in shown if not isinstance(key, str)]
+    span = _span(years_shown) + (f" + {', '.join(str(k) for k in shown if isinstance(k, str))}" if slot_at else "")
+    subtitle = panel["subtitle"].replace("{span}", span) if panel["subtitle"] else None
     _header(ax, panel["title"], subtitle, handles, labels)
 
 
 def _draw_chart(chart: dict, window: list[int], path: str) -> str:
     panels = chart["panels"]
     count = len(panels)
-    height = max(6.5, 5.2 + 0.42 * _active_bars(panels[0], window)) if count == 1 else 6.5
+    height = max(6.5, 5.2 + 0.42 * _active_bars(panels[0], _window_keys(panels[0], window))) if count == 1 else 6.5
     # Wider than five years ("all years in one image") widens the figure, and
     # panels then stack instead of sitting side by side.
     scale = max(1.0, len(window) / CHART_WINDOW)
@@ -1391,7 +1443,8 @@ def attach_warnings(spec: dict, issues: list[dict] | None) -> None:
             for series in panel["series"]:
                 concepts.update(series.get("concepts") or [])
         years = sorted({year for panel in chart["panels"] for year in panel["years"]})
-        chart["warnings"] = data_issues.chart_warnings(concepts, years, issues or [])
+        slots = [slot["id"] for panel in chart["panels"] for slot in panel.get("quarters", [])]
+        chart["warnings"] = data_issues.chart_warnings(concepts, years + list(dict.fromkeys(slots)), issues or [])
 
 
 def build_spec(
@@ -1401,30 +1454,85 @@ def build_spec(
     statements: pd.DataFrame,
     facts: pd.DataFrame,
     issues: list[dict] | None = None,
+    quarters: pd.DataFrame | None = None,
+    quarter_statements: pd.DataFrame | None = None,
+    quarter_facts: pd.DataFrame | None = None,
 ) -> dict:
-    """Every chart's spec, with its data issues; fills the data-quality rows as a side effect."""
+    """Every chart's spec, with its data issues; fills the data-quality rows as a side effect.
+
+    ``quarters`` (quarters.csv: one row per 10-Q since the latest 10-K, TTM
+    flows and quarter-end balances) adds a slot per quarter after the years,
+    with ``quarter_statements`` / ``quarter_facts`` its statement lines and
+    facts (``fiscal_year`` = the slot). Each flow series also gets the
+    quarters' own three-month values (``quarter_values``) for the tooltip.
+    """
     global _CURRENCY
     _QUALITY_ROWS.clear()
+    _SLOTS.clear()
     years = sorted(df["fiscal_year"].dropna().astype(int).unique().tolist())
     _CURRENCY = _spec_currency(df)
+    slots: list[str] = []
+    if years and quarters is not None and not quarters.empty and "slot" in quarters.columns:
+        slots = [str(slot) for slot in quarters["slot"]]
+        for row in quarters.to_dict("records"):
+            _SLOTS[str(row["slot"])] = {"id": str(row["slot"]), "label": str(row.get("label") or f"TTM {row['slot']}"),
+                                         "period_end": str(row.get("period_end") or "")[:10]}
+        df = pd.concat([df.assign(fiscal_year=df["fiscal_year"].map(_slot_key)),
+                        quarters.assign(fiscal_year=quarters["slot"].astype(str))], ignore_index=True)
+        for extra, name in ((quarter_statements, "statements"), (quarter_facts, "facts")):
+            if extra is not None and not extra.empty:
+                base = statements if name == "statements" else facts
+                joined = extra if base is None or base.empty else pd.concat([base, extra], ignore_index=True)
+                if name == "statements":
+                    statements = joined
+                else:
+                    facts = joined
+    keys = years + slots
     charts: list[dict] = []
     if years:
         charts = [
-            chart_income_statement(ticker, df, statements, years),
-            chart_margins(ticker, df, years),
-            chart_balance(ticker, df, statements, facts, years),
-            chart_debt(ticker, df, statements, years),
-            chart_cashflow_operations(ticker, df, statements, years),
-            chart_cashflow_financing(ticker, df, statements, years),
-            chart_returns(ticker, df, statements, years),
+            chart_income_statement(ticker, df, statements, keys),
+            chart_margins(ticker, df, keys),
+            chart_balance(ticker, df, statements, facts, keys),
+            chart_debt(ticker, df, statements, keys),
+            chart_cashflow_operations(ticker, df, statements, keys),
+            chart_cashflow_financing(ticker, df, statements, keys),
+            chart_returns(ticker, df, statements, keys),
         ]
         valuation = chart_valuation(ticker, output_dir)
         if valuation:
             charts.append(valuation)
-    spec = {"version": SPEC_VERSION, "ticker": ticker, "currency": _CURRENCY, "years": years, "charts": charts,
-            "issues_checked": issues is not None}
+    if slots:
+        _quarter_details(charts, quarters)
+    spec = {"version": SPEC_VERSION, "ticker": ticker, "currency": _CURRENCY, "years": years, "quarters": slots,
+            "charts": charts, "issues_checked": issues is not None}
     attach_warnings(spec, issues)
+    _SLOTS.clear()
     return spec
+
+
+def _quarter_details(charts: list[dict], quarters: pd.DataFrame) -> None:
+    """Label the slots of balance charts plainly and give flow series their three-month values."""
+    def three_months(column: str) -> list:
+        if column == "FreeCashFlow":
+            ocf, capex = (pd.to_numeric(quarters.get(f"{c}__q"), errors="coerce") for c in ("OperatingCashFlow", "CapEx"))
+            return _values(ocf - capex) if ocf is not None and capex is not None else [None] * len(quarters)
+        values = quarters.get(f"{column}__q")
+        return _values(pd.to_numeric(values, errors="coerce")) if values is not None else [None] * len(quarters)
+
+    for chart in charts:
+        for panel in chart["panels"]:
+            if chart["id"] in BALANCE_CHARTS:
+                for slot in panel["quarters"]:
+                    slot["label"] = slot["id"]
+            if not panel["quarters"]:
+                continue
+            wanted = [slot["id"] for slot in panel["quarters"]]
+            for series in panel["series"]:
+                column = QUARTER_COLUMNS.get(series["label"]) if chart["id"] not in BALANCE_CHARTS else None
+                values = three_months(column) if column else [None] * len(quarters)
+                by_slot = dict(zip(quarters["slot"].astype(str), values))
+                series["quarter_values"] = [by_slot.get(slot) for slot in wanted]
 
 
 def _spec_currency(df: pd.DataFrame) -> str:
@@ -1452,6 +1560,9 @@ def render_all(
     facts: pd.DataFrame,
     log=None,
     issues: list[dict] | None = None,
+    quarters: pd.DataFrame | None = None,
+    quarter_statements: pd.DataFrame | None = None,
+    quarter_facts: pd.DataFrame | None = None,
 ) -> list[str]:
     """Write ``charts.json`` and ``data_quality.csv``; returns the chart ids.
 
@@ -1460,7 +1571,8 @@ def render_all(
     ``log`` (``print`` in the pipeline) gets one line per chart.
     """
     with _SPEC_LOCK:
-        spec = build_spec(ticker, output_dir, df, statements, facts, issues)
+        spec = build_spec(ticker, output_dir, df, statements, facts, issues, quarters, quarter_statements,
+                          quarter_facts)
         for chart in spec["charts"] if log else []:
             series = sum(len(panel["series"]) for panel in chart["panels"])
             years = sorted({year for panel in chart["panels"] for year in panel["years"]})
@@ -1498,5 +1610,9 @@ def render_from_dir(ticker: str, output_dir: str) -> list[str]:
     facts = _read_csv(os.path.join(output_dir, "facts.csv"))
     issues = _read_csv(os.path.join(output_dir, ISSUES_FILE))
     has_issues = os.path.isfile(os.path.join(output_dir, ISSUES_FILE))
+    # The quarters' TTM rows are kept (quarters.csv); their statement lines are
+    # not, so a redraw from disk has the slots of the key metrics only.
+    quarters = _read_csv(os.path.join(output_dir, "quarters.csv"))
     return render_all(ticker, output_dir, df, statements, facts,
-                      issues=issues.to_dict("records") if has_issues else None)
+                      issues=issues.to_dict("records") if has_issues else None,
+                      quarters=quarters if not quarters.empty else None)

@@ -121,5 +121,78 @@ class DerivedSeriesTests(unittest.TestCase):
         self.assertFalse(self.operating(False)["derived"])
 
 
+def quarter_frame():
+    return pd.DataFrame([{"slot": "Q2'26", "label": "TTM Q2'26", "period_end": "2026-08-01", "fiscal_year": 2026,
+                          "quarter": 2, "Revenues": 102.0, "Revenues__q": 25.0, "NetIncomeLoss": 11.0,
+                          "NetIncomeLoss__q": 3.0, "StockholdersEquity": 52.0}])
+
+
+class QuarterSlotTests(unittest.TestCase):
+    def build(self, quarters=None, statements=None):
+        return charts.build_spec("TST", "/nonexistent", ratios([2024, 2025]), pd.DataFrame(), pd.DataFrame(),
+                                 quarters=quarters, quarter_statements=statements)
+
+    def test_spec_has_quarter_slots(self):
+        spec = self.build(quarter_frame())
+        income = spec["charts"][0]["panels"][0]
+        self.assertEqual(income["years"], [2024, 2025])
+        self.assertEqual(income["quarters"], [{"id": "Q2'26", "label": "TTM Q2'26", "period_end": "2026-08-01"}])
+        revenue = income["series"][0]
+        self.assertEqual(revenue["values"], [100.0, 101.0, 102.0])
+        self.assertEqual(revenue["quarter_values"], [25.0])
+        balance = next(c for c in spec["charts"] if c["id"] == "03_balance")["panels"][0]
+        self.assertEqual(balance["quarters"][0]["label"], "Q2'26")          # a balance is not a TTM
+        equity = next(s for s in balance["series"] if s["label"] == "Total Equity")
+        self.assertEqual(equity["values"][-1], 52.0)
+        self.assertEqual(equity["quarter_values"], [None])
+        self.assertEqual(spec["quarters"], ["Q2'26"])
+        json.dumps(spec, allow_nan=False)
+
+    def test_statement_lines_in_slots(self):
+        line = {"statement": "cashflow", "concept": "us-gaap_PaymentsOfDividends", "standard_concept": None,
+                "label": "Dividends paid", "value": -2e6, "fiscal_year": "Q2'26"}
+        spec = self.build(quarter_frame(), pd.DataFrame([line]))
+        financing = next(c for c in spec["charts"] if c["id"] == "06_cashflow_financing")["panels"][0]
+        dividends = next(s for s in financing["series"] if s["label"] == "Dividends Paid")
+        self.assertEqual(dividends["values"], [None, None, -2.0])
+
+    def test_spec_without_quarters_unchanged(self):
+        plain = charts.build_spec("TST", "/nonexistent", ratios([2024, 2025]), pd.DataFrame(), pd.DataFrame())
+        self.assertEqual(plain, self.build(None))
+        self.assertEqual(plain["charts"][0]["panels"][0]["quarters"], [])
+        self.assertNotIn("quarter_values", plain["charts"][0]["panels"][0]["series"][0])
+
+    def test_slot_issues_reach_the_chart(self):
+        issue = {"kind": "quarter_metric_missing", "severity": "warning", "fiscal_year": "Q2'26",
+                 "concept": "Revenues", "detail": "x"}
+        spec = charts.build_spec("TST", "/nonexistent", ratios([2024, 2025]), pd.DataFrame(), pd.DataFrame(),
+                                 issues=[issue], quarters=quarter_frame())
+        warnings = spec["charts"][0]["warnings"]
+        self.assertEqual([(w["kind"], w["years"]) for w in warnings], [("quarter_metric_missing", ["Q2'26"])])
+
+    def test_png_draws_slots(self):
+        spec = self.build(quarter_frame())
+        with tempfile.TemporaryDirectory() as folder:
+            paths = charts.render_pngs(spec, folder, ids=["01_income_statement", "03_balance"], years_per_image=5)
+            self.assertEqual([Path(p).name for p in paths],
+                             ["01_income_statement_2024_2025.png", "03_balance_2024_2025.png"])
+        panel = spec["charts"][0]["panels"][0]
+        self.assertEqual(charts._window_keys(panel, [2024, 2025]), [2024, 2025, "Q2'26"])
+        self.assertEqual(charts._window_keys(panel, [2024]), [2024])
+
+    def test_valuation_chart_slots(self):
+        with tempfile.TemporaryDirectory() as folder:
+            pd.DataFrame([{"fiscal_year": 2024, "pe": 10.0, "f_score": 6, "z_score": 3.0, "pe_median_hist": 11.0},
+                          {"fiscal_year": 2025, "pe": 12.0, "f_score": 7, "z_score": 3.1, "pe_median_hist": 11.0},
+                          {"fiscal_year": "Q2'26", "pe": 14.0, "f_score": None, "z_score": 3.2,
+                           "pe_median_hist": 11.0, "period_end": "2026-08-01"}]).to_csv(
+                Path(folder) / "evaluation.csv", index=False)
+            chart = charts.chart_valuation("TST", folder)
+        pe = chart["panels"][0]
+        self.assertEqual(pe["years"], [2024, 2025])
+        self.assertEqual(pe["quarters"][0]["id"], "Q2'26")
+        self.assertEqual(pe["series"][0]["values"], [10.0, 12.0, 14.0])
+
+
 if __name__ == "__main__":
     unittest.main()
