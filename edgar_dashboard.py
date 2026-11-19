@@ -274,7 +274,7 @@ def obtain(filing, cik, cache_dir: str | None) -> tuple[dict, str]:
 
 def assemble(filings: list, n_filings: int | None, entry_of, ticker: str = "", log=print,
              failures: list | None = None, detail: bool = True,
-             on_filing=None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+             on_filing=None, cache_dir=None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Stage 2 over annual filings (newest first): the four datasets of ``build_dataset``.
 
     ``entry_of(filing)`` returns ``(dump, source)``; the filings only need
@@ -285,7 +285,8 @@ def assemble(filings: list, n_filings: int | None, entry_of, ticker: str = "", l
     the ratios and checks). ``filings`` is emptied as it is read: edgartools'
     filing objects hold their whole parse, and a company with 30 large filings
     would otherwise pass 2 GB. ``on_filing(period, form, accession, extracted)``
-    sees each filing's extraction.
+    sees each filing's extraction. ``cache_dir`` keeps each filing's extraction
+    for the next run with the same stage-2 code (``extract.extract_dumped``).
     """
     records: list[dict] = []
     statement_records: list[dict] = []
@@ -352,7 +353,7 @@ def assemble(filings: list, n_filings: int | None, entry_of, ticker: str = "", l
                 period_key = stated
             if period_key in seen_periods:
                 continue
-            extracted = extract.extract_filing(filing_view.FilingView(entry), period_key)
+            extracted = extract.extract_dumped(entry, period_key, cache_dir)
             if on_filing is not None:
                 on_filing(period_key, filing.form, accession, extracted)
             row = extracted["row"]
@@ -450,6 +451,8 @@ def build_dataset(ticker: str, n_filings: int | None, cache_dir: str | None = No
     print(f"[+] Company: {company.name} (CIK {company.cik})")
     if cache_dir:
         print(f"[*] Filing dump: {filing_cache.explain_reader()}")
+        print(f"[*] Extractions kept from earlier runs: "
+              f"{filing_cache.explain(cache_dir, extract.EXTRACT_KIND).replace('parsed again', 'extracted again')}")
     print("[*] Listing annual filings (10-K, 20-F, 40-F)")
     all_filings = list_annual(company)
     if not all_filings:
@@ -467,7 +470,7 @@ def build_dataset(ticker: str, n_filings: int | None, cache_dir: str | None = No
     reading = "reading all of them" if n_filings is None else f"reading the newest {len(filings)}"
     print(f"[+] Found {len(summary)} annual filings ({forms or 'none'}); {reading}")
     return assemble(filings, n_filings, lambda filing: obtain(filing, company.cik, cache_dir), ticker,
-                    on_filing=on_filing)
+                    on_filing=on_filing, cache_dir=cache_dir)
 
 
 # --------------------------------------------------------------------------- #
@@ -624,7 +627,7 @@ QUARTERS_CSV = "quarters.csv"
 
 def quarter_step(df: pd.DataFrame, filed: dict, entries: list[dict], failures: list[dict],
                  statements: pd.DataFrame | None = None,
-                 facts: pd.DataFrame | None = None) -> tuple[pd.DataFrame, list[dict], dict]:
+                 facts: pd.DataFrame | None = None, cache_dir=None) -> tuple[pd.DataFrame, list[dict], dict]:
     """The quarters since the latest annual report (``quarters.py``), written to quarters.csv, and their issues.
 
     ``filed`` is the run's period -> {sources, ...}; ``entries`` the 10-Qs'
@@ -632,7 +635,7 @@ def quarter_step(df: pd.DataFrame, filed: dict, entries: list[dict], failures: l
     """
     latest = str(df.sort_values("period_of_report").iloc[-1]["period_of_report"]) if not df.empty else ""
     frame, issues, extra = quarters.build(df, (filed.get(latest) or {}).get("sources") or {}, entries,
-                                          statements, facts)
+                                          statements, facts, cache_dir=cache_dir)
     for failure in failures:
         issues.append(data_issues._issue("quarter_unread", "warning", fiscal_year=None, period=failure.get("period"),
                                          form=failure.get("form") or QUARTERLY_FORM, accession=failure.get("accession"),
@@ -713,6 +716,36 @@ def _start_insiders(ticker: str, output_dir: str,
     thread = threading.Thread(target=work, name="insiders", daemon=True)
     thread.start()
     return thread, result
+
+
+def _start_prices(ticker: str) -> tuple[threading.Thread, dict]:
+    """Fetch Yahoo's price history, splits and quote in the background; ``_prices`` collects them.
+
+    They need only the ticker, so they download while the filings are read
+    instead of after them. A daemon thread, like the insider step.
+    """
+    result: dict = {}
+
+    def work() -> None:
+        try:
+            import valuation
+
+            result["history"] = valuation.fetch_price_history(ticker)
+            result["splits"] = valuation.fetch_splits(ticker)
+            result["quote"] = valuation.fetch_quote(ticker)
+        except Exception as exc:  # noqa: BLE001 - the valuation fetches again what is missing
+            result["error"] = exc
+
+    thread = threading.Thread(target=work, name="prices", daemon=True)
+    thread.start()
+    return thread, result
+
+
+def _prices(started: tuple[threading.Thread, dict]) -> dict:
+    """What the background price step fetched; a value it did not get is absent (fetched again)."""
+    thread, result = started
+    thread.join()
+    return {key: value for key, value in result.items() if key != "error"}
 
 
 def _report_insiders(started: tuple[threading.Thread, dict]) -> None:
@@ -845,6 +878,7 @@ def _run(args, n_filings: int | None, cache_dir: str | None, live_dir: str) -> N
     # Insider trades need nothing from the 10-Ks, so their Form 4 downloads
     # run while the 10-Ks are fetched instead of after them.
     insiders = _start_insiders(TICKER, OUTPUT_DIR, cache_dir)
+    prices = _start_prices(TICKER)      # Yahoo, while the filings are read
 
     which = "every annual filing" if n_filings is None else f"the last {n_filings} annual filings"
     print(f"[*] Extracting {TICKER} data from {which}")
@@ -861,7 +895,7 @@ def _run(args, n_filings: int | None, cache_dir: str | None, live_dir: str) -> N
                                                    quarters=quarter_entries, quarter_failures=quarter_failures)
     df = clean_and_derive(raw)
     quarter_frame, quarter_issues, quarter_extra = quarter_step(df, filed, quarter_entries, quarter_failures,
-                                                                statements, facts)
+                                                                statements, facts, cache_dir=cache_dir)
     quarter_entries.clear()
 
     df.to_csv(DATA_CSV, index=False)
@@ -891,13 +925,16 @@ def _run(args, n_filings: int | None, cache_dir: str | None, live_dir: str) -> N
     try:
         import valuation
 
-        print("[*] Valuation: fetching the monthly price history and the stock splits (Yahoo Finance)")
-        history = valuation.fetch_price_history(TICKER)
-        splits = valuation.fetch_splits(TICKER)
+        print("[*] Valuation: the monthly price history and the stock splits (Yahoo Finance, "
+              "fetched while the filings were read)")
+        fetched = _prices(prices)
+        history = fetched["history"] if "history" in fetched else valuation.fetch_price_history(TICKER)
+        splits = fetched["splits"] if "splits" in fetched else valuation.fetch_splits(TICKER)
+        quote = fetched.get("quote") or valuation.fetch_quote(TICKER)
         # Foreign filers: the quote is in USD per ADS, the filings in their own currency.
         slot_dates = ({str(row["slot"]): str(row["period_end"]) for row in quarter_frame.to_dict("records")}
                       if not quarter_frame.empty else None)
-        scale, price_currency, note = valuation.market_scale(TICKER, df, facts, statements, slot_dates)
+        scale, price_currency, note = valuation.market_scale(TICKER, df, facts, statements, slot_dates, quote=quote)
         if note:
             print(f"[*] Valuation: {note}")
         evaluation = valuation.build_evaluation(TICKER, df, statements, facts, history,
@@ -916,7 +953,7 @@ def _run(args, n_filings: int | None, cache_dir: str | None, live_dir: str) -> N
             # Today's numbers for the Home card: the latest price over the newest TTM.
             all_facts = pd.concat([frame for frame in (facts, quarter_extra.get("facts")) if frame is not None
                                    and not frame.empty], ignore_index=True) if not facts.empty else facts
-            today = valuation.build_today(evaluation, valuation.fetch_quote(TICKER),
+            today = valuation.build_today(evaluation, quote,
                                           valuation.latest_shares(all_facts), history, valuation_issues,
                                           splits=splits, price_scale=scale)
             valuation.write_today(today, OUTPUT_DIR)

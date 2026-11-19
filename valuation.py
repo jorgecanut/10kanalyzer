@@ -891,6 +891,7 @@ def market_scale(
     facts: pd.DataFrame,
     statements: pd.DataFrame,
     extra_dates: dict[str, str] | None = None,
+    quote: dict | None = None,
 ) -> tuple[dict | None, str, str]:
     """Per fiscal year, quoted price -> price per ordinary share in the reporting currency.
 
@@ -900,11 +901,12 @@ def market_scale(
     traded share against the latest EPS per ordinary share; when it cannot be
     found the scale is empty, so market-based ratios stay blank, not wrong.
     ``extra_dates`` (quarter slot -> period end) get a scale of their own, and
-    ``"today"`` the latest rate, for today's record.
+    ``"today"`` the latest rate, for today's record. ``quote``: a
+    ``fetch_quote`` result the caller already has (else it is fetched).
     """
     currency = _reporting_currency(data)
     print("[*] Valuation: reading the quote currency (Yahoo Finance)")
-    quote_info = fetch_quote(ticker) or {}
+    quote_info = (quote if quote is not None else fetch_quote(ticker)) or {}
     price_currency = str(quote_info.get("currency") or "USD").upper()
     is_adr = "ads" in data.columns and data["ads"].astype(str).str.lower().isin(["true", "1"]).any()
     ratio, source = np.nan, ""

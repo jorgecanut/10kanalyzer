@@ -509,7 +509,10 @@ class ReaderTest(unittest.TestCase):
         self.assertEqual((filing_cache.reader_id(), filing_cache.version("form4")), before)
 
     def test_stage_two_modules_are_never_hashed(self):
-        hashed = set(filing_cache.READER_FILES) | {name for names in filing_cache.KINDS.values() for name in names}
+        # Except by a kind rebuilt from the dump alone (``extract``): a new
+        # version of it extracts again from the dump, never reads SEC.
+        hashed = set(filing_cache.READER_FILES) | {name for kind, names in filing_cache.KINDS.items()
+                                                   if kind not in filing_cache.REBUILT_KINDS for name in names}
         for module in STAGE_TWO:
             self.assertNotIn(module, hashed)
 
@@ -613,7 +616,7 @@ def _dumped(filing):
     return entry
 
 
-def _extracted(view, period_key):
+def _extracted(view, period_key, **_spans):
     return {"xbrl": True,
             "row": {"period_of_report": period_key, "fiscal_year": int(period_key[:4]), "form": view.form,
                     "currency": "USD", "ads": False, "ads_ratio": None, "ads_ratio_source": None},
@@ -661,7 +664,7 @@ class BuildDatasetDumpTest(unittest.TestCase):
     def test_a_stage_two_fix_needs_no_download(self):
         self.build(3)
 
-        def fixed(view, period_key):
+        def fixed(view, period_key, **_spans):
             out = _extracted(view, period_key)
             out["row"]["Revenues"] = 1.0
             return out
@@ -739,3 +742,93 @@ class InsiderCacheTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --------------------------------------------------------------------------- #
+# Stage 2 kept per code version: a rerun reads it, a fix extracts again
+# --------------------------------------------------------------------------- #
+
+class ExtractCacheTest(unittest.TestCase):
+    """``extract.extract_dumped``: the same dump, period and code are extracted once."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.entry = {"schema": dump.SCHEMA, "xbrl": True, "facts": dump.encode_frame(pd.DataFrame()),
+                      "reader_id": "0a13c8e032cf",
+                      "stored": "2026-01-01T00:00:00+00:00",
+                      "filing": {"accession": "0000000042-26-000001", "cik": 42, "form": "10-K",
+                                 "report_date": "2025-12-31"}}
+        self.calls = 0
+
+    def stage_two(self, view, period_key, min_days=None, max_days=None):
+        self.calls += 1
+        print(f"    [!] {period_key}: the equity statement was not read")
+        return {"xbrl": True, "row": {"period_of_report": period_key, "Revenues": 1.5, "CapEx": float("nan")},
+                "facts": [{"concept": "us-gaap:Revenues", "value": 1.5, "decimals": "-6"}],
+                "notes": [f"    [!] {period_key}: the equity statement was not read"],
+                "span": [min_days, max_days]}
+
+    def extract(self, period="2025-12-31", version="aaaaaaaaaaaa", entry=None, root="default", **spans):
+        with unittest.mock.patch.object(extract, "extract_filing", self.stage_two), \
+                unittest.mock.patch.object(extract, "extract_version", return_value=version), \
+                redirect_stdout(io.StringIO()) as out:
+            result = extract.extract_dumped(entry or self.entry, period, self.root if root == "default" else root,
+                                            **spans)
+        return result, out.getvalue()
+
+    def test_a_rerun_reads_the_kept_result_and_prints_its_notes(self):
+        first, log = self.extract()
+        again, log_again = self.extract()
+        self.assertEqual(self.calls, 1)
+        self.assertEqual(json.dumps(again, sort_keys=True), json.dumps(first, sort_keys=True))
+        self.assertTrue(np.isnan(again["row"]["CapEx"]))
+        self.assertEqual(log_again, log)
+        self.assertIn("equity statement was not read", log_again)
+
+    def test_each_period_and_span_is_kept_apart(self):
+        self.extract()
+        self.extract(min_days=160, max_days=200)
+        self.extract(period="2024-12-31", min_days=160, max_days=200)
+        self.assertEqual(self.calls, 3)
+        result, _ = self.extract(min_days=160, max_days=200)
+        self.assertEqual((self.calls, result["span"]), (3, [160, 200]))
+
+    def test_a_code_change_extracts_again_and_drops_the_older_version(self):
+        self.extract(version="aaaaaaaaaaaa")
+        self.extract(version="bbbbbbbbbbbb")
+        self.assertEqual(self.calls, 2)
+        self.assertEqual([item["version"] for item in filing_cache.versions(self.root, "extract")],
+                         ["bbbbbbbbbbbb"])
+
+    def test_a_dump_read_again_is_extracted_again(self):
+        self.extract()
+        self.extract(entry={**self.entry, "stored": "2026-02-01T00:00:00+00:00"})
+        self.assertEqual(self.calls, 2)
+
+    def test_without_a_cache_dir_every_run_extracts(self):
+        self.extract(root=None)
+        self.extract(root=None)
+        self.assertEqual(self.calls, 2)
+        self.assertFalse((self.root / "extract").exists())
+
+    def test_the_form4_version_is_not_changed_by_the_new_kind(self):
+        # Its code record must stay {insider.py, edgartools}: a new version re-reads every Form 4 from SEC.
+        self.assertEqual(set(filing_cache.code("form4")), {"insider.py", "edgartools"})
+        self.assertNotIn("extract", set(filing_cache.KINDS) - set(filing_cache.REBUILT_KINDS))
+
+    def test_a_rerun_of_a_company_extracts_nothing(self):
+        filings = [_AnnualFiling(f"0000000001-{year % 100:02d}-000001", f"{year}-12-31") for year in (2025, 2024)]
+
+        def dumped(filing):
+            entry = _dumped(filing)
+            entry["filing"]["cik"] = 42
+            entry.update(reader_id="0a13c8e032cf", stored="2026-01-01T00:00:00+00:00")
+            return entry, "dump"
+
+        stage_two = unittest.mock.Mock(side_effect=_extracted)
+        for _ in range(2):
+            with unittest.mock.patch.object(extract, "extract_filing", stage_two), redirect_stdout(io.StringIO()):
+                ratios = edgar_dashboard.assemble(list(filings), None, dumped, cache_dir=self.root)[0]
+        self.assertEqual(stage_two.call_count, 2)          # the first run only
+        self.assertEqual(ratios["period_of_report"].tolist(), ["2024-12-31", "2025-12-31"])

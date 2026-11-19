@@ -19,6 +19,8 @@ import pandas as pd
 
 import calc_check
 import data_issues
+import filing_cache
+import filing_view
 import xbrl_extract
 
 # Minimum span (in days) for a "duration" fact to count as the annual figure.
@@ -872,7 +874,16 @@ def extract_filing(filing, period_key: str, min_days: int | None = None, max_day
     ``min_days``/``max_days`` pick the duration read: by default a fiscal year
     (``annual_min_days``); a 10-Q is read at its year to date, at its own date
     and at the same date a year earlier (``quarters.py``).
+
+    ``notes`` lists the warnings printed while reading it, so a result kept
+    by ``extract_dumped`` prints them again when it is reused.
     """
+    notes: list[str] = []
+
+    def note(text: str) -> None:
+        notes.append(text)
+        print(text)
+
     xbrl = filing.xbrl()
     if xbrl is None:
         return {"xbrl": False}
@@ -911,7 +922,7 @@ def extract_filing(filing, period_key: str, min_days: int | None = None, max_day
         calc_check.convenience_values(facts, period_key, currency, min_days, max_days),
         problems=statement_problems, span_days=span_days)
     for problem in statement_problems:
-        print(f"    [!] {period_key}: the {problem['statement']} statement was not read: {problem['detail']}")
+        note(f"    [!] {period_key}: the {problem['statement']} statement was not read: {problem['detail']}")
     statement_values = _statement_values(statement_rows)
     sources: dict[str, str] = {}
     for metric, (concepts, period_type) in METRIC_CONCEPTS.items():
@@ -936,20 +947,63 @@ def extract_filing(filing, period_key: str, min_days: int | None = None, max_day
             _track(row, sources, f"statement:{metric} line",
                    lambda r, m=metric: r.__setitem__(m, _stated_line(m, statement_rows, own_values)))
     _track(row, sources, "statement lines", lambda r: _cost_of_revenue(r, statement_rows))
-    filing_facts = xbrl_extract.extract_facts(xbrl, period_key)
+    filing_facts = xbrl_extract.extract_facts(xbrl, period_key, log=note)
     try:
         filing_checks = calc_check.check_filing(xbrl, facts, period_key, currency, min_days, max_days)
     except Exception as exc:  # noqa: BLE001 - the check never costs the filing
-        print(f"    [!] {period_key}: calculation check skipped ({exc.__class__.__name__}: {exc})")
+        note(f"    [!] {period_key}: calculation check skipped ({exc.__class__.__name__}: {exc})")
         filing_checks = []
     # For each key metric not read: what the filing holds for it, so a gap is
     # never called "not in the filing" without looking (data_issues.py).
     try:
         evidence = data_issues.metric_evidence(xbrl, facts, period_key, row)
     except Exception as exc:  # noqa: BLE001 - missing evidence is reported as unverified, not hidden
-        print(f"    [!] {period_key}: could not search the filing for missing metrics "
-              f"({exc.__class__.__name__}: {exc})")
+        note(f"    [!] {period_key}: could not search the filing for missing metrics "
+             f"({exc.__class__.__name__}: {exc})")
         evidence = {}
     return {"xbrl": True, "row": row, "statements": statement_rows,
             "facts": filing_facts, "checks": filing_checks, "evidence": evidence, "sources": sources,
-            "statement_problems": statement_problems}
+            "statement_problems": statement_problems, "notes": notes}
+
+
+EXTRACT_KIND = "extract"
+_EXTRACT_VERSION: list[str] = []
+
+
+def extract_version() -> str:
+    """The stage-2 code's version (``filing_cache.KINDS["extract"]``), hashed once per process."""
+    if not _EXTRACT_VERSION:
+        _EXTRACT_VERSION.append(filing_cache.version(EXTRACT_KIND))
+    return _EXTRACT_VERSION[0]
+
+
+def extract_dumped(entry: dict, period_key: str, cache_dir=None, min_days: int | None = None,
+                   max_days: int | None = None) -> dict:
+    """``extract_filing`` on a dumped filing, kept in ``cache_dir`` for the next run with the same code.
+
+    A filing and its dump never change, and stage 2 depends on nothing else
+    (no clock, no network, no setting), so the result of the same dump, period
+    and code is the same: a rerun reads it instead of extracting again. It is
+    kept per stage-2 code version (``filing_cache``'s ``extract`` kind): any
+    change to how numbers are chosen extracts every filing again from its dump,
+    never from SEC. A dump read again (``invalidate``) is extracted again too:
+    the result names the dump it came from. The notes printed when it was
+    extracted are printed again. ``cache_dir`` None extracts every time.
+    """
+    meta = entry.get("filing") or {}
+    cik, accession = meta.get("cik"), meta.get("accession")
+    key = f"{period_key}|{min_days}|{max_days}"
+    dumped = f"{entry.get('reader_id')}@{entry.get('stored')}"
+    kept = cache_dir and cik and accession
+    held = filing_cache.load(cache_dir, EXTRACT_KIND, extract_version(), cik, accession) if kept else None
+    results = held.get("results") if isinstance(held, dict) and held.get("dump") == dumped else None
+    results = results if isinstance(results, dict) else {}
+    if key in results:
+        for line in results[key].get("notes") or []:
+            print(line)
+        return results[key]
+    result = extract_filing(filing_view.FilingView(entry), period_key, min_days=min_days, max_days=max_days)
+    if kept:
+        filing_cache.store(cache_dir, EXTRACT_KIND, extract_version(), cik, accession,
+                           {"dump": dumped, "results": {**results, key: result}})
+    return result

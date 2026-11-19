@@ -23,11 +23,19 @@ Versioning (no change may force re-reading everything):
 Form 4 entries keep the older scheme: the hash of ``insider.py`` is their
 version, one folder per version (``KINDS``).
 
+Each filing's stage-2 result (``extract.extract_dumped``) is kept the same
+way, as ``extract``: its version is the hash of the stage-2 modules and the
+pandas and numpy releases, so a rerun with the same code reads the result
+instead of extracting the filing again, and any change to how numbers are
+chosen makes every filing be extracted again, from its dump (no SEC request).
+Only the newest ``extract`` version is kept: it is rebuilt from the dump.
+
 Layout, under one root shared by every user (it is public SEC data)::
 
     <root>/filings/schema-<N>/<CIK>/<accession>.json.gz   one 10-K, 10-KT, 20-F, 40-F or 10-Q
     <root>/form4/<version>/version.json                   when it was made, by which code
     <root>/form4/<version>/<CIK>/form4.json.gz            every Form 4 of the company read so far
+    <root>/extract/<version>/<CIK>/<accession>.json.gz    a filing's stage-2 result per period read
 
 Failures are never fatal: an unreadable entry is a miss and a failed write is
 skipped with a warning, so the cache can save a run work but never cost it.
@@ -65,7 +73,17 @@ CLASSES = ("format", "compatible", "bug")
 # that only uses the data out of these files, or every edit re-reads SEC.
 KINDS: dict[str, tuple[str, ...]] = {
     "form4": ("insider.py",),
+    # Every local module ``extract.extract_dumped`` runs (a test checks the list).
+    "extract": ("extract.py", "xbrl_extract.py", "calc_check.py", "data_issues.py", "filing_view.py",
+                "dump.py", "filing_cache.py"),
 }
+# The packages whose release is part of a kind's version.
+KIND_PACKAGES: dict[str, tuple[str, ...]] = {
+    "form4": ("edgartools",),
+    "extract": ("pandas", "numpy"),
+}
+# Kinds derived from the dump alone: a new version replaces the older ones.
+REBUILT_KINDS = ("extract",)
 # Folders of earlier layouts, never read: ``prune`` removes them.
 LEGACY_KINDS = ("annual",)
 META = "version.json"
@@ -77,11 +95,15 @@ VERSION_RE = re.compile(r"^[0-9a-f]{12}$")
 SCHEMA_RE = re.compile(r"^schema-(\d+)$")
 
 
-def _edgartools() -> str:
+def _package(name: str) -> str:
     try:
-        return metadata.version("edgartools")
+        return metadata.version(name)
     except metadata.PackageNotFoundError:
         return ""
+
+
+def _edgartools() -> str:
+    return _package("edgartools")
 
 
 def _hash(name: str) -> str:
@@ -286,8 +308,9 @@ def select(root, reader: str | None = None, form: str | None = None, before: str
 # --------------------------------------------------------------------------- #
 
 def code(kind: str) -> dict[str, str]:
-    """The hash of each module of ``kind`` and the edgartools release."""
-    return {**{name: _hash(name) for name in KINDS[kind]}, "edgartools": _edgartools()}
+    """The hash of each module of ``kind`` and the release of its packages (``KIND_PACKAGES``)."""
+    return {**{name: _hash(name) for name in KINDS[kind]},
+            **{package: _package(package) for package in KIND_PACKAGES[kind]}}
 
 
 def version(kind: str) -> str:
@@ -330,6 +353,10 @@ def store(root, kind: str, ver: str, cik, name: str, data) -> None:
         if not meta.is_file():
             _write(meta, json.dumps({"version": ver, "created": _now(), "code": code(kind)},
                                     indent=2).encode(), compress=False)
+            if kind in REBUILT_KINDS:
+                for item in versions(root, kind):
+                    if item["version"] != ver:
+                        shutil.rmtree(Path(root) / kind / item["version"], ignore_errors=True)
         _write(path, json.dumps({"version": ver, "data": data}, default=_plain).encode(), compress=True)
     except (OSError, TypeError, ValueError) as exc:
         print(f"    [!] filing cache: {name} not saved ({type(exc).__name__}: {exc})", file=sys.stderr)
@@ -515,8 +542,8 @@ def main(argv: list[str] | None = None) -> int:
     invalidate.add_argument("--cik", help="One company")
     invalidate.add_argument("--accession", help="One filing")
     invalidate.add_argument("--yes", action="store_true", help="Really delete (default: dry run)")
-    prune = commands.add_parser("prune", help="Delete old schemas, old Form 4 versions and old layouts")
-    prune.add_argument("--keep", type=int, default=1, help="Form 4 versions to keep, current included")
+    prune = commands.add_parser("prune", help="Delete old schemas, old Form 4 and extract versions, old layouts")
+    prune.add_argument("--keep", type=int, default=1, help="Versions of each kind to keep, current included")
     prune.add_argument("--yes", action="store_true", help="Really delete (default: dry run)")
     classify = commands.add_parser("classify", help=f"Record the current reader in {READERS_FILE}")
     classify.add_argument("cls", choices=CLASSES)
