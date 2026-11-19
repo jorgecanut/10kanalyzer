@@ -407,7 +407,8 @@ def analyse_company(db, cik: int, ticker: str, cache_dir: Path, out_dir: Path, l
 
     try:
         raw, _statements, _facts, checks = _pipeline().assemble(candidates, None, entry_of, ticker, log=log,
-                                                                failures=failures, detail=False, on_filing=on_filing)
+                                                                failures=failures, detail=False, on_filing=on_filing,
+                                                                cache_dir=cache_dir)
     except RuntimeError as exc:
         for failure in failures:
             issues.append(_issue("analysis_failed", "error", accession=failure["accession"], form=failure["form"],

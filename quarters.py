@@ -80,10 +80,13 @@ def _prior_date(facts: pd.DataFrame, period_end: pd.Timestamp, min_days: int, ma
     return ends.value_counts().index[0].strftime("%Y-%m-%d")
 
 
-def _read(view, period: str, min_days: int, max_days: int) -> dict:
-    """``extract_filing`` at one date and span, quietly: its notes for the prior year are expected."""
+def _read(entry: dict, period: str, min_days: int, max_days: int, cache_dir=None) -> dict:
+    """``extract_filing`` at one date and span, quietly: its notes for the prior year are expected.
+
+    Kept in ``cache_dir`` for the next run with the same code (``extract.extract_dumped``).
+    """
     with redirect_stdout(io.StringIO()):
-        return extract.extract_filing(view, period, min_days=min_days, max_days=max_days)
+        return extract.extract_dumped(entry, period, cache_dir, min_days=min_days, max_days=max_days)
 
 
 def _restated(facts: pd.DataFrame, fy: pd.Series, fy_end: str, currency, slot, period, accession,
@@ -116,7 +119,7 @@ FLOW_STATEMENTS = ("income", "cashflow")      # TTM per line; the balance sheet 
 
 def build(annual: pd.DataFrame, annual_sources: dict, entries: list[dict],
           annual_statements: pd.DataFrame | None = None,
-          annual_facts: pd.DataFrame | None = None) -> tuple[pd.DataFrame, list[dict], dict]:
+          annual_facts: pd.DataFrame | None = None, cache_dir=None) -> tuple[pd.DataFrame, list[dict], dict]:
     """One row per 10-Q after the latest fiscal year in ``annual`` (financial_data.csv, millions).
 
     ``annual_sources`` is the latest fiscal year's ``extract_filing(...)["sources"]``;
@@ -159,9 +162,9 @@ def build(annual: pd.DataFrame, annual_sources: dict, entries: list[dict],
             if span is None:
                 raise ValueError("no year-to-date period on its cover page or in its facts")
             min_days, max_days = span - SPAN_TOLERANCE, span + SPAN_TOLERANCE
-            ytd = _read(view, period, min_days, max_days)
+            ytd = _read(entry, period, min_days, max_days, cache_dir)
             prior_date = _prior_date(facts, period_end, min_days, max_days)
-            prior = _read(view, prior_date, min_days, max_days) if prior_date else None
+            prior = _read(entry, prior_date, min_days, max_days, cache_dir) if prior_date else None
         except Exception as exc:  # noqa: BLE001 - one 10-Q never sinks the run; it is reported
             issues.append(_issue("quarter_unread", "warning", None, index_date, accession,
                                  detail=f"the 10-Q could not be read ({exc.__class__.__name__}: {exc})"))

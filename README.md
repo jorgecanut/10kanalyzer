@@ -59,7 +59,7 @@ rendered statements, the cover-page data; text over 500 characters is left
 out) into one gzipped file per accession, about 100–500 KB. Every later run,
 and every fix to how numbers are chosen, works from the dump with no SEC
 request. A re-run of NFLX reads 17 dumps in a few seconds. Prices (Yahoo) are
-always fetched again.
+always fetched again, in the background while the filings are read.
 
 The pipeline has two stages, and only the first talks to SEC:
 
@@ -71,7 +71,20 @@ The pipeline has two stages, and only the first talks to SEC:
 ```
 <cache>/filings/schema-<N>/<CIK>/<accession>.json.gz   one 10-K, 10-KT, 20-F, 40-F or 10-Q (also "no XBRL")
 <cache>/form4/<version>/<CIK>/form4.json.gz            every Form 4 of the company read so far
+<cache>/extract/<version>/<CIK>/<accession>.json.gz    what stage 2 took from that filing, per period read
 ```
+
+**Extractions kept.** What stage 2 takes from a filing depends only on its
+dump, the period read and the stage-2 code (no clock, network or setting), so
+it is kept too (`extract.extract_dumped`): a rerun with the same code reads
+it instead of extracting the filing again (TGT's 33 filings: about 3.3 s the
+first time, 1.5 s after), and prints the warnings the extraction printed. Its
+version is the hash of the stage-2 modules (`filing_cache.KINDS["extract"]`,
+every local module the extraction runs; a test checks the list) plus the
+pandas and numpy releases. Any change to how numbers are chosen is a new
+version: every filing is extracted again, from its dump, with no SEC request,
+and the older version is deleted. A dump read again (`invalidate`) is
+extracted again too. `--no-cache` keeps nothing.
 
 **Versions.** The folder is named by the **schema** (`dump.SCHEMA`), which
 changes only when what is stored changes, by hand; that alone makes every
@@ -93,7 +106,7 @@ python filing_cache.py status                            # schemas, forms, reade
 python filing_cache.py classify compatible "why"         # record the current reader in readers.json
 python filing_cache.py invalidate --reader 0a13c8e032cf  # dry run: what that reader wrote
 python filing_cache.py invalidate --form 10-Q --before 2015-01-01 --yes
-python filing_cache.py prune --yes                       # old schemas, old Form 4 versions, old layouts (annual/)
+python filing_cache.py prune --yes                       # old schemas, old Form 4 and extract versions, old layouts (annual/)
 # Docker: docker compose exec dashboard python filing_cache.py status
 ```
 

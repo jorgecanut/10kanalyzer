@@ -205,7 +205,7 @@ def extract_statements(
     return rows
 
 
-def extract_facts(xbrl, period_of_report: str) -> list[dict]:
+def extract_facts(xbrl, period_of_report: str, log=print) -> list[dict]:
     """Every fact whose period ends (or instant) at the report date.
 
     Keeps dimensional facts too, so segment/note detail is retained.
@@ -213,7 +213,7 @@ def extract_facts(xbrl, period_of_report: str) -> list[dict]:
     try:
         facts = xbrl.facts.to_dataframe()
     except Exception as exc:  # noqa: BLE001
-        print(f"    [!] {period_of_report}: facts unreadable ({exc.__class__.__name__}: {exc})")
+        log(f"    [!] {period_of_report}: facts unreadable ({exc.__class__.__name__}: {exc})")
         return []
     if facts is None or facts.empty:
         return []

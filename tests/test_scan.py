@@ -71,7 +71,7 @@ def _dumped(filing):
 
 
 def _stage_two(revenue, with_line=True):
-    def extract_filing(view, period_key):
+    def extract_filing(view, period_key, **_spans):
         check = {"period_of_report": period_key, "kind": "statement", "statement": "Balance Sheet",
                  "concept": "us-gaap_Assets", "label": "Total assets", "reported": 100.0, "computed": 90.0,
                  "difference": 10.0, "tolerance": 0.5, "parts": 2, "missing": "", "status": "mismatch",
@@ -188,7 +188,7 @@ class ScanTest(ScanCase):
     def test_without_evidence_a_missing_metric_is_never_called_not_reported(self):
         plain = _stage_two(None)
 
-        def no_evidence(view, period_key):
+        def no_evidence(view, period_key, **_spans):
             return {**plain(view, period_key), "evidence": {}}
 
         with unittest.mock.patch("edgar.Company", side_effect=_Company), \
