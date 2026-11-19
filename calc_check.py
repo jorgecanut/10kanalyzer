@@ -84,7 +84,10 @@ def period_values(facts: pd.DataFrame, period_of_report: str, currency: str | No
     if facts is None or facts.empty:
         return {}
     target = pd.Timestamp(period_of_report)
-    frame = facts[~facts["is_dimensioned"].astype(bool)].copy()
+    # Only the columns read here: a filing's facts have a column per dimension axis.
+    used = [c for c in ("concept", "numeric_value", "currency", "period_start", "period_end",
+                        "period_instant", "decimals", "label") if c in facts.columns]
+    frame = facts.loc[~facts["is_dimensioned"].astype(bool), used].copy()
     frame["_value"] = pd.to_numeric(frame["numeric_value"], errors="coerce")
     frame = frame.dropna(subset=["_value"])
     if currency and "currency" in frame.columns:
@@ -104,15 +107,16 @@ def period_values(facts: pd.DataFrame, period_of_report: str, currency: str | No
     frame.loc[decimals.astype(str).str.upper().eq("INF"), "_decimals"] = np.inf
     frame = frame.sort_values("_decimals", ascending=False, na_position="last")
     out: dict[str, dict] = {}
-    for _, row in frame.iterrows():
-        element = _element(row["concept"])
+    labels = frame["label"].tolist() if "label" in frame.columns else [None] * len(frame)
+    for concept, value, decimals, label in zip(frame["concept"].tolist(), frame["_value"].tolist(),
+                                               frame["_decimals"].tolist(), labels):
+        element = _element(concept)
         if element in out:
             continue
-        decimals = row["_decimals"]
         out[element] = {
-            "value": float(row["_value"]),
+            "value": float(value),
             "decimals": None if pd.isna(decimals) else float(decimals),
-            "label": str(row.get("label") or "") or _words(element),
+            "label": str(label or "") or _words(element),
         }
     return out
 
