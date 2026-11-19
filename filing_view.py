@@ -20,9 +20,14 @@ class _Frame:
 
     def __init__(self, encoded: dict):
         self._encoded = encoded
+        self._decoded = None
 
     def to_dataframe(self):
-        return dump.decode_frame(self._encoded)
+        # Decoded once (a run asks for the facts five times per filing); each
+        # caller still gets its own copy to change.
+        if self._decoded is None:
+            self._decoded = dump.decode_frame(self._encoded)
+        return self._decoded.copy()
 
 
 class _Statements:
@@ -32,13 +37,20 @@ class _Statements:
             setattr(self, method, self._reader(key))
 
     def _reader(self, key: str):
+        frame = None
+
         def read():
+            nonlocal frame
             entry = self._stored.get(key)
             if isinstance(entry, dict) and "error" in entry:
                 error = RuntimeError(entry["error"])     # edgartools failed on it when dumped
                 error.replayed = True                    # its text already names the original error
                 raise error
-            return None if entry is None else _Frame(entry)
+            if entry is None:
+                return None
+            if frame is None:
+                frame = _Frame(entry)                    # decoded once, a copy per caller
+            return frame
         return read
 
 

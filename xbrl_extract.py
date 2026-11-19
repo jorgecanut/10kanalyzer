@@ -236,7 +236,10 @@ def extract_facts(xbrl, period_of_report: str) -> list[dict]:
         return []
 
     out: list[dict] = []
-    for _, row in subset.iterrows():
+    # Plain dicts of the columns, not ``iterrows()``: it built a Series per fact.
+    columns = list(subset.columns)
+    for values in zip(*(subset[c].tolist() for c in columns)) if columns else ():
+        row = dict(zip(columns, values))
         value = pd.to_numeric(row.get("numeric_value"), errors="coerce")
         out.append({
             "period_of_report": period_of_report,

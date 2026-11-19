@@ -28,6 +28,7 @@ import json
 import os
 import re
 import sys
+import weakref
 from http.cookiejar import CookieJar
 from urllib.parse import quote, urlencode
 from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
@@ -342,6 +343,41 @@ def _safe_div(numerator, denominator, positive_only: bool = False) -> float:
     return numerator / denominator
 
 
+# The prepared lines of the last few statements frames, by identity: a run
+# looks up some twenty lines in the same frame, and normalising every label
+# and tag on each lookup was a large part of the valuation's time.
+_STATEMENT_LINES: dict[int, tuple] = {}
+
+
+def _statement_lines(statements: pd.DataFrame) -> pd.DataFrame:
+    """``statements`` with ``_fy``, ``_value`` and the normalised ``_std``, ``_tag``, ``_label``."""
+    key = id(statements)
+    held = _STATEMENT_LINES.get(key)
+    if held is not None and held[0]() is statements and len(held[1]) == len(statements):
+        return held[1]
+    frame = statements.copy()
+    frame["_fy"] = pd.to_numeric(frame["fiscal_year"], errors="coerce")
+    frame["_value"] = pd.to_numeric(frame["value"], errors="coerce")
+    if "standard_concept" in frame.columns:
+        frame["_std"] = frame["standard_concept"].map(_norm)
+    else:
+        frame["_std"] = ""
+    # The tag itself (``ifrs-full_Borrowings`` -> ``borrowings``): IFRS lines
+    # often carry no standard_concept.
+    if "concept" in frame.columns:
+        frame["_tag"] = frame["concept"].astype(str).str.split(r"[:_]", n=1, regex=True).str[-1].map(_norm)
+    else:
+        frame["_tag"] = ""
+    if "label" in frame.columns:
+        frame["_label"] = frame["label"].map(_norm)
+    else:
+        frame["_label"] = ""
+    for stale in list(_STATEMENT_LINES)[:-3]:          # keep the newest few; safe if another thread got here
+        _STATEMENT_LINES.pop(stale, None)
+    _STATEMENT_LINES[key] = (weakref.ref(statements), frame)
+    return frame
+
+
 def _statement_metric(
     statements: pd.DataFrame,
     years: list[int],
@@ -362,31 +398,15 @@ def _statement_metric(
     out = pd.Series(np.nan, index=years, dtype="float64")
     if statements is None or statements.empty or "value" not in statements.columns:
         return out
-    frame = statements.copy()
-    if "fiscal_year" not in frame.columns:
+    if "fiscal_year" not in statements.columns:
         return out
+    frame = _statement_lines(statements)
     if statement is not None and "statement" in frame.columns:
         frame = frame[frame["statement"].isin([statement] if isinstance(statement, str) else list(statement))]
-    frame["_fy"] = pd.to_numeric(frame["fiscal_year"], errors="coerce")
     frame = frame[frame["_fy"].isin(years)]
-    frame["_value"] = pd.to_numeric(frame["value"], errors="coerce")
     frame = frame[frame["_value"].notna()]
     if frame.empty:
         return out
-    if "standard_concept" in frame.columns:
-        frame["_std"] = frame["standard_concept"].map(_norm)
-    else:
-        frame["_std"] = ""
-    # The tag itself (``ifrs-full_Borrowings`` -> ``borrowings``): IFRS lines
-    # often carry no standard_concept.
-    if "concept" in frame.columns:
-        frame["_tag"] = frame["concept"].astype(str).str.split(r"[:_]", n=1, regex=True).str[-1].map(_norm)
-    else:
-        frame["_tag"] = ""
-    if "label" in frame.columns:
-        frame["_label"] = frame["label"].map(_norm)
-    else:
-        frame["_label"] = ""
 
     concept_keys = [_norm(name) for name in concepts]
     label_keys = [_norm(name) for name in labels]
@@ -584,16 +604,36 @@ def _close_near(price_history: list[dict], target: pd.Timestamp) -> float:
         return np.nan
     best = np.nan
     best_gap = None
+    for close, candidates in _price_bars(price_history):
+        for candidate in candidates:
+            gap = abs((candidate - target).days)
+            if gap <= PRICE_MATCH_DAYS and (best_gap is None or gap < best_gap):
+                best, best_gap = close, gap
+    return best
+
+
+# Parsed bars of the last few price histories (the list itself is held, so its
+# id is not reused): a run looks up a close for every fiscal year.
+_PRICE_BARS: dict[int, tuple] = {}
+
+
+def _price_bars(price_history: list[dict]) -> list[tuple]:
+    """Per usable bar: its close and its dates (the raw timestamp and the month end)."""
+    key = id(price_history)
+    held = _PRICE_BARS.get(key)
+    if held is not None and held[0] is price_history and held[1] == len(price_history):
+        return held[2]
+    bars = []
     for bar in price_history:
         day = pd.to_datetime(bar.get("date"), errors="coerce")
         close = _finite(bar.get("close"))
         if pd.isna(day) or pd.isna(close):
             continue
-        for candidate in {day, day + pd.offsets.MonthEnd(0)}:
-            gap = abs((candidate - target).days)
-            if gap <= PRICE_MATCH_DAYS and (best_gap is None or gap < best_gap):
-                best, best_gap = close, gap
-    return best
+        bars.append((close, list({day, day + pd.offsets.MonthEnd(0)})))
+    for stale in list(_PRICE_BARS)[:-3]:          # keep the newest few; safe if another thread got here
+        _PRICE_BARS.pop(stale, None)
+    _PRICE_BARS[key] = (price_history, len(price_history), bars)
+    return bars
 
 
 def _split_factor(ratio: float) -> float:

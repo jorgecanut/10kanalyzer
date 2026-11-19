@@ -11,6 +11,7 @@ on the next run, with no SEC request.
 from __future__ import annotations
 
 import re
+import weakref
 from typing import Iterable
 
 import numpy as np
@@ -384,52 +385,39 @@ def extract_metric(
     Facts in another currency than ``currency`` are ignored: foreign filers
     such as TSMC add a USD convenience translation of the current year.
     """
-    target = pd.Timestamp(period_of_report)
-    is_dimensional = facts["is_dimensioned"].astype(bool)
-    dimension = facts["dimension"] if "dimension" in facts.columns else pd.Series(pd.NA, index=facts.index)
-    scenario_only = dimension == SCENARIO_AXIS
-    concept_name = facts["concept"].str.split(":").str[-1]
-    in_currency = _in_currency(facts, currency)
+    table = _fact_table(facts)
+    target = np.datetime64(pd.Timestamp(period_of_report), "s")
+    in_currency = table.in_currency(facts, currency)
+    tolerance = np.timedelta64(PERIOD_MATCH_DAYS, "D")
 
-    def pick(mask: pd.Series):
-        sub = facts[mask & in_currency & (concept_name == concept)].copy()
-        if sub.empty:
-            return np.nan
-        sub["period_start"] = pd.to_datetime(sub["period_start"], errors="coerce")
-        # Instant (balance-sheet) facts carry their date in ``period_instant``
-        # while duration facts use ``period_end``; merge the two.
-        sub["period_end"] = pd.to_datetime(sub["period_end"], errors="coerce")
-        sub["period_end"] = sub["period_end"].fillna(
-            pd.to_datetime(sub["period_instant"], errors="coerce")
-        )
-        sub = sub.dropna(subset=["period_end"])
+    def pick(rows: np.ndarray, mask: np.ndarray):
+        rows = rows[mask[rows] & in_currency[rows] & table.has_end[rows]]
+        end = table.end[rows]
         if period_type == "duration":
-            span = (sub["period_end"] - sub["period_start"]).dt.days
-            keep = span >= min_days
+            # Whole days, like ``Timedelta.days``: d >= n days <=> span >= n, d <= n <=> span < n + 1.
+            span = end - table.start[rows]
+            keep = span >= np.timedelta64(min_days, "D")
             if max_days is not None:
-                keep &= span <= max_days
-            sub = sub[keep]
-        if sub.empty:
-            return np.nan
+                keep &= span < np.timedelta64(max_days + 1, "D")
+            rows, end = rows[keep], end[keep]
         # Closest period end to the filing's report date is the current year.
-        sub["_dist"] = (sub["period_end"] - target).abs()
-        sub = sub[sub["_dist"] <= pd.Timedelta(days=PERIOD_MATCH_DAYS)]
-        if sub.empty:
+        dist = np.abs(end - target)
+        keep = dist <= tolerance
+        rows, dist = rows[keep], dist[keep]
+        if not len(rows):
             return np.nan
         # A filing often carries the same fact twice: a rounded copy
         # (decimals=-5) and a precise one (decimals=-3). Prefer the precise one.
-        if "decimals" in sub.columns:
-            sub["_decimals"] = pd.to_numeric(sub["decimals"], errors="coerce").fillna(-99)
-        else:
-            sub["_decimals"] = -99
-        sub = sub.sort_values(["_dist", "_decimals"], ascending=[True, False])
-        return pd.to_numeric(sub.iloc[0]["numeric_value"], errors="coerce")
+        # Stable, like ``sort_values`` on two columns: ties keep the filing's order.
+        best = np.lexsort((-table.decimals[rows], dist.astype("int64")))[0]
+        return table.value[rows[best]]
 
     for concept in candidates:
+        rows = table.rows.get(concept, _NO_ROWS)
         # Prefer dimension-free facts; fall back to a scenario-only fact (a
         # successor/predecessor reporting basis) when the filing has none.
-        for mask in ((~is_dimensional), scenario_only):
-            value = pick(mask)
+        for mask in (table.plain, table.scenario_only):
+            value = pick(rows, mask) if len(rows) else np.nan
             if pd.notna(value):
                 if sources is not None and metric:
                     sources[metric] = concept
@@ -444,6 +432,64 @@ def extract_metric(
                 return float(stated)
 
     return np.nan
+
+
+_NO_ROWS = np.array([], dtype=np.intp)
+
+
+class _FactTable:
+    """A filing's facts prepared once for ``extract_metric``: dates parsed, rows by concept name.
+
+    ``extract_metric`` runs about a dozen times per metric and filing; parsing
+    the dates and matching the concept over every fact on each call was most
+    of a run's time. The values are those of the per-call code: the same
+    ``to_datetime``/``to_numeric`` on the same columns, positions in the
+    filing's order.
+    """
+
+    def __init__(self, facts: pd.DataFrame):
+        self.length = len(facts)
+        self.plain = (~facts["is_dimensioned"].astype(bool)).to_numpy(dtype=bool)
+        dimension = facts["dimension"] if "dimension" in facts.columns else pd.Series(pd.NA, index=facts.index)
+        self.scenario_only = (dimension == SCENARIO_AXIS).fillna(False).to_numpy(dtype=bool)
+        start = pd.to_datetime(facts["period_start"], errors="coerce")
+        # Instant (balance-sheet) facts carry their date in ``period_instant``
+        # while duration facts use ``period_end``; merge the two.
+        end = pd.to_datetime(facts["period_end"], errors="coerce").fillna(
+            pd.to_datetime(facts["period_instant"], errors="coerce"))
+        self.start = start.to_numpy(dtype="datetime64[s]")
+        self.end = end.to_numpy(dtype="datetime64[s]")
+        self.has_end = end.notna().to_numpy(dtype=bool)
+        decimals = (pd.to_numeric(facts["decimals"], errors="coerce").fillna(-99)
+                    if "decimals" in facts.columns else pd.Series(-99, index=facts.index))
+        self.decimals = decimals.to_numpy(dtype=float)
+        self.value = pd.to_numeric(facts["numeric_value"], errors="coerce").to_numpy(dtype=float)
+        names = facts["concept"].str.split(":").str[-1]
+        self.rows = {name: np.asarray(positions, dtype=np.intp)
+                     for name, positions in names.groupby(names, sort=False).indices.items()}
+        self._currency: dict = {}
+
+    def in_currency(self, facts: pd.DataFrame, currency: str | None) -> np.ndarray:
+        if currency not in self._currency:
+            self._currency[currency] = _in_currency(facts, currency).to_numpy(dtype=bool)
+        return self._currency[currency]
+
+
+# The tables of the last few facts frames, by identity. Stage 2 never changes a
+# facts frame after reading it (``FilingView`` hands out a fresh copy per call).
+_FACT_TABLES: dict[int, tuple] = {}
+
+
+def _fact_table(facts: pd.DataFrame) -> _FactTable:
+    key = id(facts)
+    held = _FACT_TABLES.get(key)
+    if held is not None and held[0]() is facts and held[1].length == len(facts):
+        return held[1]
+    table = _FactTable(facts)
+    for stale in list(_FACT_TABLES)[:-7]:          # keep the newest few; safe if another thread got here
+        _FACT_TABLES.pop(stale, None)
+    _FACT_TABLES[key] = (weakref.ref(facts), table)
+    return table
 
 
 def _in_currency(facts: pd.DataFrame, currency: str | None) -> pd.Series:
@@ -858,8 +904,10 @@ def extract_filing(filing, period_key: str, min_days: int | None = None, max_day
     # Statement rows are also the fallback source for metrics a filer
     # renders but never tags as a consolidated fact.
     statement_problems: list[dict] = []
+    # The filing's own-period values; read-only below, so computed once.
+    own_values = calc_check.period_values(facts, period_key, currency, min_days, max_days)
     statement_rows = xbrl_extract.extract_statements(
-        xbrl, period_key, calc_check.period_values(facts, period_key, currency, min_days, max_days),
+        xbrl, period_key, own_values,
         calc_check.convenience_values(facts, period_key, currency, min_days, max_days),
         problems=statement_problems, span_days=span_days)
     for problem in statement_problems:
@@ -883,7 +931,6 @@ def extract_filing(filing, period_key: str, min_days: int | None = None, max_day
     if pd.isna(row["Revenues"]):
         _track(row, sources, "statement:revenue line",
                lambda r: r.__setitem__("Revenues", _revenue_line(statement_rows)))
-    own_values = calc_check.period_values(facts, period_key, currency, min_days, max_days)
     for metric in ("OperatingIncomeLoss", "StockholdersEquity"):
         if pd.isna(row[metric]):
             _track(row, sources, f"statement:{metric} line",

@@ -106,6 +106,17 @@ filing, and only a schema bump reads filings again. New stores follow the same
 pattern: one file per item, atomic writes, and anything derived rebuildable
 without SEC.
 
+**Speed rule: prepare once, look up many times.** A run looks up hundreds of
+values in each filing, so stage 2 prepares a frame once and reuses it:
+`extract_metric` keeps each facts frame's parsed dates and rows per concept,
+`valuation` its normalised statement lines and parsed price bars, and
+`FilingView` decodes each stored frame once and hands every caller its own
+copy. The caches are keyed by the frame object, so **never change a facts or
+statements frame in place after reading values from it**: take a copy
+(`FilingView` already gives one per call). Prefer column lists or numpy over
+`iterrows()` and over re-filtering a whole frame on every call.
+`tests/test_prepared_lookups.py` holds the lookup rules.
+
 The dump lives in `--cache-dir`, else `$STOCKY_FILING_CACHE`, else
 `<output-dir>/.filing_cache`; the web app uses `data/filing_cache/`, shared by
 every account since filings are public. Deleting it is safe but costs the
